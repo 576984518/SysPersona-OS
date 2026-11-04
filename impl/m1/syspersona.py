@@ -43,6 +43,10 @@ if hasattr(sys.stdout, "reconfigure"):
 DB_NAME = "memory.db"
 PERSONA_NAME = "persona.json"
 CONFIG_NAME = "config.json"
+PERSONA_DIR = "persona"
+KERNEL_FILE = "kernel.json"
+TRAITS_FILE = "traits.json"
+STATE_FILE = "state.json"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS persona_versions (
@@ -193,6 +197,70 @@ def advance(delta) -> None:
     _VIRTUAL_NOW = current_dt() + delta
 
 
+def _layers_dir(home: Path) -> Path:
+    return home / PERSONA_DIR
+
+
+def split_persona_layers(persona: dict, home: Path) -> None:
+    """把单文件人格拆成三层：kernel / traits / state。"""
+    directory = _layers_dir(home)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    kernel = {key: persona[key] for key in ("schema", "id", "version") if key in persona}
+    kernel["kernel"] = persona.get("kernel", {})
+    traits = {key: persona[key] for key in ("traits", "memory", "evolution", "meta") if key in persona}
+    state = {
+        "mood": {"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0},
+        "updated_at": now(),
+    }
+
+    (directory / KERNEL_FILE).write_text(
+        json.dumps(kernel, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (directory / TRAITS_FILE).write_text(
+        json.dumps(traits, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (directory / STATE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def load_persona_layers(home: Path) -> dict:
+    """合并 kernel ← traits；没有目录时回退到单文件。"""
+    directory = _layers_dir(home)
+    if not directory.is_dir():
+        return json.loads((home / PERSONA_NAME).read_text(encoding="utf-8-sig"))
+
+    kernel = json.loads((directory / KERNEL_FILE).read_text(encoding="utf-8-sig"))
+    traits = json.loads((directory / TRAITS_FILE).read_text(encoding="utf-8-sig"))
+    merged = dict(traits)
+    for key in ("schema", "id", "version"):
+        if key in kernel:
+            merged[key] = kernel[key]
+    merged["kernel"] = kernel.get("kernel", {})
+    return merged
+
+
+_IN_SLEEP = False
+
+
+def persist_traits_file(store: "Store", home: Path) -> None:
+    """睡眠结算后把权重写回 traits.json —— 文件是真相，且只有睡眠能写。"""
+    if not _IN_SLEEP:
+        print("  [权限拒绝] traits 只能在睡眠结算时写入")
+        return
+    directory = _layers_dir(home)
+    if not directory.is_dir():
+        return
+    path = directory / TRAITS_FILE
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    weights = {row["trait_id"]: round(float(row["weight"]), 1) for row in store.traits()}
+    for pref in data.get("traits", {}).get("preferences", []):
+        if pref.get("id") in weights:
+            pref["weight"] = weights[pref["id"]]
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 class Store:
     def __init__(self, home: Path):
         self.home = home
@@ -227,9 +295,20 @@ class Store:
 
     # ---------- persona ----------
     def load_persona(self) -> dict:
-        return json.loads((self.home / PERSONA_NAME).read_text(encoding="utf-8"))
+        return load_persona_layers(self.home)
 
     def save_persona(self, persona: dict) -> None:
+        directory = _layers_dir(self.home)
+        if directory.is_dir():
+            traits = {
+                key: persona[key]
+                for key in ("traits", "memory", "evolution", "meta")
+                if key in persona
+            }
+            (directory / TRAITS_FILE).write_text(
+                json.dumps(traits, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return
         (self.home / PERSONA_NAME).write_text(
             json.dumps(persona, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -421,6 +500,10 @@ class Store:
 
     # ---------- runtime state ----------
     def load_state(self) -> tuple[dict, str]:
+        state_path = _layers_dir(self.home) / STATE_FILE
+        if state_path.exists():
+            data = json.loads(state_path.read_text(encoding="utf-8-sig"))
+            return data.get("mood", {}), data.get("updated_at", now())
         row = self.db.execute(
             "SELECT mood, updated_at FROM runtime_state WHERE id=1"
         ).fetchone()
@@ -429,6 +512,12 @@ class Store:
         return json.loads(row["mood"]), row["updated_at"]
 
     def save_state(self, mood: dict) -> None:
+        directory = _layers_dir(self.home)
+        if directory.is_dir():
+            (directory / STATE_FILE).write_text(
+                json.dumps({"mood": mood, "updated_at": now()}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         self.db.execute(
             "INSERT INTO runtime_state (id, mood, updated_at) VALUES (1,?,?)"
             " ON CONFLICT(id) DO UPDATE SET mood=excluded.mood, updated_at=excluded.updated_at",
@@ -932,8 +1021,17 @@ def cmd_init(args) -> None:
     home = Path(args.home)
     store = Store(home)
     src = Path(args.persona)
-    persona = json.loads(src.read_text(encoding="utf-8"))
-    store.save_persona(persona)
+    if src.is_dir():
+        directory = _layers_dir(home)
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in (KERNEL_FILE, TRAITS_FILE, STATE_FILE):
+            source = src / name
+            if source.exists():
+                shutil.copyfile(source, directory / name)
+        persona = load_persona_layers(home)
+    else:
+        persona = json.loads(src.read_text(encoding="utf-8-sig"))
+        split_persona_layers(persona, home)
     store.record_persona(persona)
     store.sync_traits(persona)
     cfg = store.load_config()
@@ -1289,6 +1387,8 @@ def resume_topics(rows: list) -> list[str]:
 
 
 def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
+    global _IN_SLEEP
+    _IN_SLEEP = True
     rows = store.unconsolidated()
     lines: list[str] = []
 
@@ -1360,6 +1460,8 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
     for note in exploration_candidates(store, rows):
         lines.append("  " + note)
 
+    persist_traits_file(store, home)
+    _IN_SLEEP = False
     return lines
 
 
@@ -1607,25 +1709,37 @@ def cmd_export(args) -> None:
     if not (home / DB_NAME).exists():
         print("没有可导出的数据（先 init 并对话）。")
         raise SystemExit(1)
-    persona = json.loads((home / PERSONA_NAME).read_text(encoding="utf-8"))
+    persona = load_persona_layers(home)
     db_bytes = (home / DB_NAME).read_bytes()
     digest = hashlib.sha256(db_bytes).hexdigest()
     out = Path(args.out) if args.out else Path(
         f"persona-{persona['id'][:8]}-{current_dt():%Y%m%d}.syspersona"
     )
 
+    files: list[str] = []
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr(PERSONA_NAME, (home / PERSONA_NAME).read_bytes())
+        directory = _layers_dir(home)
+        if directory.is_dir():
+            for name in (KERNEL_FILE, TRAITS_FILE, STATE_FILE):
+                source = directory / name
+                if source.exists():
+                    bundle.writestr(f"{PERSONA_DIR}/{name}", source.read_bytes())
+                    files.append(f"{PERSONA_DIR}/{name}")
+        else:
+            bundle.writestr(PERSONA_NAME, (home / PERSONA_NAME).read_bytes())
+            files.append(PERSONA_NAME)
         bundle.writestr(DB_NAME, db_bytes)
+        files.append(DB_NAME)
         if (home / CONFIG_NAME).exists():
             bundle.writestr(CONFIG_NAME, (home / CONFIG_NAME).read_bytes())
+            files.append(CONFIG_NAME)
         manifest = {
             "schema": "syspersona/bundle@1",
             "persona_id": persona["id"],
             "persona_version": persona["version"],
             "exported_at": now(),
             "db_sha256": digest,
-            "files": [PERSONA_NAME, DB_NAME, CONFIG_NAME],
+            "files": files,
         }
         bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
@@ -1654,7 +1768,9 @@ def cmd_import(args) -> None:
         raise SystemExit(1)
     home.mkdir(parents=True, exist_ok=True)
     for name, blob in data.items():
-        (home / name).write_bytes(blob)
+        target = home / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob)
     print(f"已导入到：{home}")
     print(f"  persona {manifest['persona_id'][:8]} v{manifest['persona_version']}   sha256 {digest[:16]}…")
 
@@ -1683,6 +1799,26 @@ def cmd_prune(args) -> None:
     print(f"实时归档：{evicted} 条")
     for line in lines:
         print(line)
+
+
+def cmd_layers(args) -> None:
+    home = Path(args.home)
+    directory = _layers_dir(home)
+    if not directory.is_dir():
+        print("当前是单文件人格（persona.json），没有分层。")
+        return
+    specs = [
+        (KERNEL_FILE, "0 内核", "只有人"),
+        (TRAITS_FILE, "1 性格", "睡眠结算"),
+        (STATE_FILE, "2 状态", "每轮对话"),
+    ]
+    print(f"{'文件':<14}{'层级':<10}{'可写':<10}{'大小'}")
+    for name, level, writer in specs:
+        path = directory / name
+        size = f"{path.stat().st_size} B" if path.exists() else "缺失"
+        print(f"{name:<14}{level:<10}{writer:<10}{size}")
+    persona = load_persona_layers(home)
+    print(f"合并后：{persona['kernel']['identity']['name']} v{persona.get('version')}")
 
 
 def cmd_status(args) -> None:
@@ -1796,6 +1932,9 @@ def main() -> None:
 
     p_prune = sub.add_parser("prune", help="立即执行压力驱逐与过期清理")
     p_prune.set_defaults(func=cmd_prune)
+
+    p_layers = sub.add_parser("layers", help="查看人格分层文件与写权限")
+    p_layers.set_defaults(func=cmd_layers)
 
     args = parser.parse_args()
     args.func(args)

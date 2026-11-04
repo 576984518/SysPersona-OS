@@ -5,7 +5,7 @@
 - 依赖：Python 3.10+，且 `python`（或 `py -3`）在 PATH 中；**只用标准库**
 - 规模：单文件约 480 行
 - 模型：默认 `mock`（确定性回复），可选 `ollama:<model>`
-- 包含：人格加载、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**画像图检索**、**常驻 serve**、**export / import**、换模型
+- 包含：人格加载、**分层人格文件（kernel/traits/state）**、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**画像图检索**、**常驻 serve**、**export / import**、换模型
 - 不包含：加密、设备绑定、抗僵化、向量检索、多任务调度（属 M2–M4）
 
 ## 数据布局
@@ -340,6 +340,35 @@ python syspersona.py --home ./data simulate --scenario ..\..\examples\scenario.9
 ```
 
 注意 `pref_short` 比另外两条晚一天打折——它在第 1 天被支撑过，计时从那天算起。
+
+## 分层人格文件（4.4）
+
+`init` 会把单文件人格拆成三层，各层权限不同：
+
+```
+data/persona/
+├─ kernel.json    0 内核   只有人能改（身份、价值观、边界）
+├─ traits.json    1 性格   只在睡眠结算时写（偏好、反射、演化配置）
+└─ state.json     2 状态   每轮对话都写，可实时手改（情绪）
+```
+
+```bash
+python syspersona.py --home ./data layers
+# 文件            层级        可写        大小
+# kernel.json   0 内核      只有人       513 B
+# traits.json   1 性格      睡眠结算      1649 B
+# state.json    2 状态      每轮对话      147 B
+```
+
+合并顺序 `kernel ← traits ← state`，低层只能覆盖自己那部分字段。
+
+权限是拦出来的，不是约定：
+
+- `persist_traits_file` 在非睡眠上下文直接拒绝——想手改性格，得走 `sleep`；
+- `kernel.json` 初始化后没有任何自动写入路径；
+- `state.json` 可以随时改，下一次对话立刻生效。
+
+**文件是真相，数据库只是缓存**：睡眠结算后权重写回 `traits.json`，重启时以文件为准——之前「改 persona.json 不生效」的问题随之消失。
 
 ## 画像图（6.5 的简化版）
 
