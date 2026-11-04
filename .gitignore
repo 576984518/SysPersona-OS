@@ -28,7 +28,7 @@ config.local.*
 logs/
 
 # 本地跑 M1 时产生的数据目录
-impl/m1/data/
+impl/m1/data*/
 data/
 
 # Python
