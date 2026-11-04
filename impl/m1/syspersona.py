@@ -1074,28 +1074,27 @@ def cmd_serve(args) -> None:
 
 
 BUILTIN_SCENARIO = [
-    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"]},
-    {"messages": ["今天天气不错。"]},
-    {"messages": ["继续简洁回答。", "保持简洁。", "简洁最好。"]},
-    {"messages": ["简洁点。", "简洁。", "回答简洁。"]},
-    {"messages": ["简洁些。", "简洁。", "简洁点。"]},
-    {"messages": ["随便聊聊。"]},
-    {"messages": ["我不喜欢长篇大论。"] * 5},
-    {"messages": ["周末休息。"]},
+    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"], "expect": {"pref_short": 81.5}},
+    {"messages": ["今天天气不错。"], "expect": {"pref_short": 81.0}},
+    {"messages": ["继续简洁回答。", "保持简洁。", "简洁最好。"], "expect": {"pref_short": 82.5}},
+    {"messages": ["简洁点。", "简洁。", "回答简洁。"], "expect": {"pref_short": 84.0}},
+    {"messages": ["简洁些。", "简洁。", "简洁点。"], "expect": {"pref_short": 84.5}},
+    {"messages": ["随便聊聊。"], "expect": {"pref_short": 84.0}},
+    {"messages": ["我不喜欢长篇大论。"] * 5, "expect": {"pref_short": 83.5, "pref_longpost": 16.0}},
+    {"messages": ["周末休息。"], "expect": {"pref_longpost": 16.0}},
     {"messages": ["没什么事。"]},
     {"messages": ["我讨厌简洁的回答。"], "sleep": False},
-    {"messages": []},
+    {"messages": [], "expect": {"pref_short": 82.0}},
     {"messages": ["在吗。"]},
     {"messages": ["嗯。"]},
-    {"messages": []},
+    {"messages": [], "expect": {"pref_short": 81.0}},
 ]
 
 
-def load_scenario(path: str | None) -> list[dict]:
+def load_scenario(path: str | None) -> dict:
     if not path:
-        return BUILTIN_SCENARIO
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return data.get("days", data)
+        return {"days": BUILTIN_SCENARIO, "expect_final": {"pending_flips": 1}}
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def cmd_simulate(args) -> None:
@@ -1105,8 +1104,12 @@ def cmd_simulate(args) -> None:
     persona = store.load_persona()
     cfg = store.load_config()
     model = make_model(cfg.get("model", "mock-a"))
-    scenario = load_scenario(args.scenario)
+    spec = load_scenario(args.scenario)
+    scenario = spec.get("days", [])
+    final_expect = spec.get("expect_final") or {}
 
+    failures: list[str] = []
+    checked = 0
     _VIRTUAL_NOW = current_dt()
     start = _VIRTUAL_NOW
     print(f"模拟开始：{start:%Y-%m-%d}   共 {len(scenario)} 天（虚拟时钟，1 天 = 1 步）")
@@ -1122,21 +1125,43 @@ def cmd_simulate(args) -> None:
             if day.get("sleep", True):
                 lines = run_sleep(store, persona, home)
 
-            weights = "  ".join(
-                f"{t['trait_id']}={float(t['weight']) + stress_value(t):.1f}"
-                for t in store.traits()
+            weights = {
+                t["trait_id"]: float(t["weight"]) + stress_value(t) for t in store.traits()
+            }
+            print(
+                f"第 {index:>2} 天  消息 {len(messages)}  "
+                + "  ".join(f"{k}={v:.1f}" for k, v in weights.items())
             )
-            print(f"第 {index:>2} 天  消息 {len(messages)}  {weights}")
             for line in lines:
                 if any(k in line for k in ("人格微调", "应激结算", "新事实")):
                     print("        " + line.strip())
+
+            for key, want in (day.get("expect") or {}).items():
+                checked += 1
+                got = weights.get(key)
+                if got is None:
+                    failures.append(f"第 {index} 天：{key} 不存在")
+                elif abs(got - float(want)) > 0.05:
+                    failures.append(f"第 {index} 天：{key} 期望 {float(want):.1f}，实际 {got:.1f}")
+
+        pending = len(store.pending_flips())
+        for key, want in final_expect.items():
+            checked += 1
+            if key == "pending_flips" and pending != int(want):
+                failures.append(f"结束时 pending_flips 期望 {want}，实际 {pending}")
     finally:
-        pending = store.pending_flips()
-        if pending:
+        if store.pending_flips():
             print("—" * 72)
-            print(f"待确认的极性翻转：{len(pending)} 条（用 flip-review 查看）")
+            print(f"待确认的极性翻转：{len(store.pending_flips())} 条（用 flip-review 查看）")
         print(f"模拟结束：{current_dt():%Y-%m-%d}   共 {len(scenario)} 天")
         _VIRTUAL_NOW = None
+
+    if failures:
+        print(f"断言失败 {len(failures)}/{checked}：")
+        for item in failures:
+            print("  - " + item)
+        raise SystemExit(1)
+    print(f"断言通过：{checked} 条")
 
 
 def cmd_status(args) -> None:

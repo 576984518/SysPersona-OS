@@ -202,6 +202,31 @@ python syspersona.py --home ./data simulate --scenario ..\..\examples\scenario.1
 
 `sleep: false` 表示这一天不睡，用来验证「隔天才结算时偏移已衰减」。
 
+### 断言
+
+场景里可以直接写期望值，不满足就**退出码 1**：
+
+```json
+{
+  "days": [
+    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"],
+     "expect": {"pref_short": 81.5}}
+  ],
+  "expect_final": {"pending_flips": 1}
+}
+```
+
+```bash
+python syspersona.py --home ./sim simulate --scenario ..\..\examples\scenario.14d.json
+# 断言通过：12 条      （退出码 0）
+
+python syspersona.py --home ./sim simulate --scenario bad.json
+# 断言失败 1/2：
+#   - 第 1 天：pref_short 期望 99.0，实际 81.5   （退出码 1）
+```
+
+这就是回归测试：改任何参数（幅度、半衰期、额度），跑一次就知道有没有破坏既有行为。可以直接挂进 CI。
+
 ## 状态层（当天生效，不等睡着）
 
 第 4.1 节把人格分成三层，M1 之前只实现了前两层——所以「当天发生什么都不变」。补上状态层后：

@@ -1,18 +1,19 @@
 {
   "days": [
-    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"]},
-    {"messages": ["今天天气不错。"]},
-    {"messages": ["继续简洁回答。", "保持简洁。", "简洁最好。"]},
-    {"messages": ["简洁点。", "简洁。", "回答简洁。"]},
-    {"messages": ["简洁些。", "简洁。", "简洁点。"]},
-    {"messages": ["随便聊聊。"]},
-    {"messages": ["我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。"]},
-    {"messages": ["周末休息。"]},
+    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"], "expect": {"pref_short": 81.5}},
+    {"messages": ["今天天气不错。"], "expect": {"pref_short": 81.0}},
+    {"messages": ["继续简洁回答。", "保持简洁。", "简洁最好。"], "expect": {"pref_short": 82.5}},
+    {"messages": ["简洁点。", "简洁。", "回答简洁。"], "expect": {"pref_short": 84.0}},
+    {"messages": ["简洁些。", "简洁。", "简洁点。"], "expect": {"pref_short": 84.5}},
+    {"messages": ["随便聊聊。"], "expect": {"pref_short": 84.0}},
+    {"messages": ["我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。", "我不喜欢长篇大论。"], "expect": {"pref_short": 83.5, "pref_longpost": 16.0}},
+    {"messages": ["周末休息。"], "expect": {"pref_longpost": 16.0}},
     {"messages": ["没什么事。"]},
     {"messages": ["我讨厌简洁的回答。"], "sleep": false},
-    {"messages": []},
+    {"messages": [], "expect": {"pref_short": 82.0}},
     {"messages": ["在吗。"]},
     {"messages": ["嗯。"]},
-    {"messages": []}
-  ]
+    {"messages": [], "expect": {"pref_short": 81.0}}
+  ],
+  "expect_final": {"pending_flips": 1}
 }
