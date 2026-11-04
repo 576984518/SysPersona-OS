@@ -96,6 +96,17 @@ CREATE TABLE IF NOT EXISTS persona_drift_log (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS flip_requests (
+    id INTEGER PRIMARY KEY,
+    trait_id TEXT NOT NULL,
+    from_polarity TEXT NOT NULL,
+    to_polarity TEXT NOT NULL,
+    evidence_count INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     tag TEXT NOT NULL,
@@ -287,6 +298,45 @@ class Store:
                 down += -delta
         return up, down
 
+    # ---------- flip requests ----------
+    def has_pending_flip(self, trait_id: str) -> bool:
+        row = self.db.execute(
+            "SELECT 1 FROM flip_requests WHERE trait_id=? AND status='pending' LIMIT 1",
+            (trait_id,),
+        ).fetchone()
+        return row is not None
+
+    def create_flip_request(self, trait_id: str, from_p: str, to_p: str, count: int) -> int:
+        cur = self.db.execute(
+            "INSERT INTO flip_requests (trait_id, from_polarity, to_polarity, evidence_count, status, created_at)"
+            " VALUES (?,?,?,?,'pending',?)",
+            (trait_id, from_p, to_p, count, now()),
+        )
+        self.db.commit()
+        return int(cur.lastrowid)
+
+    def pending_flips(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM flip_requests WHERE status='pending' ORDER BY id"
+        ).fetchall()
+
+    def get_flip(self, flip_id: int) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM flip_requests WHERE id=?", (flip_id,)).fetchone()
+
+    def decide_flip(self, flip_id: int, status: str) -> None:
+        self.db.execute(
+            "UPDATE flip_requests SET status=?, decided_at=? WHERE id=?",
+            (status, now(), flip_id),
+        )
+        self.db.commit()
+
+    def set_polarity(self, trait_id: str, polarity: str, baseline: float) -> None:
+        self.db.execute(
+            "UPDATE persona_traits SET polarity=?, baseline=?, updated_at=? WHERE trait_id=?",
+            (polarity, baseline, now(), trait_id),
+        )
+        self.db.commit()
+
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
         self.db.execute(
@@ -397,6 +447,8 @@ INTENTS = [
     (re.compile(r"讨厌什么|讨厌"), ["讨厌"]),
 ]
 
+NEGATION = re.compile(r"不|别|讨厌|烦|腻|受不了|再也不|没意思|无聊")
+
 
 def intent_predicates(text: str) -> list[str]:
     out: list[str] = []
@@ -496,6 +548,10 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
     min_evidence = int(ev.get("min_evidence", 3))
     max_step = float(ev.get("max_step", 2))
     weekly_cap = float(ev.get("weekly_cap", 5))
+    pf = ev.get("polarity_flip", {}) or {}
+    dead_zone = float(pf.get("dead_zone", 20))
+    min_reverse = int(pf.get("min_reverse_evidence", 5))
+    requires_human = bool(pf.get("requires_human", True))
     user_msgs = [r["content"] for r in episodes if r["role"] == "user"]
 
     changes: list[str] = []
@@ -504,28 +560,64 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
             continue
         weight = float(trait["weight"])
         baseline = float(trait["baseline"])
-        hits = sum(1 for msg in user_msgs if _overlap(trait["target"], msg))
+        polarity = trait["polarity"]
+        mentions = [m for m in user_msgs if _overlap(trait["target"], m)]
+        negated = [m for m in mentions if NEGATION.search(m)]
+        if polarity == "like":
+            support, reverse = len(mentions) - len(negated), len(negated)
+        else:
+            support, reverse = len(negated), len(mentions) - len(negated)
         up_used, down_used = store.weekly_drift(trait["trait_id"])
 
-        if hits >= min_evidence:
+        if support >= min_evidence and reverse < min_evidence:
             remaining_up = max(0.0, weekly_cap - up_used)
             if remaining_up <= 0:
                 changes.append(
                     f"{trait['trait_id']} 上行已达 7 天上限（{up_used:.1f}/{weekly_cap:.0f}）"
                 )
                 continue
-            delta = min(max_step, round(0.5 * hits, 1), remaining_up)
+            delta = min(max_step, round(0.5 * support, 1), remaining_up)
             new_weight = min(100.0, weight + delta)
             if new_weight <= weight:
                 continue
-            reason = f"{hits} 条记忆提及「{trait['target']}」"
-            store.update_trait(trait["trait_id"], new_weight, new_weight - weight, hits, reason)
+            reason = f"{support} 条记忆支持「{trait['target']}」"
+            store.update_trait(trait["trait_id"], new_weight, new_weight - weight, support, reason)
             changes.append(
-                f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（证据 {hits} 条）"
+                f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（支持 {support} 条）"
             )
             continue
 
-        # 本轮没有足够证据：向基线缓慢回弹，下行额度单独计算
+        if reverse >= min_evidence and support < min_evidence:
+            remaining_down = max(0.0, weekly_cap - down_used)
+            if remaining_down <= 0:
+                changes.append(
+                    f"{trait['trait_id']} 下行已达 7 天上限（{down_used:.1f}/{weekly_cap:.0f}）"
+                )
+                continue
+            delta = min(max_step, round(0.5 * reverse, 1), remaining_down, weight)
+            new_weight = max(0.0, weight - delta)
+            if new_weight >= weight:
+                continue
+            reason = f"{reverse} 条反向证据指向「{trait['target']}」"
+            store.update_trait(trait["trait_id"], new_weight, new_weight - weight, reverse, reason)
+            changes.append(
+                f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（反向 {reverse} 条）"
+            )
+            # 极性翻转闸门：死区 + 反向证据数 + 人工确认，三者缺一不可
+            if (
+                new_weight < dead_zone
+                and reverse >= min_reverse
+                and requires_human
+                and not store.has_pending_flip(trait["trait_id"])
+            ):
+                target_polarity = "dislike" if polarity == "like" else "like"
+                fid = store.create_flip_request(
+                    trait["trait_id"], polarity, target_polarity, reverse
+                )
+                changes.append(f"已生成极性翻转待确认 #{fid}")
+            continue
+
+        # 本轮没有决定性证据：向基线缓慢回弹，下行额度单独计算
         gap = weight - baseline
         if abs(gap) >= 0.05:
             remaining_down = max(0.0, weekly_cap - down_used)
@@ -669,6 +761,52 @@ def cmd_recall(args) -> None:
         print(f"{score:.3f}  [{row['role']:<9}] {snippet(row['content'], 50)}")
 
 
+def cmd_flip_review(args) -> None:
+    store = Store(Path(args.home))
+    flip_id = args.approve or args.reject
+    if flip_id:
+        row = store.get_flip(flip_id)
+        if not row or row["status"] != "pending":
+            print("没有这条待确认请求。")
+            return
+        trait = store.db.execute(
+            "SELECT * FROM persona_traits WHERE trait_id=?", (row["trait_id"],)
+        ).fetchone()
+        if not trait:
+            print("对应的偏好已不存在。")
+            return
+        if args.approve:
+            weight = float(trait["weight"])
+            store.decide_flip(flip_id, "approved")
+            store.set_polarity(row["trait_id"], row["to_polarity"], weight)
+            store.db.execute(
+                "INSERT INTO persona_drift_log (trait_id, old_weight, new_weight, delta, evidence_count, reason, created_at)"
+                " VALUES (?,?,?,0,?,?,?)",
+                (row["trait_id"], weight, weight, row["evidence_count"], "人工确认极性翻转", now()),
+            )
+            store.db.commit()
+            store.audit("flip-approved", f"{row['trait_id']} {row['from_polarity']}->{row['to_polarity']}")
+            print(
+                f"已批准：{row['trait_id']} {row['from_polarity']} → {row['to_polarity']}"
+                f"（权重保持 {weight:.1f}）"
+            )
+        else:
+            store.decide_flip(flip_id, "rejected")
+            store.audit("flip-rejected", row["trait_id"])
+            print(f"已拒绝：{row['trait_id']} 保持 {row['from_polarity']}")
+        return
+
+    pending = store.pending_flips()
+    if not pending:
+        print("没有待确认的翻转请求。")
+        return
+    for row in pending:
+        print(
+            f"#{row['id']}  {row['trait_id']}  {row['from_polarity']} → {row['to_polarity']}"
+            f"  反向证据 {row['evidence_count']} 条  {row['created_at']}"
+        )
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -686,9 +824,12 @@ def cmd_status(args) -> None:
         for t in traits:
             up, down = store.weekly_drift(t["trait_id"])
             print(
-                f"偏好：{t['target']}  {t['weight']:.1f}"
+                f"偏好：{t['target']} [{t['polarity']}]  {t['weight']:.1f}"
                 f"（基线 {t['baseline']:.1f}，本周 上行 {up:.1f}/5 下行 {down:.1f}/5）"
             )
+        pending = store.pending_flips()
+        if pending:
+            print(f"待确认的翻转请求：{len(pending)} 条（用 flip-review 查看）")
         last = store.db.execute(
             "SELECT * FROM persona_drift_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -724,6 +865,12 @@ def main() -> None:
     p_recall.add_argument("--query", required=True)
     p_recall.add_argument("--top", type=int, default=5)
     p_recall.set_defaults(func=cmd_recall)
+
+    p_flip = sub.add_parser("flip-review", help="查看或确认极性翻转请求")
+    g = p_flip.add_mutually_exclusive_group()
+    g.add_argument("--approve", type=int, metavar="ID")
+    g.add_argument("--reject", type=int, metavar="ID")
+    p_flip.set_defaults(func=cmd_flip_review)
 
     args = parser.parse_args()
     args.func(args)
