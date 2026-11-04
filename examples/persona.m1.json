@@ -56,7 +56,9 @@
       "hot_days": 3,
       "warm_days": 90,
       "prune_days": 365
-    }
+    },
+    "context_budget": 12,
+    "low_watermark": 0.7
   },
   "evolution": {
     "trigger": "consolidate",    "min_evidence": 3,

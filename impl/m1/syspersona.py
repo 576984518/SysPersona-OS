@@ -901,6 +901,8 @@ def cmd_chat(args) -> None:
 
 
 def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> str:
+    evict_by_pressure(store, persona)
+
     hits = retrieve(store, message, k=3)
     memory_lines = [
         snippet(row["content"])
@@ -1055,6 +1057,32 @@ def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
     if pruned:
         lines.append(f"清理：{pruned} 条冷数据删除（超过 {prune_days:.0f} 天）")
     return lines
+
+
+def evict_by_pressure(store: "Store", persona: dict) -> int:
+    """上下文压力驱逐：窗口超过预算就把最冷的移出，不看年龄。"""
+    memory_cfg = persona.get("memory") or {}
+    budget = int(memory_cfg.get("context_budget", 12))
+    low_ratio = float(memory_cfg.get("low_watermark", 0.7))
+
+    rows = store.db.execute(
+        "SELECT id, content FROM episodes WHERE archived = 0 ORDER BY id DESC"
+    ).fetchall()
+    if len(rows) <= budget:
+        return 0
+
+    keep = max(4, int(budget * low_ratio))
+    victims = rows[keep:]
+    for row in victims:
+        store.db.execute(
+            "UPDATE episodes SET content=?, archived=1 WHERE id=?",
+            (snippet(row["content"], 60) + "（上下文压力归档）", row["id"]),
+        )
+    store.db.commit()
+    store.audit("evict", f"window={len(rows)} budget={budget} evicted={len(victims)}")
+    if victims:
+        print(f"  [实时归档] {len(victims)} 条（窗口 {len(rows)} > 预算 {budget}）")
+    return len(victims)
 
 
 def resume_topics(rows: list) -> list[str]:
@@ -1446,6 +1474,20 @@ def cmd_verify(args) -> None:
         raise SystemExit(1)
 
 
+def cmd_prune(args) -> None:
+    home = Path(args.home)
+    store = Store(home)
+    persona = store.load_persona()
+    evicted = evict_by_pressure(store, persona)
+    lines = cleanup_episodes(store, persona)
+    if not evicted and not lines:
+        print("无需清理。")
+        return
+    print(f"实时归档：{evicted} 条")
+    for line in lines:
+        print(line)
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -1550,6 +1592,9 @@ def main() -> None:
     p_verify = sub.add_parser("verify", help="校验 .syspersona 的完整性")
     p_verify.add_argument("--file", required=True)
     p_verify.set_defaults(func=cmd_verify)
+
+    p_prune = sub.add_parser("prune", help="立即执行压力驱逐与过期清理")
+    p_prune.set_defaults(func=cmd_prune)
 
     args = parser.parse_args()
     args.func(args)
