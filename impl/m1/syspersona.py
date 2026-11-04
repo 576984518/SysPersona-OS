@@ -890,6 +890,22 @@ def retrieve(
         if traits:
             score += 0.15 * persona_salience(traits, row["content"])
         scored.append((score, row))
+
+    # 归档条目靠标签召回：内容被压缩了，但锚点还在
+    if q:
+        marks = ",".join("?" * len(q))
+        archived_rows = store.db.execute(
+            f"SELECT DISTINCT e.id, e.content, e.occurred_at, e.importance, e.role"
+            f" FROM episodes e JOIN tags t ON t.target_id = e.id AND t.target_kind = 'episode'"
+            f" WHERE e.archived = 1 AND t.tag IN ({marks})",
+            tuple(q),
+        ).fetchall()
+        seen_ids = {row["id"] for _, row in scored}
+        for row in archived_rows:
+            if row["id"] in seen_ids:
+                continue
+            scored.append((0.45 + 0.1 * _recency(row["occurred_at"]), row))
+
     scored.sort(key=lambda x: -x[0])
     top = scored[:k]
     for _, row in top:
@@ -1194,6 +1210,18 @@ def exploration_candidates(store: "Store", episodes: list) -> list[str]:
     return [f"探索候选：「{token}」出现 {count} 次，未被覆盖（1% 预算）" for token, count in hot[:1]]
 
 
+def tag_episode(store: "Store", episode_id: int, content: str) -> None:
+    """归档前打标签：压缩后靠标签仍能召回。"""
+    names = [row["name"] for row in store.db.execute("SELECT name FROM entities").fetchall()]
+    tokens = set(_tokens(content)) | {name for name in names if name in content}
+    for token in tokens:
+        store.db.execute(
+            "INSERT INTO tags (tag, target_kind, target_id) VALUES (?, 'episode', ?)",
+            (token, episode_id),
+        )
+    store.db.commit()
+
+
 def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
     """分级清理：温数据压摘要，冷数据删除原文；热窗口不动。"""
     retention = ((persona.get("memory") or {}).get("retention") or {})
@@ -1211,6 +1239,7 @@ def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
             store.db.execute("DELETE FROM episodes WHERE id=?", (row["id"],))
             pruned += 1
         elif age >= warm_days and not row["archived"]:
+            tag_episode(store, row["id"], row["content"])
             short = snippet(row["content"], 60) + "（已归档）"
             store.db.execute(
                 "UPDATE episodes SET content=?, archived=1 WHERE id=?", (short, row["id"])
@@ -1265,6 +1294,7 @@ def evict_by_pressure(store: "Store", persona: dict) -> int:
     }
     victims = [row for row in rows if row["id"] not in newest][: len(rows) - keep]
     for row in victims:
+        tag_episode(store, row["id"], row["content"])
         store.db.execute(
             "UPDATE episodes SET content=?, archived=1 WHERE id=?",
             (snippet(row["content"], 60) + "（上下文压力归档）", row["id"]),
