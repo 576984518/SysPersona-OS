@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -31,6 +32,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1273,6 +1275,75 @@ def cmd_simulate(args) -> None:
     print(f"断言通过：{checked} 条")
 
 
+def cmd_export(args) -> None:
+    home = Path(args.home)
+    if not (home / DB_NAME).exists():
+        print("没有可导出的数据（先 init 并对话）。")
+        raise SystemExit(1)
+    persona = json.loads((home / PERSONA_NAME).read_text(encoding="utf-8"))
+    db_bytes = (home / DB_NAME).read_bytes()
+    digest = hashlib.sha256(db_bytes).hexdigest()
+    out = Path(args.out) if args.out else Path(
+        f"persona-{persona['id'][:8]}-{current_dt():%Y%m%d}.syspersona"
+    )
+
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr(PERSONA_NAME, (home / PERSONA_NAME).read_bytes())
+        bundle.writestr(DB_NAME, db_bytes)
+        if (home / CONFIG_NAME).exists():
+            bundle.writestr(CONFIG_NAME, (home / CONFIG_NAME).read_bytes())
+        manifest = {
+            "schema": "syspersona/bundle@1",
+            "persona_id": persona["id"],
+            "persona_version": persona["version"],
+            "exported_at": now(),
+            "db_sha256": digest,
+            "files": [PERSONA_NAME, DB_NAME, CONFIG_NAME],
+        }
+        bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    print(f"已导出：{out}（{out.stat().st_size / 1024:.1f} KB）")
+    print(f"  persona {persona['id'][:8]} v{persona['version']}   sha256 {digest[:16]}…")
+    print("  注意：这是明文包，跨机移动前请自行加密或放在可信介质上。")
+
+
+def _read_bundle(path: Path) -> tuple[dict, dict, str]:
+    with zipfile.ZipFile(path) as bundle:
+        manifest = json.loads(bundle.read("manifest.json"))
+        data = {name: bundle.read(name) for name in bundle.namelist() if name != "manifest.json"}
+    digest = hashlib.sha256(data[DB_NAME]).hexdigest()
+    return manifest, data, digest
+
+
+def cmd_import(args) -> None:
+    manifest, data, digest = _read_bundle(Path(args.file))
+    if digest != manifest["db_sha256"]:
+        print("校验失败：memory.db 与清单不一致，拒绝导入。")
+        raise SystemExit(1)
+
+    home = Path(args.home)
+    if (home / DB_NAME).exists() and not args.force:
+        print(f"{home} 已有数据；确需覆盖请加 --force。")
+        raise SystemExit(1)
+    home.mkdir(parents=True, exist_ok=True)
+    for name, blob in data.items():
+        (home / name).write_bytes(blob)
+    print(f"已导入到：{home}")
+    print(f"  persona {manifest['persona_id'][:8]} v{manifest['persona_version']}   sha256 {digest[:16]}…")
+
+
+def cmd_verify(args) -> None:
+    manifest, _, digest = _read_bundle(Path(args.file))
+    ok = digest == manifest["db_sha256"]
+    print(("校验通过" if ok else "校验失败") + f"：{args.file}")
+    print(
+        f"  persona {manifest['persona_id'][:8]} v{manifest['persona_version']}"
+        f"   导出于 {manifest['exported_at']}"
+    )
+    if not ok:
+        raise SystemExit(1)
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -1359,6 +1430,19 @@ def main() -> None:
     p_sim = sub.add_parser("simulate", help="虚拟时钟：几秒跑完数周")
     p_sim.add_argument("--scenario", help="场景 JSON（默认内置 14 天）")
     p_sim.set_defaults(func=cmd_simulate)
+
+    p_export = sub.add_parser("export", help="把人格与记忆打包成 .syspersona")
+    p_export.add_argument("--out", help="输出文件（默认 persona-<id>-<date>.syspersona）")
+    p_export.set_defaults(func=cmd_export)
+
+    p_import = sub.add_parser("import", help="从 .syspersona 恢复到 --home")
+    p_import.add_argument("--file", required=True)
+    p_import.add_argument("--force", action="store_true", help="覆盖已有数据")
+    p_import.set_defaults(func=cmd_import)
+
+    p_verify = sub.add_parser("verify", help="校验 .syspersona 的完整性")
+    p_verify.add_argument("--file", required=True)
+    p_verify.set_defaults(func=cmd_verify)
 
     args = parser.parse_args()
     args.func(args)

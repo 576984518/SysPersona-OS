@@ -27,3 +27,10 @@ jobs:
           python impl/m1/syspersona.py --home ./sim chat --say "我在做一个 NAS 调优项目"
           python impl/m1/syspersona.py --home ./sim switch-model --model mock-b
           python impl/m1/syspersona.py --home ./sim chat --say "我在做什么？"
+
+      - name: 导出 / 校验 / 导入
+        run: |
+          python impl/m1/syspersona.py --home ./sim export --out ./me.syspersona
+          python impl/m1/syspersona.py verify --file ./me.syspersona
+          python impl/m1/syspersona.py --home ./sim2 import --file ./me.syspersona
+          python impl/m1/syspersona.py --home ./sim2 status

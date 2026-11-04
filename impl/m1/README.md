@@ -5,7 +5,7 @@
 - 依赖：Python 3.10+，且 `python`（或 `py -3`）在 PATH 中；**只用标准库**
 - 规模：单文件约 480 行
 - 模型：默认 `mock`（确定性回复），可选 `ollama:<model>`
-- 包含：人格加载、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**常驻 serve**、换模型
+- 包含：人格加载、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**常驻 serve**、**export / import**、换模型
 - 不包含：加密、设备绑定、抗僵化、向量检索、多任务调度（属 M2–M4）
 
 ## 数据布局
@@ -291,6 +291,33 @@ python syspersona.py --home ./data sleep
 | 并入额度 | 受单次上限与周额度约束 |
 
 这样「当天就有点不一样」和「第二天才定性格」可以并存：前者可回滚，后者才沉淀。
+
+## 迁移（export / import）
+
+把人格与记忆打成一个文件，换机器、做备份都靠它：
+
+```bash
+python syspersona.py --home ./data export --out me.syspersona
+python syspersona.py verify --file me.syspersona
+python syspersona.py --home ./data2 import --file me.syspersona
+```
+
+```
+已导出：me.syspersona（4.2 KB）
+  persona b7d1c2a4 v0.3.0-m1   sha256 9ea37ea39d5dd5d9…
+  注意：这是明文包，跨机移动前请自行加密或放在可信介质上。
+
+校验通过：me.syspersona
+已导入到：./data2
+记忆：2 条对话，1 条事实，0 条待归档
+```
+
+安全边界：
+
+- 包里带 `manifest.json`，记录 persona id/版本/导出时间与 `memory.db` 的 sha256；
+- 篡改任意字节，`verify` 与 `import` 都会失败并退出码 1；
+- 目标目录已有数据时拒绝覆盖，除非加 `--force`；
+- **包是明文的**，加密容器还没做——别把它直接丢进网盘。
 
 ## 抗僵化（5.5 的简化版）
 
