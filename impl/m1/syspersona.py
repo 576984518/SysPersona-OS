@@ -153,6 +153,17 @@ class Store:
         self.db = sqlite3.connect(home / DB_NAME)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {row[1] for row in self.db.execute("PRAGMA table_info(persona_traits)")}
+        if "stress_offset" not in cols:
+            self.db.execute(
+                "ALTER TABLE persona_traits ADD COLUMN stress_offset REAL NOT NULL DEFAULT 0"
+            )
+        if "stress_at" not in cols:
+            self.db.execute("ALTER TABLE persona_traits ADD COLUMN stress_at TEXT")
+        self.db.commit()
 
     # ---------- persona ----------
     def load_persona(self) -> dict:
@@ -360,6 +371,26 @@ class Store:
         )
         self.db.commit()
 
+    # ---------- stress offset ----------
+    def bump_stress(self, trait_id: str, delta: float) -> None:
+        row = self.db.execute(
+            "SELECT stress_offset FROM persona_traits WHERE trait_id=?", (trait_id,)
+        ).fetchone()
+        current = float(row["stress_offset"] or 0.0) if row else 0.0
+        new = max(-2.0, min(2.0, current + delta))
+        self.db.execute(
+            "UPDATE persona_traits SET stress_offset=?, stress_at=? WHERE trait_id=?",
+            (new, now(), trait_id),
+        )
+        self.db.commit()
+
+    def clear_stress(self, trait_id: str) -> None:
+        self.db.execute(
+            "UPDATE persona_traits SET stress_offset=0, stress_at=NULL WHERE trait_id=?",
+            (trait_id,),
+        )
+        self.db.commit()
+
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
         self.db.execute(
@@ -495,6 +526,58 @@ def mood_prefix(mood: dict) -> str:
     if glad >= 10 and glad > angry:
         return "（心情不错）"
     return ""
+
+
+def stress_value(trait, tau_hours: float = 6.0) -> float:
+    """应激偏移的当前残值：offset × exp(-小时 / 6)。"""
+    import math
+
+    offset = float(trait["stress_offset"] or 0.0)
+    at = trait["stress_at"]
+    if not at or offset == 0.0:
+        return 0.0
+    try:
+        hours = (
+            datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(at)
+        ).total_seconds() / 3600.0
+    except ValueError:
+        hours = 0.0
+    return offset * math.exp(-max(0.0, hours) / tau_hours)
+
+
+def settle_stress(store: "Store", persona: dict) -> list[str]:
+    """睡眠时结算：残值够大就并入权重，已经衰减到无意义就丢弃。"""
+    ev = persona.get("evolution", {}) or {}
+    max_step = float(ev.get("max_step", 2))
+    weekly_cap = float(ev.get("weekly_cap", 5))
+
+    changes: list[str] = []
+    for trait in store.traits():
+        if trait["is_locked"]:
+            continue
+        value = stress_value(trait)
+        if abs(value) < 0.3:
+            if float(trait["stress_offset"] or 0.0) != 0.0:
+                store.clear_stress(trait["trait_id"])
+                changes.append(f"{trait['trait_id']} 应激偏移已衰减，丢弃")
+            continue
+        up_used, down_used = store.weekly_drift(trait["trait_id"])
+        remaining = weekly_cap - (up_used if value > 0 else down_used)
+        if remaining <= 0:
+            store.clear_stress(trait["trait_id"])
+            changes.append(f"{trait['trait_id']} 额度不足，应激偏移丢弃")
+            continue
+        delta = max(-remaining, min(remaining, value, max_step))
+        weight = float(trait["weight"])
+        new_weight = max(0.0, min(100.0, weight + delta))
+        store.update_trait(
+            trait["trait_id"], new_weight, new_weight - weight, 0, f"应激偏移并入（{value:+.1f}）"
+        )
+        store.clear_stress(trait["trait_id"])
+        changes.append(
+            f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（应激并入 {value:+.1f}）"
+        )
+    return changes
 
 
 # ---------------- consolidation ----------------
@@ -751,6 +834,15 @@ def cmd_chat(args) -> None:
     mood = tick_mood(mood, updated_at, message)
     store.save_state(mood)
 
+    for trait in store.traits():
+        if trait["is_locked"] or not _overlap(trait["target"], message):
+            continue
+        negated = bool(NEGATION.search(message))
+        supportive = (negated and trait["polarity"] == "dislike") or (
+            not negated and trait["polarity"] == "like"
+        )
+        store.bump_stress(trait["trait_id"], 1.0 if supportive else -1.0)
+
     store.add_episode(cfg["session_id"], "user", message)
     reply = model.reply(persona, fact_lines, memory_lines, message, mood)
     store.add_episode(cfg["session_id"], "assistant", reply)
@@ -807,6 +899,10 @@ def cmd_sleep(args) -> None:
         print("  人格微调：" + "；".join(changes))
     else:
         print("  人格微调：无（证据不足，未达阈值）")
+
+    stress_changes = settle_stress(store, persona)
+    if stress_changes:
+        print("  应激结算：" + "；".join(stress_changes))
 
     store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
     print("  情绪归零（睡眠）")
@@ -899,9 +995,12 @@ def cmd_status(args) -> None:
     if traits:
         for t in traits:
             up, down = store.weekly_drift(t["trait_id"])
+            effective = float(t["weight"]) + stress_value(t)
+            stress = stress_value(t)
+            extra = f"，应激 {stress:+.1f}" if abs(stress) >= 0.1 else ""
             print(
-                f"偏好：{t['target']} [{t['polarity']}]  {t['weight']:.1f}"
-                f"（基线 {t['baseline']:.1f}，本周 上行 {up:.1f}/5 下行 {down:.1f}/5）"
+                f"偏好：{t['target']} [{t['polarity']}]  {effective:.1f}"
+                f"（基线 {t['baseline']:.1f}{extra}，本周 上行 {up:.1f}/5 下行 {down:.1f}/5）"
             )
         pending = store.pending_flips()
         if pending:
