@@ -12,7 +12,7 @@
 
 ```
 data/
-├─ persona.json     人格（init 时从 examples/persona.m1.json 复制）
+├─ persona/         分层人格：kernel.json / traits.json / state.json
 ├─ config.json      当前模型与会话 id
 ├─ memory.db        SQLite：episodes / facts / profile / snapshots / audit_log
 └─ snapshots/       每次归档前的快照
@@ -22,6 +22,13 @@ data/
 
 ```bash
 python syspersona.py --home ./data init --persona ../../examples/persona.m1.json
+# 按硬件档位套用阈值（low / mid / high）
+python syspersona.py --home ./data init --persona ../../examples/persona.m1.json --profile low
+```
+
+`--profile` 会改 `memory.context_budget` 与 `retention`：low 8 条 / 2·60·180 天，mid 12 条 / 3·90·365 天，high 24 条 / 7·180·730 天。阈值是硬件参数的函数，不是固定真理。
+
+```bash
 python syspersona.py --home ./data chat  --say "你好，我叫黄，我在做一个 NAS 调优项目，我喜欢简洁的回答。"
 python syspersona.py --home ./data sleep
 python syspersona.py --home ./data switch-model --model mock-b
@@ -421,7 +428,7 @@ relevant 相同、时间相同、数据相同，人格权重 0.12 的差把排�
 
 ## 分级清理与恢复指针
 
-原则：**压缩优先于清空**。任何驱逐都至少保留 4 轮热上下文；被移出的不是删掉，而是压成摘要、标记归档，仍可弱召回。
+原则：**压缩优先于清空**。最近 2 轮无条件保留，其余按保留权重竞争；被移出的不是删掉，而是压成摘要、标记归档，仍可弱召回。
 
 睡眠不是「清空工作记忆」，是按年龄分层：
 
@@ -486,11 +493,11 @@ python syspersona.py --home ./data chat --say "第 1 条……"
 
 ```
 [维护优先] 上下文临界，前台让路
-[实时归档] 2 条（窗口 6 > 预算 4，按最久未访问）
+[实时归档] 2 条（窗口 6 > 预算 4，按保留权重升序）
 维护（临界水位，水位 critical）：归档 2 条
 ```
 
-驱逐顺序按「最近访问时间」，不是创建顺序——被召回过的事实更该留下。
+驱逐顺序按「保留权重」升序，不按下标：画像分、人格 salience、新旧、重要性加权，最低的先走。
 
 手动立即执行一次：
 

@@ -48,6 +48,28 @@ KERNEL_FILE = "kernel.json"
 TRAITS_FILE = "traits.json"
 STATE_FILE = "state.json"
 
+# 硬件档位 → 阈值预设：所有阈值都是硬件参数的函数
+PROFILES = {
+    "low": {"context_budget": 8, "hot_days": 2, "warm_days": 60, "prune_days": 180},
+    "mid": {"context_budget": 12, "hot_days": 3, "warm_days": 90, "prune_days": 365},
+    "high": {"context_budget": 24, "hot_days": 7, "warm_days": 180, "prune_days": 730},
+}
+
+
+def apply_profile(persona: dict, name: str) -> None:
+    preset = PROFILES[name]
+    memory = persona.setdefault("memory", {})
+    memory["context_budget"] = preset["context_budget"]
+    retention = memory.setdefault("retention", {})
+    retention.update(
+        {
+            "hot_days": preset["hot_days"],
+            "warm_days": preset["warm_days"],
+            "prune_days": preset["prune_days"],
+        }
+    )
+    memory["profile"] = name
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS persona_versions (
     id INTEGER PRIMARY KEY,
@@ -1047,7 +1069,19 @@ def cmd_init(args) -> None:
         persona = load_persona_layers(home)
     else:
         persona = json.loads(src.read_text(encoding="utf-8-sig"))
+        if args.profile:
+            apply_profile(persona, args.profile)
         split_persona_layers(persona, home)
+    if args.profile and src.is_dir():
+        apply_profile(persona, args.profile)
+        traits = {
+            key: persona[key]
+            for key in ("traits", "memory", "evolution", "meta")
+            if key in persona
+        }
+        (_layers_dir(home) / TRAITS_FILE).write_text(
+            json.dumps(traits, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     store.record_persona(persona)
     store.sync_traits(persona)
     cfg = store.load_config()
@@ -1272,27 +1306,39 @@ def maintenance_level(store: "Store", persona: dict) -> str:
     return "none"
 
 
+def keep_score(store: "Store", traits: list, scores: dict[str, float], row) -> float:
+    """这条记忆「值不值得留」：用户在意 + 它在不在意 + 新旧 + 重要性。"""
+    content = row["content"]
+    boost = max((value for name, value in scores.items() if name in content), default=0.0)
+    salience = persona_salience(traits, content) if traits else 0.0
+    return (
+        0.35 * boost
+        + 0.35 * salience
+        + 0.2 * _recency(row["occurred_at"])
+        + 0.1 * float(row["importance"])
+    )
+
+
 def evict_by_pressure(store: "Store", persona: dict) -> int:
-    """上下文压力驱逐：按最近访问时间淘汰，而不是按创建顺序。"""
+    """上下文压力驱逐：按保留权重从低到高归档，水位由硬件预算决定。"""
     memory_cfg = persona.get("memory") or {}
     budget = int(memory_cfg.get("context_budget", 12))
     low_ratio = float(memory_cfg.get("low_watermark", 0.7))
 
     rows = store.db.execute(
-        "SELECT id, content, COALESCE(last_access, occurred_at) AS cold"
-        " FROM episodes WHERE archived = 0 ORDER BY cold ASC, id ASC"
+        "SELECT id, content, occurred_at, importance FROM episodes WHERE archived = 0 ORDER BY id ASC"
     ).fetchall()
     if len(rows) <= budget:
         return 0
 
     keep = max(4, int(budget * low_ratio))
-    newest = {
-        row["id"]
-        for row in store.db.execute(
-            "SELECT id FROM episodes WHERE archived=0 ORDER BY id DESC LIMIT 4"
-        ).fetchall()
-    }
-    victims = [row for row in rows if row["id"] not in newest][: len(rows) - keep]
+    newest = {row["id"] for row in rows[-2:]}   # 最近 2 条无条件保留，其余按权重竞争
+    traits = store.traits()
+    scores = entity_scores(store)
+
+    candidates = [row for row in rows if row["id"] not in newest]
+    candidates.sort(key=lambda row: keep_score(store, traits, scores, row))
+    victims = candidates[: max(0, len(rows) - keep)]
     for row in victims:
         tag_episode(store, row["id"], row["content"])
         store.db.execute(
@@ -1302,7 +1348,7 @@ def evict_by_pressure(store: "Store", persona: dict) -> int:
     store.db.commit()
     store.audit("evict", f"window={len(rows)} budget={budget} evicted={len(victims)}")
     if victims:
-        print(f"  [实时归档] {len(victims)} 条（窗口 {len(rows)} > 预算 {budget}，按最久未访问）")
+        print(f"  [实时归档] {len(victims)} 条（窗口 {len(rows)} > 预算 {budget}，按保留权重升序）")
     return len(victims)
 
 
@@ -1922,7 +1968,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_init = sub.add_parser("init", help="初始化人格与数据库")
-    p_init.add_argument("--persona", required=True, help="persona JSON 路径")
+    p_init.add_argument("--persona", required=True, help="persona JSON 路径或分层目录")
+    p_init.add_argument("--profile", choices=list(PROFILES), help="按硬件档位套用阈值预设")
     p_init.set_defaults(func=cmd_init)
 
     p_chat = sub.add_parser("chat", help="对话（不带 --say 进入交互）")
