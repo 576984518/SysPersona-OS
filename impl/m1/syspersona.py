@@ -1962,7 +1962,28 @@ def cmd_status(args) -> None:
                   f"（{last['reason']}）")
 
 
+def _load_vault_main():
+    """懒加载 M4：缺少可选依赖时只影响 vault 命令。"""
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from m4.vault.cli import main as vault_main
+    except ImportError as exc:
+        print(f"E_UNSUPPORTED: 无法加载 m4.vault（{exc}）")
+        raise SystemExit(1)
+    return vault_main
+
+
+def cmd_vault(args) -> None:
+    raise SystemExit(_load_vault_main()(list(args.vault_args)))
+
+
 def main() -> None:
+    # `syspersona vault ...` 直接转发，避免 REMAINDER 吞掉 `vault --help`
+    if len(sys.argv) > 1 and sys.argv[1] == "vault":
+        raise SystemExit(_load_vault_main()(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(prog="syspersona", description="SysPersona M1")
     parser.add_argument("--home", default="./data", help="数据目录")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -2028,6 +2049,10 @@ def main() -> None:
 
     p_layers = sub.add_parser("layers", help="查看人格分层文件与写权限")
     p_layers.set_defaults(func=cmd_layers)
+
+    p_vault = sub.add_parser("vault", help="加密容器（M4；需要 cryptography 可选依赖）", add_help=False)
+    p_vault.add_argument("vault_args", nargs=argparse.REMAINDER)
+    p_vault.set_defaults(func=cmd_vault)
 
     args = parser.parse_args()
     args.func(args)

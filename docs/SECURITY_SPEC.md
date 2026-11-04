@@ -729,7 +729,7 @@ Provider 内部异常必须被包装为 `E_CRYPTO` / `E_INTEGRITY`，且**不得
 1. 错口令 → 无法解密，且不泄露「差一点就对」的信息；
 2. 篡改任意字节 → `verify` 与 `import` 都失败并退出非 0；
 3. 用备份恢复后，`memory.db` 内容哈希一致；
-4. CI 增加「加密 → 解密 → 断言」一段；
+4. CI 增加「加密 → 解密 → 断言」一段（已实现：`.github/workflows/encryption.yml`）；
 5. 内核被改 → 拒绝启动，而不是降级。
 
 ---
@@ -810,23 +810,24 @@ Provider 内部异常必须被包装为 `E_CRYPTO` / `E_INTEGRITY`，且**不得
 
 ---
 
-## 附录 C · CLI 映射（M4 实现建议）
+## 附录 C · CLI 映射（v0.8.0 实现）
 
 ```text
-syspersona vault init    --home ./data --profile argon2id-mid   # 生成 KS + 首次封装
-syspersona vault seal    --home ./data --out me.sysvault [--recovery] [--purge]
-syspersona vault unlock  --file me.sysvault --home ./data
-syspersona vault verify  --file me.sysvault [--mnemonic-stdin]
-syspersona vault passwd  --file me.sysvault
-syspersona vault recover --file me.sysvault --mnemonic-stdin --out ./data
-syspersona vault publish --home ./data --out template.json --sign-key …
-syspersona vault fork    --template template.json --home ./newdata
-syspersona vault import  --file legacy.syspersona --allow-plaintext   # 迁移
+syspersona vault seal    --home ./data --out me.vault [--recovery] [--purge] [--profile low|mid|high|scrypt]
+syspersona vault verify  --file me.vault [--mnemonic-stdin]
+syspersona vault inspect --file me.vault                     # 只看头部，不需要口令
+syspersona vault unlock  --file me.vault --home ./data2 [--force]
+syspersona vault passwd  --file me.vault
+syspersona vault recover --file me.vault --out ./data3 --mnemonic-stdin
+syspersona vault import  --file legacy.syspersona --home ./data4 --allow-plaintext
 ```
 
-- 口令**不得**通过命令行参数传递（会进 shell history / 进程列表）；必须走 TTY 或 stdin；
-- 所有命令支持 `--json`；
-- `seal` 默认保留明文；`--purge` 才删。
+- 首次封装就是 `seal`，没有单独的 `init`；KS 在第一次封装时生成。
+- `publish` / `fork`（公开模板，Ed25519）尚未实现，排在 M4.2。
+- 口令**不得**通过命令行参数传递（会进 shell history / 进程列表）；必须走 TTY 或 stdin（`--passphrase-stdin`）。
+- 所有命令支持 `--json`；失败退出码 `1`，错误码打在 stderr。
+- `seal` 默认保留明文；`--purge` 才删（连同 `snapshots/`）。
+- 等价入口：`python -m m4.vault ...`（需 `impl/` 在 `PYTHONPATH`）。
 
 ---
 

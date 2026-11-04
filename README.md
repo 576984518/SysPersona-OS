@@ -630,6 +630,16 @@ profile_t   = profile_{t-1}   × exp(-Δt / 90d) + 提及次数      ← 慢，�
 
 **这些设计已经写成可实施的规范**：[`docs/SECURITY_SPEC.md`](docs/SECURITY_SPEC.md)。它把加密定义成「双轨制 + Provider 插件」：内核与性格强制加密，记忆可选；算法不写死，任何实现只要满足容器格式与失败语义即可互操作。可行性已用 46 项检查验证（Python ↔ OpenSSL ↔ 独立 Node 读取器），见 [`docs/SECURITY-FEASIBILITY.md`](docs/SECURITY-FEASIBILITY.md)。
 
+**规范已落成实现（v0.8.0）**：[`impl/m4`](impl/m4/README.md)。密码学走可选 Provider（`cryptography` + `argon2-cffi`），M1 仍然零依赖：
+
+```bash
+pip install -r impl/m4/requirements-m4.txt
+python impl/m1/syspersona.py vault seal   --home ./data --out me.vault --recovery
+python impl/m1/syspersona.py vault verify --file me.vault
+python impl/m1/syspersona.py vault unlock --file me.vault --home ./data2
+python impl/m1/syspersona.py vault recover --file me.vault --out ./data3 --mnemonic-stdin
+```
+
 ### 8.3 设备绑定
 
 可选的强绑定模式：将密钥与设备指纹（主板/CPU 序列号、TPM 度量）绑定，实现「只有这台设备能唤醒」。代价是硬件损坏即需走恢复流程；因此建议默认「口令 + 设备」双因子，设备仅作为附加因子。
@@ -777,7 +787,7 @@ vault.verify(container)                 # 校验完整性与来源
 | M5 | 迁移 | 多模型路由、兼容性自检、沙盒试跑、夜间切换 |
 | M6 | 评测 | 一致性/召回/延迟/成本基准与公开数据集 |
 
-> M4 的规范与可行性验证已完成，但**尚未写进 `impl/`**：规范见 [`docs/SECURITY_SPEC.md`](docs/SECURITY_SPEC.md)，验证见 [`docs/SECURITY-FEASIBILITY.md`](docs/SECURITY-FEASIBILITY.md)。
+> M4 **核心已实现**（v0.8.0）：容器、内核签名、改口令、助记词恢复、明文迁移、设备指纹绑定。规范见 [`docs/SECURITY_SPEC.md`](docs/SECURITY_SPEC.md)，实现见 [`impl/m4`](impl/m4/README.md)。公开模板 / fork（Ed25519）与 `device-key` 绑定排在 M4.2。
 
 已有一个可跑的最小闭环：[`impl/m1`](impl/m1/)（Python + SQLite，零第三方依赖，mock 模型）。它验证的是链路，不是智能：加载人格 → 对话落库 → 睡眠归档 → 按证据微调偏好（含周额度与极性闸门）→ 抗僵化再验证 → 换模型 → 仍记得之前的事，并可打包迁移。情绪当轮生效，权重睡眠结算；14 天与 90 天的演化可以用虚拟时钟在几秒内复现。
 
@@ -837,6 +847,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [状态机](docs/STATE-MACHINE.md)：生命周期、人格权重演化、唤醒时序（Mermaid）。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
+- [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
 - [English summary](README.en.md)。
 - 术语表：人格文件 / 记忆库 / 工作记忆 / 情景记忆 / 语义记忆 / 画像 / 固化 / 热重载 / 迁移 / 公私分级。
 
