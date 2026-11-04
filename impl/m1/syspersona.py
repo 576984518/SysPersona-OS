@@ -27,6 +27,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -819,6 +820,10 @@ def cmd_chat(args) -> None:
         if not message:
             return
 
+    print(respond(store, persona, model, cfg, message))
+
+
+def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> str:
     hits = retrieve(store, message, k=3)
     memory_lines = [
         snippet(row["content"])
@@ -846,19 +851,23 @@ def cmd_chat(args) -> None:
     store.add_episode(cfg["session_id"], "user", message)
     reply = model.reply(persona, fact_lines, memory_lines, message, mood)
     store.add_episode(cfg["session_id"], "assistant", reply)
-
-    print(reply)
+    return reply
 
 
 def cmd_sleep(args) -> None:
     home = Path(args.home)
     store = Store(home)
     persona = store.load_persona()
+    for line in run_sleep(store, persona, home):
+        print(line)
+
+
+def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
     rows = store.unconsolidated()
     if not rows:
-        print("没有需要归档的对话。")
-        return
+        return ["没有需要归档的对话。"]
 
+    lines: list[str] = []
     user_text = "\n".join(r["content"] for r in rows if r["role"] == "user")
     facts = extract_facts(user_text)
     for subject, predicate, obj in facts:
@@ -890,22 +899,23 @@ def cmd_sleep(args) -> None:
     )
     store.db.commit()
     store.audit("sleep", f"episodes={len(rows)} facts={len(facts)}")
-    print(f"归档完成：{len(rows)} 条对话 → {len(facts)} 条事实")
+    lines.append(f"归档完成：{len(rows)} 条对话 → {len(facts)} 条事实")
     if facts:
-        print("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
+        lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
 
     changes = apply_drift(store, persona, rows)
     if changes:
-        print("  人格微调：" + "；".join(changes))
+        lines.append("  人格微调：" + "；".join(changes))
     else:
-        print("  人格微调：无（证据不足，未达阈值）")
+        lines.append("  人格微调：无（证据不足，未达阈值）")
 
     stress_changes = settle_stress(store, persona)
     if stress_changes:
-        print("  应激结算：" + "；".join(stress_changes))
+        lines.append("  应激结算：" + "；".join(stress_changes))
 
     store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
-    print("  情绪归零（睡眠）")
+    lines.append("  情绪归零（睡眠）")
+    return lines
 
 
 def cmd_switch_model(args) -> None:
@@ -977,6 +987,59 @@ def cmd_flip_review(args) -> None:
         )
 
 
+def cmd_send(args) -> None:
+    home = Path(args.home)
+    home.mkdir(parents=True, exist_ok=True)
+    with (home / "inbox.txt").open("a", encoding="utf-8") as f:
+        f.write(args.say.strip() + "\n")
+    print(f"已投递：{args.say}")
+
+
+def cmd_serve(args) -> None:
+    home = Path(args.home)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)   # 常驻时按行刷新，便于观察
+    store = Store(home)
+    persona = store.load_persona()
+    cfg = store.load_config()
+    model = make_model(cfg.get("model", "mock-a"))
+    inbox = home / "inbox.txt"
+    inbox.touch(exist_ok=True)
+    pos = inbox.stat().st_size
+    last_active = time.time()
+
+    print(f"常驻中：{home}")
+    print(f"  模型：{cfg.get('model')}   空闲 {args.idle_seconds}s 自动睡眠   Ctrl+C 停止")
+    print(f"  投递：另开窗口 python syspersona.py --home \"{home}\" send --say \"...\"")
+
+    try:
+        while True:
+            size = inbox.stat().st_size
+            if size < pos:
+                pos = 0
+            if size > pos:
+                with inbox.open("r", encoding="utf-8") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                pos = size
+                for line in chunk.splitlines():
+                    message = line.strip()
+                    if not message:
+                        continue
+                    reply = respond(store, persona, model, cfg, message)
+                    print(f"你：{message}")
+                    print(f"它：{reply}")
+                    last_active = time.time()
+            if time.time() - last_active >= args.idle_seconds:
+                print("—— 空闲，进入睡眠 ——")
+                for line in run_sleep(store, persona, home):
+                    print(line)
+                last_active = time.time()
+            time.sleep(args.tick)
+    except KeyboardInterrupt:
+        print("\n已停止。")
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -1046,6 +1109,15 @@ def main() -> None:
     g.add_argument("--approve", type=int, metavar="ID")
     g.add_argument("--reject", type=int, metavar="ID")
     p_flip.set_defaults(func=cmd_flip_review)
+
+    p_send = sub.add_parser("send", help="向常驻进程投递一句话")
+    p_send.add_argument("--say", required=True)
+    p_send.set_defaults(func=cmd_send)
+
+    p_serve = sub.add_parser("serve", help="常驻：轮询 inbox，空闲自动睡眠")
+    p_serve.add_argument("--idle-seconds", type=int, default=300)
+    p_serve.add_argument("--tick", type=float, default=1.0)
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
