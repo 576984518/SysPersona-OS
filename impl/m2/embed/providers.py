@@ -23,6 +23,7 @@ HASH_DIM = 256
 DEFAULT_MODELS = {
     "ollama": "bge-m3",
     "fastembed": "BAAI/bge-small-zh-v1.5",
+    "openai": "bge-m3",
     "hash": "hash-v1",
 }
 _CJK = re.compile(r"[\u4e00-\u9fa5]+")
@@ -168,19 +169,60 @@ class FastEmbedProvider:
         return vectors
 
 
+class OpenAICompatProvider:
+    """OpenAI 兼容的 /v1/embeddings（Herdsman / LM Studio / vLLM 等）。"""
+
+    id = "openai"
+    is_semantic = True
+
+    def __init__(self, base_url: str, model: str | None = None, api_key: str = ""):
+        self.base_url = (base_url or "http://127.0.0.1:8080/v1").rstrip("/")
+        self.model = model or DEFAULT_MODELS["openai"]
+        self.api_key = api_key
+        self.dim = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), _BATCH):
+            vectors.extend(self._embed_batch(texts[start : start + _BATCH]))
+        if vectors:
+            self.dim = len(vectors[0])
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        payload = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib.request.Request(f"{self.base_url}/embeddings", data=payload, headers=headers)
+        with urllib.request.urlopen(request, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        items = sorted(data.get("data") or [], key=lambda item: item.get("index", 0))
+        vectors = [[float(x) for x in item.get("embedding") or []] for item in items]
+        if len(vectors) != len(texts) or not all(vectors):
+            raise RuntimeError("embedding 返回数量/维度不符合预期")
+        return vectors
+
+
 def detect(config: dict | None = None) -> EmbeddingProvider:
     """按配置与可用性选 Provider；永远返回一个可用实例。"""
     config = config or {}
     requested = (config.get("provider") or "auto").lower()
     host = config.get("host") or "http://127.0.0.1:11434"
+    base_url = config.get("base_url")
 
     if requested == "hash":
         return HashProvider()
+    if requested in ("openai", "openai-compatible"):
+        return OpenAICompatProvider(base_url or "http://127.0.0.1:8080/v1", config.get("model") or None,
+                                    config.get("api_key") or "")
     if requested == "ollama":
         return OllamaProvider(config.get("model") or None, host)
     if requested == "fastembed":
         return FastEmbedProvider(config.get("model") or None)
 
+    if base_url:  # 显式给了 OpenAI 兼容地址，优先用它
+        return OpenAICompatProvider(base_url, config.get("model") or None, config.get("api_key") or "")
     if OllamaProvider.available(host):
         return OllamaProvider(config.get("model") or None, host)
     try:

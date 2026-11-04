@@ -21,7 +21,56 @@ sys.path.insert(0, str(IMPL / "m1"))
 from m2.embed import index as embed_index  # noqa: E402
 from m2.embed import search as embed_search  # noqa: E402
 from m2.embed import store as embed_store  # noqa: E402
-from m2.embed.providers import HashProvider, _unit  # noqa: E402
+from m2.embed.providers import HashProvider, OpenAICompatProvider, _unit  # noqa: E402
+
+
+class OpenAICompatTest(unittest.TestCase):
+    """用一个本地假服务验证 /v1/embeddings 的请求与响应解析。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                vectors = [
+                    {"object": "embedding", "index": i, "embedding": [float(len(text)), 1.0]}
+                    for i, text in enumerate(body["input"])
+                ]
+                payload = json.dumps({"object": "list", "data": vectors, "model": body["model"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}/v1"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_embed_parses_openai_response(self):
+        provider = OpenAICompatProvider(self.base, "fake-embed")
+        vectors = provider.embed(["ab", "abcd"])
+        self.assertEqual(vectors, [[2.0, 1.0], [4.0, 1.0]])
+        self.assertEqual(provider.dim, 2)
+
+    def test_detect_prefers_explicit_base_url(self):
+        from m2.embed.providers import detect
+
+        provider = detect({"base_url": self.base, "model": "fake-embed"})
+        self.assertEqual(provider.id, "openai")
+        self.assertEqual(provider.base_url, self.base)
 
 
 class FakeSemanticProvider:

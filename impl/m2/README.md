@@ -11,17 +11,17 @@ M1 的检索是词面闸门——`overlap == 0` 直接出局。M2 加一条向�
 | Provider | 需要什么 | 说明 |
 |---|---|---|
 | `ollama` | 本地 ollama + `ollama pull bge-m3` | 中文强，零 Python 依赖 |
+| `openai` | 任何 OpenAI 兼容 `/v1/embeddings`（Herdsman / LM Studio / vLLM） | 配 `base_url` 即可，无需认证 |
 | `fastembed` | `pip install -r impl/m2/requirements-m2.txt` | 离线 ONNX，首次下载模型 |
 | `hash` | 无 | 字 n-gram 哈希投影，**不是语义检索**，测试与兜底 |
-
-`config.json`：
 
 ```json
 {
   "retrieval": {
     "mode": "auto",          // auto | lexical | hybrid
-    "provider": "auto",      // auto | ollama | fastembed | hash
+    "provider": "auto",      // auto | ollama | openai | fastembed | hash
     "model": "",             // 留空用 provider 默认
+    "base_url": "",          // provider=openai 时必填，如 http://localhost:8080/v1
     "floor": 0.25,           // 余弦相似度地板
     "candidates": 50,
     "index_on_write": true
