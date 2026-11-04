@@ -829,6 +829,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 ## 附录
 
 - [比喻与联想索引](docs/METAPHORS.md)：本方案中所有类比、隐喻及其对应的技术概念，逐条保留原文。
+- [交接说明](HANDOFF.md)：当前状态、未完成项、下一个任务的验收标准——下次从这里开始。
 - [状态机](docs/STATE-MACHINE.md)：生命周期、人格权重演化、唤醒时序（Mermaid）。
 - [English summary](README.en.md)。
 - 术语表：人格文件 / 记忆库 / 工作记忆 / 情景记忆 / 语义记忆 / 画像 / 固化 / 热重载 / 迁移 / 公私分级。
