@@ -107,6 +107,12 @@ CREATE TABLE IF NOT EXISTS flip_requests (
     decided_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS runtime_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    mood TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     tag TEXT NOT NULL,
@@ -337,6 +343,23 @@ class Store:
         )
         self.db.commit()
 
+    # ---------- runtime state ----------
+    def load_state(self) -> tuple[dict, str]:
+        row = self.db.execute(
+            "SELECT mood, updated_at FROM runtime_state WHERE id=1"
+        ).fetchone()
+        if not row:
+            return {"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0}, now()
+        return json.loads(row["mood"]), row["updated_at"]
+
+    def save_state(self, mood: dict) -> None:
+        self.db.execute(
+            "INSERT INTO runtime_state (id, mood, updated_at) VALUES (1,?,?)"
+            " ON CONFLICT(id) DO UPDATE SET mood=excluded.mood, updated_at=excluded.updated_at",
+            (json.dumps(mood, ensure_ascii=False), now()),
+        )
+        self.db.commit()
+
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
         self.db.execute(
@@ -379,9 +402,9 @@ class MockModel:
     def __init__(self, name: str = "mock-a"):
         self.name = name
 
-    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str) -> str:
+    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str, mood: dict) -> str:
         who = persona["kernel"]["identity"]["name"]
-        head = f"（{self.name} · {who}）"
+        head = f"（{self.name} · {who}）" + mood_prefix(mood)
         parts: list[str] = []
         if facts:
             parts.append("我记得：" + "；".join(facts))
@@ -397,9 +420,9 @@ class OllamaModel:
         self.name = name
         self.host = host.rstrip("/")
 
-    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str) -> str:
+    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str, mood: dict) -> str:
         k = persona["kernel"]
-        context = []
+        context = [f"当前情绪：{mood_text(mood)}"]
         if facts:
             context.append("已知事实：" + "；".join(facts))
         if memories:
@@ -428,6 +451,50 @@ def make_model(spec: str):
     if spec.startswith("ollama:"):
         return OllamaModel(spec.split(":", 1)[1])
     return MockModel(spec)
+
+
+# ---------------- runtime state ----------------
+
+CUES = [
+    (re.compile(r"厉害|不错|谢谢|很好|棒|辛苦"), "愉悦", 6.0),
+    (re.compile(r"不对|错了|又错|怎么搞|搞错|失望|差劲|乱来"), "烦躁", 8.0),
+    (re.compile(r"报错|失败|崩溃|卡住|bug"), "专注", 6.0),
+    (re.compile(r"累|困|睡了|休息"), "疲惫", 6.0),
+]
+
+
+def tick_mood(mood: dict, updated_at: str, text: str, tau_min: float = 30.0) -> dict:
+    """情绪按分钟衰减，再吸收本轮刺激。只影响当次会话，不写 traits。"""
+    import math
+
+    try:
+        elapsed = (
+            datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(updated_at)
+        ).total_seconds() / 60.0
+    except ValueError:
+        elapsed = 0.0
+    decay = math.exp(-max(0.0, elapsed) / tau_min)
+    for key in list(mood):
+        mood[key] = round(float(mood[key]) * decay, 1)
+    for pattern, key, delta in CUES:
+        if pattern.search(text):
+            mood[key] = min(30.0, round(mood.get(key, 0.0) + delta, 1))
+    return mood
+
+
+def mood_text(mood: dict) -> str:
+    items = [f"{k} +{v:g}" for k, v in mood.items() if v >= 1]
+    return "、".join(items) if items else "平稳"
+
+
+def mood_prefix(mood: dict) -> str:
+    angry = mood.get("烦躁", 0)
+    glad = mood.get("愉悦", 0)
+    if angry >= 10 and angry > glad:
+        return "（有点烦躁，先说结论）"
+    if glad >= 10 and glad > angry:
+        return "（心情不错）"
+    return ""
 
 
 # ---------------- consolidation ----------------
@@ -680,8 +747,12 @@ def cmd_chat(args) -> None:
     facts_rows = store.search_facts(keywords_of(message), intent_predicates(message))
     fact_lines = [f"{r['predicate']}：{r['object']}" for r in facts_rows]
 
+    mood, updated_at = store.load_state()
+    mood = tick_mood(mood, updated_at, message)
+    store.save_state(mood)
+
     store.add_episode(cfg["session_id"], "user", message)
-    reply = model.reply(persona, fact_lines, memory_lines, message)
+    reply = model.reply(persona, fact_lines, memory_lines, message, mood)
     store.add_episode(cfg["session_id"], "assistant", reply)
 
     print(reply)
@@ -736,6 +807,9 @@ def cmd_sleep(args) -> None:
         print("  人格微调：" + "；".join(changes))
     else:
         print("  人格微调：无（证据不足，未达阈值）")
+
+    store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
+    print("  情绪归零（睡眠）")
 
 
 def cmd_switch_model(args) -> None:
@@ -813,8 +887,10 @@ def cmd_status(args) -> None:
     persona = store.load_persona()
     cfg = store.load_config()
     counts = store.counts()
+    mood, _ = store.load_state()
     print(f"人格：{persona['kernel']['identity']['name']}  v{persona['version']}  id={persona['id'][:8]}")
     print(f"模型：{cfg.get('model')}   会话：{cfg.get('session_id', '')[:8]}")
+    print(f"情绪：{mood_text(mood)}")
     print(f"记忆：{counts['episodes']} 条对话，{counts['facts']} 条事实，{counts['unconsolidated']} 条待归档")
     profile = store.get_profile()
     if profile:
