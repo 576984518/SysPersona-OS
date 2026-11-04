@@ -1339,36 +1339,53 @@ def _ensure_entity(store: "Store", name: str, kind: str) -> int:
     return int(cur.lastrowid)
 
 
-def rebuild_graph(store: "Store") -> int:
-    """从 facts 重建画像图：user -[relation]-> 实体。"""
-    facts = store.db.execute("SELECT subject, predicate, object FROM facts").fetchall()
+def rebuild_graph(store: "Store", rows: list | None = None) -> int:
+    """画像图：边权按 90 天半衰期衰减，再叠加本轮提及次数。"""
     root = _ensure_entity(store, "user", "person")
 
-    counts: dict[tuple[str, str], int] = {}
-    for fact in facts:
-        key = (fact["object"], fact["predicate"])
-        counts[key] = counts.get(key, 0) + 1
-
-    for (obj, predicate), count in counts.items():
-        kind = KIND_BY_PREDICATE.get(predicate, "topic")
-        dst = _ensure_entity(store, obj, kind)
-        store.db.execute(
-            "INSERT INTO edges (src, dst, relation, weight, confidence, priority, updated_at)"
-            " VALUES (?,?,?,?,1.0,0,?)"
-            " ON CONFLICT(src, dst, relation) DO UPDATE SET"
-            " weight=excluded.weight, updated_at=excluded.updated_at",
-            (root, dst, predicate, count, now()),
-        )
-
-    for edge in store.db.execute("SELECT id, weight, confidence, updated_at FROM edges").fetchall():
-        priority = edge["weight"] * edge["confidence"] * math.exp(
+    # 1. 先让所有边随时间衰减
+    for edge in store.db.execute(
+        "SELECT id, weight, confidence, updated_at FROM edges"
+    ).fetchall():
+        decayed = float(edge["weight"]) * math.exp(
             -max(0.0, _days_since(edge["updated_at"])) / 90.0
         )
         store.db.execute(
-            "UPDATE edges SET priority=? WHERE id=?", (round(priority, 4), edge["id"])
+            "UPDATE edges SET weight=?, priority=?, updated_at=? WHERE id=?",
+            (round(decayed, 3), round(decayed * float(edge["confidence"]), 4), now(), edge["id"]),
+        )
+
+    # 2. 确保 facts 对应的边存在（不覆盖已有权重）
+    facts = store.db.execute("SELECT predicate, object FROM facts").fetchall()
+    for fact in facts:
+        kind = KIND_BY_PREDICATE.get(fact["predicate"], "topic")
+        dst = _ensure_entity(store, fact["object"], kind)
+        store.db.execute(
+            "INSERT OR IGNORE INTO edges (src, dst, relation, weight, confidence, priority, updated_at)"
+            " VALUES (?,?,?,0.0,1.0,0,?)",
+            (root, dst, fact["predicate"], now()),
+        )
+
+    # 3. 本轮提及累加：提到一次，长期权重加一
+    texts = [row["content"] for row in (rows or []) if row["role"] == "user"]
+    if texts:
+        for entity in store.db.execute("SELECT id, name FROM entities WHERE name <> 'user'").fetchall():
+            mentions = sum(1 for text in texts if entity["name"] in text)
+            if not mentions:
+                continue
+            store.db.execute(
+                "UPDATE edges SET weight = weight + ?, updated_at=? WHERE dst=?",
+                (mentions, now(), entity["id"]),
+            )
+
+    # 4. 重算画像优先级
+    for edge in store.db.execute("SELECT id, weight, confidence FROM edges").fetchall():
+        store.db.execute(
+            "UPDATE edges SET priority=? WHERE id=?",
+            (round(float(edge["weight"]) * float(edge["confidence"]), 4), edge["id"]),
         )
     store.db.commit()
-    return len(counts)
+    return int(store.db.execute("SELECT COUNT(*) FROM edges").fetchone()[0])
 
 
 def entity_scores(store: "Store") -> dict[str, float]:
@@ -1460,10 +1477,6 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
         if facts:
             lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
 
-        relations = rebuild_graph(store)
-        if relations:
-            lines.append(f"  画像图：{relations} 条关系")
-
         changes, touched = apply_drift(store, persona, rows)
         if changes:
             lines.append("  人格微调：" + "；".join(changes))
@@ -1483,6 +1496,9 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
             lines.append("  恢复指针：" + "、".join(topics))
 
     # 维护任务：即使没有新对话也要跑
+    relations = rebuild_graph(store, rows)
+    if relations and rows:
+        lines.append(f"  画像图：{relations} 条关系")
     lines.extend("  " + item for item in cleanup_episodes(store, persona))
     revalidated = revalidate_traits(store, persona)
     if revalidated:
