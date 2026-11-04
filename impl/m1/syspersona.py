@@ -116,6 +116,12 @@ CREATE TABLE IF NOT EXISTS runtime_state (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS resume_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    topics TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     tag TEXT NOT NULL,
@@ -187,6 +193,9 @@ class Store:
             self.db.execute("ALTER TABLE persona_traits ADD COLUMN last_discount_at TEXT")
         if "first_seen" not in cols:
             self.db.execute("ALTER TABLE persona_traits ADD COLUMN first_seen TEXT")
+        ep_cols = {row[1] for row in self.db.execute("PRAGMA table_info(episodes)")}
+        if "archived" not in ep_cols:
+            self.db.execute("ALTER TABLE episodes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
     # ---------- persona ----------
@@ -239,7 +248,7 @@ class Store:
 
     def all_episodes(self, limit: int = 500) -> list[sqlite3.Row]:
         return self.db.execute(
-            "SELECT * FROM episodes ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM episodes WHERE archived = 0 ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
     def unconsolidated(self) -> list[sqlite3.Row]:
@@ -419,6 +428,28 @@ class Store:
             (trait_id,),
         )
         self.db.commit()
+
+    # ---------- resume ----------
+    def save_resume(self, topics: list[str]) -> None:
+        self.db.execute(
+            "INSERT INTO resume_state (id, topics, updated_at) VALUES (1,?,?)"
+            " ON CONFLICT(id) DO UPDATE SET topics=excluded.topics, updated_at=excluded.updated_at",
+            (json.dumps(topics, ensure_ascii=False), now()),
+        )
+        self.db.commit()
+
+    def load_resume(self) -> tuple[list[str], str | None]:
+        row = self.db.execute(
+            "SELECT topics, updated_at FROM resume_state WHERE id=1"
+        ).fetchone()
+        if not row:
+            return [], None
+        return json.loads(row["topics"]), row["updated_at"]
+
+    def archived_count(self) -> int:
+        return int(
+            self.db.execute("SELECT COUNT(*) FROM episodes WHERE archived=1").fetchone()[0]
+        )
 
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
@@ -878,6 +909,11 @@ def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> st
     ]
     memory_lines = list(dict.fromkeys(memory_lines))[:2]
 
+    if not memory_lines:
+        topics, resumed_at = store.load_resume()
+        if topics and resumed_at and _days_since(resumed_at) <= 3:
+            memory_lines = ["上次在聊：" + "、".join(topics)]
+
     facts_rows = store.search_facts(keywords_of(message), intent_predicates(message))
     fact_lines = [f"{r['predicate']}：{r['object']}" for r in facts_rows]
 
@@ -989,6 +1025,55 @@ def exploration_candidates(store: "Store", episodes: list) -> list[str]:
     return [f"探索候选：「{token}」出现 {count} 次，未被覆盖（1% 预算）" for token, count in hot[:1]]
 
 
+def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
+    """分级清理：温数据压摘要，冷数据删除原文；热窗口不动。"""
+    retention = ((persona.get("memory") or {}).get("retention") or {})
+    warm_days = float(retention.get("warm_days", 90))
+    prune_days = float(retention.get("prune_days", 365))
+
+    archived = 0
+    pruned = 0
+    rows = store.db.execute(
+        "SELECT id, content, occurred_at, archived FROM episodes"
+    ).fetchall()
+    for row in rows:
+        age = _days_since(row["occurred_at"])
+        if age >= prune_days:
+            store.db.execute("DELETE FROM episodes WHERE id=?", (row["id"],))
+            pruned += 1
+        elif age >= warm_days and not row["archived"]:
+            short = snippet(row["content"], 60) + "（已归档）"
+            store.db.execute(
+                "UPDATE episodes SET content=?, archived=1 WHERE id=?", (short, row["id"])
+            )
+            archived += 1
+    store.db.commit()
+
+    lines: list[str] = []
+    if archived:
+        lines.append(f"清理：{archived} 条原文压成摘要（超过 {warm_days:.0f} 天）")
+    if pruned:
+        lines.append(f"清理：{pruned} 条冷数据删除（超过 {prune_days:.0f} 天）")
+    return lines
+
+
+def resume_topics(rows: list) -> list[str]:
+    stop = set("我你他她它的了是在做一个这那有和与就都也还很太要会能可以把被让给对从到吗呢吧啊呀")
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row["role"] != "user":
+            continue
+        text = row["content"]
+        for word in re.findall(r"[A-Za-z0-9_]{2,}", text):
+            counts[word] = counts.get(word, 0) + 1
+        for run in re.findall(r"[\u4e00-\u9fa5]{2,}", text):
+            core = run.strip("".join(stop))
+            if len(core) >= 2:
+                counts[core] = counts.get(core, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], -len(item[0])))
+    return [token for token, _ in ranked[:3]]
+
+
 def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
     rows = store.unconsolidated()
     lines: list[str] = []
@@ -1044,7 +1129,13 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
         store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
         lines.append("  情绪归零（睡眠）")
 
+        topics = resume_topics(rows)
+        if topics:
+            store.save_resume(topics)
+            lines.append("  恢复指针：" + "、".join(topics))
+
     # 维护任务：即使没有新对话也要跑
+    lines.extend("  " + item for item in cleanup_episodes(store, persona))
     revalidated = revalidate_traits(store, persona)
     if revalidated:
         lines.append("  旧标签再验证：" + "；".join(revalidated))
@@ -1236,7 +1327,18 @@ def cmd_simulate(args) -> None:
                 + "  ".join(f"{k}={v:.1f}" for k, v in weights.items())
             )
             for line in lines:
-                if any(k in line for k in ("人格微调", "应激结算", "新事实", "旧标签", "探索候选")):
+                if any(
+                    k in line
+                    for k in (
+                        "人格微调",
+                        "应激结算",
+                        "新事实",
+                        "旧标签",
+                        "探索候选",
+                        "清理",
+                        "恢复指针",
+                    )
+                ):
                     print("        " + line.strip())
 
             if index % 30 == 0:
@@ -1355,6 +1457,11 @@ def cmd_status(args) -> None:
     print(f"模型：{cfg.get('model')}   会话：{cfg.get('session_id', '')[:8]}")
     print(f"情绪：{mood_text(mood)}")
     print(f"记忆：{counts['episodes']} 条对话，{counts['facts']} 条事实，{counts['unconsolidated']} 条待归档")
+    topics, resumed_at = store.load_resume()
+    if topics:
+        print(f"恢复指针：{'、'.join(topics)}（{resumed_at}）")
+    if store.archived_count():
+        print(f"已归档：{store.archived_count()} 条（原文已压成摘要，仍可弱召回）")
     score, parts = rigidity_index(store)
     print(
         f"僵化：{score}/100（旧偏好 {parts['旧偏好占比']:.0%}，旧事实 {parts['旧事实占比']:.0%}）"

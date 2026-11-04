@@ -51,9 +51,15 @@
       }
     ]
   },
+  "memory": {
+    "retention": {
+      "hot_days": 3,
+      "warm_days": 90,
+      "prune_days": 365
+    }
+  },
   "evolution": {
-    "trigger": "consolidate",
-    "min_evidence": 3,
+    "trigger": "consolidate",    "min_evidence": 3,
     "max_step": 2,
     "weekly_cap": 5,
     "polarity_flip": {
