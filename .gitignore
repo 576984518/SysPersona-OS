@@ -31,6 +31,9 @@ logs/
 impl/m1/data*/
 data/
 
+# 可行性验证的运行产物
+impl/m4/feasibility/_run/
+
 # Python
 __pycache__/
 *.py[cod]

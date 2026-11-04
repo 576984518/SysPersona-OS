@@ -1,0 +1,60 @@
+{
+  "provider": "node 3.5.8",
+  "argon2id": {
+    "passphrase": "correct horse battery staple",
+    "salt_hex": "000102030405060708090a0b0c0d0e0f",
+    "memory": 19456,
+    "passes": 2,
+    "parallelism": 1,
+    "tag_length": 32,
+    "key_hex": "818259b6310026a8e0dbac5d2e6927abcfdb07b32258fac4f61b18b80f929085"
+  },
+  "scrypt": {
+    "passphrase": "correct horse battery staple",
+    "salt_hex": "000102030405060708090a0b0c0d0e0f",
+    "N": 32768,
+    "r": 8,
+    "p": 1,
+    "key_len": 32,
+    "key_hex": "7a8e34241db898d59175c696538c417467a975ffe569068425f16188d3159c58"
+  },
+  "hkdf_rfc5869_case1": {
+    "ikm_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "salt_hex": "000102030405060708090a0b0c",
+    "info_hex": "f0f1f2f3f4f5f6f7f8f9",
+    "L": 42,
+    "okm_hex": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+  },
+  "aes256gcm_empty": {
+    "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "nonce_hex": "000000000000000000000000",
+    "aad_hex": "",
+    "plaintext_hex": "",
+    "ciphertext_and_tag_hex": "530f8afbc74536b9a963b4f1c4cb738b"
+  },
+  "aes256gcm_one_block": {
+    "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "nonce_hex": "000000000000000000000000",
+    "aad_hex": "",
+    "plaintext_hex": "00000000000000000000000000000000",
+    "ciphertext_and_tag_hex": "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919"
+  },
+  "hmac_sha256": {
+    "key_utf8": "key",
+    "message_utf8": "The quick brown fox jumps over the lazy dog",
+    "mac_hex": "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+  },
+  "canonical_json": {
+    "value": {
+      "b": 1,
+      "a": "×"
+    },
+    "bytes_hex": "7b2261223a22c397222c2262223a317d",
+    "sha256": "d4bf92657d5aaac3217f1880df07dc5aab193753759a242cbde265e5e1b1af2d"
+  },
+  "bip39": {
+    "entropy_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+    "roundtrip": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

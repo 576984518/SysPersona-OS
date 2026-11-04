@@ -1,0 +1,26 @@
+[
+  {
+    "db_kib": 48.0,
+    "container_kib": 10.8,
+    "header_bytes": 732,
+    "payload_kib": 10.1,
+    "seal_ms": 742.6,
+    "unlock_ms": 766.7
+  },
+  {
+    "db_kib": 168.0,
+    "container_kib": 33.8,
+    "header_bytes": 732,
+    "payload_kib": 33.1,
+    "seal_ms": 751.7,
+    "unlock_ms": 727.2
+  },
+  {
+    "db_kib": 656.0,
+    "container_kib": 127.1,
+    "header_bytes": 732,
+    "payload_kib": 126.4,
+    "seal_ms": 780.9,
+    "unlock_ms": 743.2
+  }
+]

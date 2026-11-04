@@ -1,0 +1,32 @@
+[
+  {
+    "profile": "scrypt-low",
+    "kdf": "scrypt",
+    "params": {
+      "N": 32768,
+      "r": 8,
+      "p": 1
+    },
+    "median_ms": 157.1
+  },
+  {
+    "profile": "argon2id-low",
+    "kdf": "argon2id",
+    "params": {
+      "memory": 19456,
+      "passes": 2,
+      "parallelism": 1
+    },
+    "median_ms": 111.0
+  },
+  {
+    "profile": "argon2id-mid",
+    "kdf": "argon2id",
+    "params": {
+      "memory": 65536,
+      "passes": 3,
+      "parallelism": 1
+    },
+    "median_ms": 220.2
+  }
+]
