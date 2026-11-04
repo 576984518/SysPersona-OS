@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import shutil
 import sqlite3
@@ -120,6 +121,28 @@ CREATE TABLE IF NOT EXISTS resume_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     topics TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS entities (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    attention REAL NOT NULL DEFAULT 0,
+    attention_at TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(name, kind)
+);
+
+CREATE TABLE IF NOT EXISTS edges (
+    id INTEGER PRIMARY KEY,
+    src INTEGER NOT NULL,
+    dst INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1,
+    confidence REAL NOT NULL DEFAULT 1,
+    priority REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    UNIQUE(src, dst, relation)
 );
 
 CREATE TABLE IF NOT EXISTS tags (
@@ -736,8 +759,10 @@ def _recency(ts: str, tau_days: float = 7.0) -> float:
     return math.exp(-age_days / tau_days)
 
 
-def retrieve(store: "Store", query: str, k: int = 3) -> list[tuple[float, object]]:
-    """混合打分：词面重合 0.6 + 时间近因 0.25 + 重要性 0.15。"""
+def retrieve(
+    store: "Store", query: str, k: int = 3, scores: dict[str, float] | None = None
+) -> list[tuple[float, object]]:
+    """混合打分：词面重合 0.6 + 时间近因 0.25 + 重要性 0.15，再加画像加分。"""
     q = _tokens(query)
     if not q:
         return []
@@ -750,6 +775,12 @@ def retrieve(store: "Store", query: str, k: int = 3) -> list[tuple[float, object
         score = 0.6 * overlap + 0.25 * _recency(row["occurred_at"]) + 0.15 * row["importance"]
         if row["role"] != "user":
             score *= 0.7          # 助手回复常复述用户内容，降权避免自我强化
+        if scores:
+            boost = max(
+                (value for name, value in scores.items() if name in row["content"]),
+                default=0.0,
+            )
+            score += 0.25 * boost  # 画像优先级是加分项，不是门槛
         scored.append((score, row))
     scored.sort(key=lambda x: -x[0])
     top = scored[:k]
@@ -921,7 +952,8 @@ def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> st
     else:
         evict_by_pressure(store, persona)
 
-    hits = retrieve(store, message, k=3)
+    scores = entity_scores(store)
+    hits = retrieve(store, message, k=3, scores=scores)
     memory_lines = [
         snippet(row["content"])
         for _, row in hits
@@ -1137,6 +1169,89 @@ def run_maintenance(store: "Store", persona: dict, reason: str) -> list[str]:
     return [f"维护（{reason}，水位 {level}）：归档 {evicted} 条"]
 
 
+KIND_BY_PREDICATE = {
+    "称呼": "person",
+    "身份": "person",
+    "喜欢": "interest",
+    "讨厌": "interest",
+    "习惯": "habit",
+    "在做": "project",
+}
+
+
+def _ensure_entity(store: "Store", name: str, kind: str) -> int:
+    row = store.db.execute(
+        "SELECT id FROM entities WHERE name=? AND kind=?", (name, kind)
+    ).fetchone()
+    if row:
+        return int(row["id"])
+    cur = store.db.execute(
+        "INSERT INTO entities (name, kind, created_at) VALUES (?,?,?)", (name, kind, now())
+    )
+    store.db.commit()
+    return int(cur.lastrowid)
+
+
+def rebuild_graph(store: "Store") -> int:
+    """从 facts 重建画像图：user -[relation]-> 实体。"""
+    facts = store.db.execute("SELECT subject, predicate, object FROM facts").fetchall()
+    root = _ensure_entity(store, "user", "person")
+
+    counts: dict[tuple[str, str], int] = {}
+    for fact in facts:
+        key = (fact["object"], fact["predicate"])
+        counts[key] = counts.get(key, 0) + 1
+
+    for (obj, predicate), count in counts.items():
+        kind = KIND_BY_PREDICATE.get(predicate, "topic")
+        dst = _ensure_entity(store, obj, kind)
+        store.db.execute(
+            "INSERT INTO edges (src, dst, relation, weight, confidence, priority, updated_at)"
+            " VALUES (?,?,?,?,1.0,0,?)"
+            " ON CONFLICT(src, dst, relation) DO UPDATE SET"
+            " weight=excluded.weight, updated_at=excluded.updated_at",
+            (root, dst, predicate, count, now()),
+        )
+
+    for edge in store.db.execute("SELECT id, weight, confidence, updated_at FROM edges").fetchall():
+        priority = edge["weight"] * edge["confidence"] * math.exp(
+            -max(0.0, _days_since(edge["updated_at"])) / 90.0
+        )
+        store.db.execute(
+            "UPDATE edges SET priority=? WHERE id=?", (round(priority, 4), edge["id"])
+        )
+    store.db.commit()
+    return len(counts)
+
+
+def entity_scores(store: "Store") -> dict[str, float]:
+    """两套优先级归一化后相加：长期画像 0.6 + 近期关注 0.4。"""
+    rows = store.db.execute(
+        "SELECT e.name, ed.weight, ed.confidence, ed.updated_at"
+        " FROM entities e JOIN edges ed ON ed.dst = e.id WHERE e.name <> 'user'"
+    ).fetchall()
+    cutoff = (current_dt() - timedelta(days=7)).isoformat(timespec="seconds")
+    recent = [
+        row["content"]
+        for row in store.db.execute(
+            "SELECT content FROM episodes WHERE occurred_at >= ?", (cutoff,)
+        ).fetchall()
+    ]
+
+    raw: dict[str, float] = {}
+    for row in rows:
+        profile = row["weight"] * row["confidence"] * math.exp(
+            -max(0.0, _days_since(row["updated_at"])) / 90.0
+        )
+        attention = sum(1 for text in recent if row["name"] in text)
+        raw[row["name"]] = raw.get(row["name"], 0.0) + 0.6 * profile + 0.4 * attention
+
+    if raw:
+        peak = max(raw.values()) or 1.0
+        raw = {name: value / peak for name, value in raw.items()}
+    return raw
+
+
 def resume_topics(rows: list) -> list[str]:
     stop = set("我你他她它的了是在做一个这那有和与就都也还很太要会能可以把被让给对从到吗呢吧啊呀")
     counts: dict[str, int] = {}
@@ -1195,6 +1310,10 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
         lines.append(f"归档完成：{len(rows)} 条对话 → {len(facts)} 条事实")
         if facts:
             lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
+
+        relations = rebuild_graph(store)
+        if relations:
+            lines.append(f"  画像图：{relations} 条关系")
 
         changes, touched = apply_drift(store, persona, rows)
         if changes:
@@ -1560,6 +1679,10 @@ def cmd_status(args) -> None:
         print(f"恢复指针：{'、'.join(topics)}（{resumed_at}）")
     if store.archived_count():
         print(f"已归档：{store.archived_count()} 条（原文已压成摘要，仍可弱召回）")
+    scores = entity_scores(store)
+    if scores:
+        top = sorted(scores.items(), key=lambda item: -item[1])[:5]
+        print("画像图：" + "、".join(f"{name} {value:.2f}" for name, value in top))
     score, parts = rigidity_index(store)
     print(
         f"僵化：{score}/100（旧偏好 {parts['旧偏好占比']:.0%}，旧事实 {parts['旧事实占比']:.0%}）"

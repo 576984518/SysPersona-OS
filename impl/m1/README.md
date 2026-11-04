@@ -5,7 +5,7 @@
 - 依赖：Python 3.10+，且 `python`（或 `py -3`）在 PATH 中；**只用标准库**
 - 规模：单文件约 480 行
 - 模型：默认 `mock`（确定性回复），可选 `ollama:<model>`
-- 包含：人格加载、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**常驻 serve**、**export / import**、换模型
+- 包含：人格加载、对话落库、睡眠归档、**偏好微调（5.4 的简化版）**、**极性翻转闸门**、**情绪状态层**、**画像图检索**、**常驻 serve**、**export / import**、换模型
 - 不包含：加密、设备绑定、抗僵化、向量检索、多任务调度（属 M2–M4）
 
 ## 数据布局
@@ -340,6 +340,35 @@ python syspersona.py --home ./data simulate --scenario ..\..\examples\scenario.9
 ```
 
 注意 `pref_short` 比另外两条晚一天打折——它在第 1 天被支撑过，计时从那天算起。
+
+## 画像图（6.5 的简化版）
+
+睡眠时从 facts 建图：`user —[喜欢/讨厌/习惯/在做]→ 实体`。
+
+两套优先级，分开算再相加：
+
+```
+profile   = 频次 × 明确度 × exp(-天数 / 90)
+attention = 近 7 天提及次数
+score     = 0.6 × profile_norm + 0.4 × attention_norm
+```
+
+检索时它是**加分项**（`+0.25 × score`），不是门槛——相关度不够的记忆不会因为「画像里有」就被硬塞进来。
+
+```bash
+python syspersona.py --home ./data chat --say "我喜欢 NAS 调优项目。"
+python syspersona.py --home ./data sleep
+#   新事实：喜欢=NAS 调优项目
+#   画像图：1 条关系
+
+python syspersona.py --home ./data chat --say "我那个 NAS 调优项目怎么样了？"
+# （mock-a · 阿岚）你提过：「我喜欢 NAS 调优项目。」
+
+python syspersona.py --home ./data status
+# 画像图：NAS 调优项目 1.00
+```
+
+限制：没有多跳扩散（`NAS → 项目 → 休眠` 还走不通）；attention 只数近 7 天出现次数，没有按最后提及时间衰减。
 
 ## 分级清理与恢复指针
 
