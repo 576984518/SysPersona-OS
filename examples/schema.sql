@@ -102,9 +102,11 @@ CREATE TABLE IF NOT EXISTS entities (
     id              INTEGER PRIMARY KEY,
     persona_uuid    TEXT    NOT NULL,
     name            TEXT    NOT NULL,
-    kind            TEXT    NOT NULL,      -- person / project / place / thing
+    kind            TEXT    NOT NULL,      -- person / interest / habit / project / place / event
     aliases         TEXT,                  -- JSON 数组，处理词汇鸿沟
+    confidence      REAL    NOT NULL DEFAULT 0.8,   -- 用户直说 1.0，模型推断 0.6
     first_seen      TEXT,
+    last_seen       TEXT,
     UNIQUE (persona_uuid, name, kind)
 );
 
@@ -114,9 +116,15 @@ CREATE TABLE IF NOT EXISTS edges (
     src_entity      INTEGER NOT NULL REFERENCES entities(id),
     dst_entity      INTEGER NOT NULL REFERENCES entities(id),
     relation        TEXT    NOT NULL,
-    weight          REAL    NOT NULL DEFAULT 1.0,
+    weight          REAL    NOT NULL DEFAULT 1.0,   -- 出现频次
+    confidence      REAL    NOT NULL DEFAULT 0.8,
+    priority        REAL    NOT NULL DEFAULT 1.0,   -- 频次 × 衰减 × 明确度 × 关系强度
+    last_seen       TEXT,
     updated_at      TEXT    NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_edges_priority ON edges(persona_uuid, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_entity);
 
 -- ---------- 标签（倒排） ----------
 CREATE TABLE IF NOT EXISTS tags (
