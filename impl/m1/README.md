@@ -161,6 +161,47 @@ python syspersona.py --home ./data send --say "我在做一个 NAS 调优项目"
 
 机制：轮询 `inbox.txt` 的新行 → 逐条 `respond` → 空闲超过阈值自动 `run_sleep`。情绪按真实时间衰减，所以「挂着不管」本身就是在验证衰减曲线。
 
+## 时间加速（simulate）
+
+等两周太慢。`simulate` 用虚拟时钟把 1 天压成 1 步，14 天几秒跑完：
+
+```bash
+python syspersona.py --home ./data simulate
+# 用自己的场景
+python syspersona.py --home ./data simulate --scenario ..\..\examples\scenario.14d.json
+```
+
+输出（节选）：
+
+```
+第  1 天  消息 3  pref_short=81.5  pref_verbose=70.0  pref_longpost=18.0
+        人格微调：pref_short 80.0 → 81.5（支持 3 条）
+第  2 天  消息 1  pref_short=81.0
+        人格微调：pref_short 81.5 → 81.0（回归基线）
+第  5 天  消息 3  pref_short=84.5
+        人格微调：pref_short 84.0 → 84.5（支持 3 条）
+第  7 天  消息 5  pref_longpost=16.0
+        人格微调：pref_longpost 18.0 → 16.0（反向 5 条）；已生成极性翻转待确认 #1
+第 11 天  消息 0  pref_short=82.0
+        应激结算：pref_short 应激偏移已衰减，丢弃
+```
+
+关键：`now()`、时间近因、情绪衰减、应激衰减、周额度统计全部读虚拟时钟，所以断言的是真实逻辑，不是另写一套。
+
+场景文件格式：
+
+```json
+{
+  "days": [
+    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。"]},
+    {"messages": ["今天天气不错。"]},
+    {"messages": ["我不喜欢长篇大论。"], "sleep": false}
+  ]
+}
+```
+
+`sleep: false` 表示这一天不睡，用来验证「隔天才结算时偏移已衰减」。
+
 ## 状态层（当天生效，不等睡着）
 
 第 4.1 节把人格分成三层，M1 之前只实现了前两层——所以「当天发生什么都不变」。补上状态层后：
@@ -269,6 +310,7 @@ python syspersona.py --home ./data recall --query "旧机器休眠"
 - **人格用 JSON 而非 YAML**：避免引入 PyYAML。YAML 解析放 M2。
 - **抽取是正则**：只认「我叫 / 我在做 / 我喜欢 / 我讨厌」四种句式，不是模型抽取。
 - **检索是词面重合 + 时间衰减 + 重要性**：没有向量、没有语义改写、没有重排模型。
+- **模拟不等于实测**：`simulate` 验证的是时间相关逻辑，不覆盖并发、进程重启、真实模型的不确定性。
 - **常驻是文件轮询**：`inbox.txt` 追加即处理，不是 HTTP/WebSocket；没有守护、崩溃重启、日志轮转。
 - **情绪靠关键词触发**：`厉害/错了/报错` 这类规则，不是模型判断语调；维度只有四个。
 - **应激靠「命中偏好对象 + 否定词」触发**：没有情绪强度建模，也没有事件显著性打分。

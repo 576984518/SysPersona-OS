@@ -31,7 +31,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -144,7 +144,22 @@ CREATE TABLE IF NOT EXISTS snapshots (
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return current_dt().isoformat(timespec="seconds")
+
+
+_VIRTUAL_NOW = None
+
+
+def current_dt():
+    """虚拟时钟：模拟时由 simulate 推进，正常运行时等于真实时间。"""
+    if _VIRTUAL_NOW is not None:
+        return _VIRTUAL_NOW
+    return datetime.now(timezone.utc).astimezone()
+
+
+def advance(delta) -> None:
+    global _VIRTUAL_NOW
+    _VIRTUAL_NOW = current_dt() + delta
 
 
 class Store:
@@ -299,7 +314,7 @@ class Store:
             "SELECT delta, created_at FROM persona_drift_log WHERE trait_id=? ORDER BY id DESC",
             (trait_id,),
         ).fetchall()
-        cutoff = datetime.now(timezone.utc).astimezone().timestamp() - days * 86400
+        cutoff = current_dt().timestamp() - days * 86400
         up = 0.0
         down = 0.0
         for row in rows:
@@ -501,7 +516,7 @@ def tick_mood(mood: dict, updated_at: str, text: str, tau_min: float = 30.0) -> 
 
     try:
         elapsed = (
-            datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(updated_at)
+            current_dt() - datetime.fromisoformat(updated_at)
         ).total_seconds() / 60.0
     except ValueError:
         elapsed = 0.0
@@ -539,22 +554,32 @@ def stress_value(trait, tau_hours: float = 6.0) -> float:
         return 0.0
     try:
         hours = (
-            datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(at)
+            current_dt() - datetime.fromisoformat(at)
         ).total_seconds() / 3600.0
     except ValueError:
         hours = 0.0
     return offset * math.exp(-max(0.0, hours) / tau_hours)
 
 
-def settle_stress(store: "Store", persona: dict) -> list[str]:
-    """睡眠时结算：残值够大就并入权重，已经衰减到无意义就丢弃。"""
+def settle_stress(store: "Store", persona: dict, skip: set[str] | None = None) -> list[str]:
+    """睡眠时结算：残值够大就并入权重，已经衰减到无意义就丢弃。
+
+    同一轮里已经被证据调整过的偏好，跳过应激结算——避免一天内双重计入。
+    """
     ev = persona.get("evolution", {}) or {}
     max_step = float(ev.get("max_step", 2))
     weekly_cap = float(ev.get("weekly_cap", 5))
+    skip = skip or set()
 
     changes: list[str] = []
     for trait in store.traits():
         if trait["is_locked"]:
+            continue
+        if trait["trait_id"] in skip:
+            had_offset = float(trait["stress_offset"] or 0.0) != 0.0
+            store.clear_stress(trait["trait_id"])
+            if had_offset:
+                changes.append(f"{trait['trait_id']} 已按证据结算，本轮应激丢弃")
             continue
         value = stress_value(trait)
         if abs(value) < 0.3:
@@ -658,7 +683,7 @@ def _recency(ts: str, tau_days: float = 7.0) -> float:
         then = datetime.fromisoformat(ts)
     except ValueError:
         return 0.5
-    now_dt = datetime.now(timezone.utc).astimezone()
+    now_dt = current_dt()
     age_days = max(0.0, (now_dt - then).total_seconds() / 86400.0)
     return math.exp(-age_days / tau_days)
 
@@ -693,8 +718,8 @@ def _is_question(text: str) -> bool:
     )
 
 
-def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
-    """按证据微调偏好权重：单次有上限，7 天有累计上限，无证据则回归基线。"""
+def apply_drift(store: "Store", persona: dict, episodes: list) -> tuple[list[str], set[str]]:
+    """按证据微调偏好权重，返回 (日志行, 本轮变过的 trait_id)。"""
     ev = persona.get("evolution", {}) or {}
     min_evidence = int(ev.get("min_evidence", 3))
     max_step = float(ev.get("max_step", 2))
@@ -706,6 +731,7 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
     user_msgs = [r["content"] for r in episodes if r["role"] == "user"]
 
     changes: list[str] = []
+    touched: set[str] = set()
     for trait in store.traits():
         if trait["is_locked"]:
             continue
@@ -733,6 +759,7 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
                 continue
             reason = f"{support} 条记忆支持「{trait['target']}」"
             store.update_trait(trait["trait_id"], new_weight, new_weight - weight, support, reason)
+            touched.add(trait["trait_id"])
             changes.append(
                 f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（支持 {support} 条）"
             )
@@ -751,6 +778,7 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
                 continue
             reason = f"{reverse} 条反向证据指向「{trait['target']}」"
             store.update_trait(trait["trait_id"], new_weight, new_weight - weight, reverse, reason)
+            touched.add(trait["trait_id"])
             changes.append(
                 f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（反向 {reverse} 条）"
             )
@@ -769,6 +797,11 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
             continue
 
         # 本轮没有决定性证据：向基线缓慢回弹，下行额度单独计算
+        if store.has_pending_flip(trait["trait_id"]):
+            # 翻转待人工确认期间冻结权重，避免回弹把它拉回旧极性
+            changes.append(f"{trait['trait_id']} 有翻转待确认，权重冻结")
+            continue
+
         gap = weight - baseline
         if abs(gap) >= 0.05:
             remaining_down = max(0.0, weekly_cap - down_used)
@@ -784,7 +817,7 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
             )
             changes.append(f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（回归基线）")
 
-    return changes
+    return changes, touched
 
 
 # ---------------- commands ----------------
@@ -903,13 +936,13 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
     if facts:
         lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
 
-    changes = apply_drift(store, persona, rows)
+    changes, touched = apply_drift(store, persona, rows)
     if changes:
         lines.append("  人格微调：" + "；".join(changes))
     else:
         lines.append("  人格微调：无（证据不足，未达阈值）")
 
-    stress_changes = settle_stress(store, persona)
+    stress_changes = settle_stress(store, persona, skip=touched)
     if stress_changes:
         lines.append("  应激结算：" + "；".join(stress_changes))
 
@@ -1040,6 +1073,72 @@ def cmd_serve(args) -> None:
         print("\n已停止。")
 
 
+BUILTIN_SCENARIO = [
+    {"messages": ["回答简洁一点。", "我喜欢简洁的回答。", "以后都简洁些。"]},
+    {"messages": ["今天天气不错。"]},
+    {"messages": ["继续简洁回答。", "保持简洁。", "简洁最好。"]},
+    {"messages": ["简洁点。", "简洁。", "回答简洁。"]},
+    {"messages": ["简洁些。", "简洁。", "简洁点。"]},
+    {"messages": ["随便聊聊。"]},
+    {"messages": ["我不喜欢长篇大论。"] * 5},
+    {"messages": ["周末休息。"]},
+    {"messages": ["没什么事。"]},
+    {"messages": ["我讨厌简洁的回答。"], "sleep": False},
+    {"messages": []},
+    {"messages": ["在吗。"]},
+    {"messages": ["嗯。"]},
+    {"messages": []},
+]
+
+
+def load_scenario(path: str | None) -> list[dict]:
+    if not path:
+        return BUILTIN_SCENARIO
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return data.get("days", data)
+
+
+def cmd_simulate(args) -> None:
+    global _VIRTUAL_NOW
+    home = Path(args.home)
+    store = Store(home)
+    persona = store.load_persona()
+    cfg = store.load_config()
+    model = make_model(cfg.get("model", "mock-a"))
+    scenario = load_scenario(args.scenario)
+
+    _VIRTUAL_NOW = current_dt()
+    start = _VIRTUAL_NOW
+    print(f"模拟开始：{start:%Y-%m-%d}   共 {len(scenario)} 天（虚拟时钟，1 天 = 1 步）")
+    print("—" * 72)
+    try:
+        for index, day in enumerate(scenario, 1):
+            advance(timedelta(days=1))
+            messages = day.get("messages", []) or []
+            for message in messages:
+                respond(store, persona, model, cfg, message)
+
+            lines: list[str] = []
+            if day.get("sleep", True):
+                lines = run_sleep(store, persona, home)
+
+            weights = "  ".join(
+                f"{t['trait_id']}={float(t['weight']) + stress_value(t):.1f}"
+                for t in store.traits()
+            )
+            print(f"第 {index:>2} 天  消息 {len(messages)}  {weights}")
+            for line in lines:
+                if any(k in line for k in ("人格微调", "应激结算", "新事实")):
+                    print("        " + line.strip())
+    finally:
+        pending = store.pending_flips()
+        if pending:
+            print("—" * 72)
+            print(f"待确认的极性翻转：{len(pending)} 条（用 flip-review 查看）")
+        print(f"模拟结束：{current_dt():%Y-%m-%d}   共 {len(scenario)} 天")
+        _VIRTUAL_NOW = None
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -1118,6 +1217,10 @@ def main() -> None:
     p_serve.add_argument("--idle-seconds", type=int, default=300)
     p_serve.add_argument("--tick", type=float, default=1.0)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_sim = sub.add_parser("simulate", help="虚拟时钟：几秒跑完数周")
+    p_sim.add_argument("--scenario", help="场景 JSON（默认内置 14 天）")
+    p_sim.set_defaults(func=cmd_simulate)
 
     args = parser.parse_args()
     args.func(args)
