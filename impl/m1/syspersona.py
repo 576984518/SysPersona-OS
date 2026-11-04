@@ -179,6 +179,12 @@ class Store:
             )
         if "stress_at" not in cols:
             self.db.execute("ALTER TABLE persona_traits ADD COLUMN stress_at TEXT")
+        if "last_support_at" not in cols:
+            self.db.execute("ALTER TABLE persona_traits ADD COLUMN last_support_at TEXT")
+        if "last_discount_at" not in cols:
+            self.db.execute("ALTER TABLE persona_traits ADD COLUMN last_discount_at TEXT")
+        if "first_seen" not in cols:
+            self.db.execute("ALTER TABLE persona_traits ADD COLUMN first_seen TEXT")
         self.db.commit()
 
     # ---------- persona ----------
@@ -276,8 +282,8 @@ class Store:
             weight = float(p.get("weight", 50))
             self.db.execute(
                 "INSERT OR IGNORE INTO persona_traits"
-                " (trait_id, kind, target, polarity, weight, baseline, evidence, is_locked, updated_at)"
-                " VALUES (?,?,?,?,?,?,0,?,?)",
+                " (trait_id, kind, target, polarity, weight, baseline, evidence, is_locked, updated_at, first_seen)"
+                " VALUES (?,?,?,?,?,?,0,?,?,?)",
                 (
                     p["id"],
                     "preference",
@@ -286,6 +292,7 @@ class Store:
                     weight,
                     float(p.get("baseline", weight)),
                     int(bool(p.get("locked", False))),
+                    now(),
                     now(),
                 ),
             )
@@ -298,8 +305,10 @@ class Store:
 
     def update_trait(self, trait_id: str, new_weight: float, delta: float, count: int, reason: str) -> None:
         self.db.execute(
-            "UPDATE persona_traits SET weight=?, evidence=evidence+?, updated_at=? WHERE trait_id=?",
-            (new_weight, count, now(), trait_id),
+            "UPDATE persona_traits SET weight=?, evidence=evidence+?, updated_at=?,"
+            " last_support_at=CASE WHEN ?>0 THEN ? ELSE last_support_at END"
+            " WHERE trait_id=?",
+            (new_weight, count, now(), count, now(), trait_id),
         )
         self.db.execute(
             "INSERT INTO persona_drift_log (trait_id, old_weight, new_weight, delta, evidence_count, reason, created_at)"
@@ -311,7 +320,9 @@ class Store:
     def weekly_drift(self, trait_id: str, days: int = 7) -> tuple[float, float]:
         """返回 (上行累计, 下行累计)，两个方向分别计算额度。"""
         rows = self.db.execute(
-            "SELECT delta, created_at FROM persona_drift_log WHERE trait_id=? ORDER BY id DESC",
+            "SELECT delta, created_at FROM persona_drift_log"
+            " WHERE trait_id=? AND reason NOT LIKE '旧标签再验证%'"
+            " ORDER BY id DESC",
             (trait_id,),
         ).fetchall()
         cutoff = current_dt().timestamp() - days * 86400
@@ -895,59 +906,149 @@ def cmd_sleep(args) -> None:
         print(line)
 
 
-def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
-    rows = store.unconsolidated()
-    if not rows:
-        return ["没有需要归档的对话。"]
+def _days_since(ts: str | None) -> float:
+    if not ts:
+        return 0.0
+    try:
+        then = datetime.fromisoformat(ts)
+    except ValueError:
+        return 0.0
+    return max(0.0, (current_dt() - then).total_seconds() / 86400.0)
+
+
+def revalidate_traits(store: "Store", persona: dict) -> list[str]:
+    """5.5 旧标签再验证：长期没被新记忆支撑的偏好，每年打折 10%。"""
+    ev = persona.get("evolution", {}) or {}
+    ar = ev.get("anti_rigidity", {}) or {}
+    stale_days = float(ar.get("stale_after_days", 90))
+    discount = float(ar.get("unverified_discount_per_year", 0.10))
 
     lines: list[str] = []
-    user_text = "\n".join(r["content"] for r in rows if r["role"] == "user")
-    facts = extract_facts(user_text)
-    for subject, predicate, obj in facts:
-        store.add_fact(subject, predicate, obj, rows[-1]["id"])
+    for trait in store.traits():
+        if trait["is_locked"]:
+            continue
+        anchor = trait["last_support_at"] or trait["first_seen"] or trait["updated_at"]
+        age = _days_since(anchor)
+        if age < stale_days:
+            continue
+        last_discount = trait["last_discount_at"]
+        if last_discount and _days_since(last_discount) < stale_days:
+            continue
+        weight = float(trait["weight"])
+        new_weight = round(max(0.0, weight * (1.0 - discount)), 1)
+        if new_weight == weight:
+            continue
+        store.update_trait(
+            trait["trait_id"],
+            new_weight,
+            new_weight - weight,
+            0,
+            f"旧标签再验证：{int(age)} 天未更新，-{discount:.0%}",
+        )
+        store.db.execute(
+            "UPDATE persona_traits SET last_discount_at=? WHERE trait_id=?",
+            (now(), trait["trait_id"]),
+        )
+        store.db.commit()
+        lines.append(f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（{int(age)} 天未更新）")
+    return lines
 
-    summary = "；".join(f"{p}：{o}" for _, p, o in facts)
-    if summary:
-        store.set_profile(summary)
-    store.mark_consolidated([r["id"] for r in rows])
 
-    snap = home / "snapshots"
-    snap.mkdir(exist_ok=True)
-    name = f"pre_consolidate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    (snap / name).write_text(
-        json.dumps(
-            {
-                "episodes": [dict(r) for r in rows],
-                "profile": summary,
-                "created_at": now(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+def rigidity_index(store: "Store") -> tuple[int, dict]:
+    """僵化指数：旧偏好占比 0.6 + 旧事实占比 0.4。"""
+    traits = store.traits()
+    facts = store.db.execute("SELECT created_at FROM facts").fetchall()
+    old_traits = sum(
+        1
+        for t in traits
+        if _days_since(t["last_support_at"] or t["first_seen"] or t["updated_at"]) >= 90
     )
-    store.db.execute(
-        "INSERT INTO snapshots (kind, path, created_at) VALUES ('pre_consolidate', ?, ?)",
-        (str(snap / name), now()),
-    )
-    store.db.commit()
-    store.audit("sleep", f"episodes={len(rows)} facts={len(facts)}")
-    lines.append(f"归档完成：{len(rows)} 条对话 → {len(facts)} 条事实")
-    if facts:
-        lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
+    old_facts = sum(1 for f in facts if _days_since(f["created_at"]) >= 90)
+    trait_ratio = old_traits / len(traits) if traits else 0.0
+    fact_ratio = old_facts / len(facts) if facts else 0.0
+    score = round(100 * (0.6 * trait_ratio + 0.4 * fact_ratio))
+    return score, {"旧偏好占比": round(trait_ratio, 2), "旧事实占比": round(fact_ratio, 2)}
 
-    changes, touched = apply_drift(store, persona, rows)
-    if changes:
-        lines.append("  人格微调：" + "；".join(changes))
+
+def exploration_candidates(store: "Store", episodes: list) -> list[str]:
+    """5.5 探索预算：找反复出现、但没被任何偏好或事实覆盖的主题。"""
+    covered = [t["target"] for t in store.traits()]
+    covered += [r["object"] for r in store.db.execute("SELECT object FROM facts")]
+    counts: dict[str, int] = {}
+    for row in episodes:
+        if row["role"] != "user":
+            continue
+        for token in re.findall(r"[\u4e00-\u9fa5]{2,4}", row["content"]):
+            if any(token in item for item in covered):
+                continue
+            counts[token] = counts.get(token, 0) + 1
+    hot = [(token, count) for token, count in counts.items() if count >= 2]
+    hot.sort(key=lambda item: -item[1])
+    return [f"探索候选：「{token}」出现 {count} 次，未被覆盖（1% 预算）" for token, count in hot[:1]]
+
+
+def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
+    rows = store.unconsolidated()
+    lines: list[str] = []
+
+    if not rows:
+        lines.append("没有需要归档的对话。")
     else:
-        lines.append("  人格微调：无（证据不足，未达阈值）")
+        user_text = "\n".join(r["content"] for r in rows if r["role"] == "user")
+        facts = extract_facts(user_text)
+        for subject, predicate, obj in facts:
+            store.add_fact(subject, predicate, obj, rows[-1]["id"])
 
-    stress_changes = settle_stress(store, persona, skip=touched)
-    if stress_changes:
-        lines.append("  应激结算：" + "；".join(stress_changes))
+        summary = "；".join(f"{p}：{o}" for _, p, o in facts)
+        if summary:
+            store.set_profile(summary)
+        store.mark_consolidated([r["id"] for r in rows])
 
-    store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
-    lines.append("  情绪归零（睡眠）")
+        snap = home / "snapshots"
+        snap.mkdir(exist_ok=True)
+        name = f"pre_consolidate_{current_dt().strftime('%Y%m%d_%H%M%S')}.json"
+        (snap / name).write_text(
+            json.dumps(
+                {
+                    "episodes": [dict(r) for r in rows],
+                    "profile": summary,
+                    "created_at": now(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        store.db.execute(
+            "INSERT INTO snapshots (kind, path, created_at) VALUES ('pre_consolidate', ?, ?)",
+            (str(snap / name), now()),
+        )
+        store.db.commit()
+        store.audit("sleep", f"episodes={len(rows)} facts={len(facts)}")
+        lines.append(f"归档完成：{len(rows)} 条对话 → {len(facts)} 条事实")
+        if facts:
+            lines.append("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
+
+        changes, touched = apply_drift(store, persona, rows)
+        if changes:
+            lines.append("  人格微调：" + "；".join(changes))
+        else:
+            lines.append("  人格微调：无（证据不足，未达阈值）")
+
+        stress_changes = settle_stress(store, persona, skip=touched)
+        if stress_changes:
+            lines.append("  应激结算：" + "；".join(stress_changes))
+
+        store.save_state({"愉悦": 0.0, "烦躁": 0.0, "专注": 0.0, "疲惫": 0.0})
+        lines.append("  情绪归零（睡眠）")
+
+    # 维护任务：即使没有新对话也要跑
+    revalidated = revalidate_traits(store, persona)
+    if revalidated:
+        lines.append("  旧标签再验证：" + "；".join(revalidated))
+    for note in exploration_candidates(store, rows):
+        lines.append("  " + note)
+
     return lines
 
 
@@ -1133,8 +1234,16 @@ def cmd_simulate(args) -> None:
                 + "  ".join(f"{k}={v:.1f}" for k, v in weights.items())
             )
             for line in lines:
-                if any(k in line for k in ("人格微调", "应激结算", "新事实")):
+                if any(k in line for k in ("人格微调", "应激结算", "新事实", "旧标签", "探索候选")):
                     print("        " + line.strip())
+
+            if index % 30 == 0:
+                score, parts = rigidity_index(store)
+                print(
+                    f"        [月度维护] 第 {index} 天：僵化指数 {score}/100"
+                    f"（旧偏好 {parts['旧偏好占比']:.0%}，旧事实 {parts['旧事实占比']:.0%}）"
+                    "  → 该做一次环境重置了"
+                )
 
             for key, want in (day.get("expect") or {}).items():
                 checked += 1
@@ -1175,6 +1284,10 @@ def cmd_status(args) -> None:
     print(f"模型：{cfg.get('model')}   会话：{cfg.get('session_id', '')[:8]}")
     print(f"情绪：{mood_text(mood)}")
     print(f"记忆：{counts['episodes']} 条对话，{counts['facts']} 条事实，{counts['unconsolidated']} 条待归档")
+    score, parts = rigidity_index(store)
+    print(
+        f"僵化：{score}/100（旧偏好 {parts['旧偏好占比']:.0%}，旧事实 {parts['旧事实占比']:.0%}）"
+    )
     profile = store.get_profile()
     if profile:
         print(f"画像：{profile}")

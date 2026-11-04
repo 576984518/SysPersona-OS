@@ -61,6 +61,14 @@
       "min_reverse_evidence": 5,
       "requires_human": true
     },
+    "anti_rigidity": {
+      "stale_after_days": 90,
+      "revalidate_window_days": 30,
+      "unverified_discount_per_year": 0.1,
+      "exploration_rate": 0.01,
+      "reset_interval_days": 30,
+      "rigidity_alert_threshold": 70
+    },
     "kernel_locked": true,
     "audit": true
   },
