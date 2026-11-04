@@ -11,12 +11,13 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | `v0.9.0-dev`（M4 核心 + M2 向量检索） |
+| 最新版本 | `v1.0.0`（规范 1.0 + 参考实现 + 可行性证据） |
 | CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
 | 代码 | `impl/m1/syspersona.py`（主控，零依赖）+ `impl/m4/vault/`（加密）+ `impl/m2/embed/`（向量） |
 | 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db`（含 embeddings 表）+ `snapshots/`；静止时是 `*.vault` |
 | 运行环境 | Python 3.10+；mock 模型可离线跑；加密需 `cryptography`；语义检索需 ollama 或 `fastembed`（都可选） |
-| 安全规范 | `docs/SECURITY_SPEC.md` v1.0 草案（已实现 v1 核心） |
+| 安全规范 | `docs/SECURITY_SPEC.md` **v1.0（条款冻结）**；条款状态见附录 F |
+| 一致性 | `docs/CONFORMANCE.md`：第三方如何声明 L1/L2/L3 |
 | 可行性验证 | 46/46；`docs/SECURITY-FEASIBILITY.md` + `impl/m4/feasibility/` |
 
 ---

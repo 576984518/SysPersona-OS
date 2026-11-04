@@ -850,6 +850,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [交接说明](HANDOFF.md)：当前状态、未完成项、下一个任务的验收标准——下次从这里开始。
 - [状态机](docs/STATE-MACHINE.md)：生命周期、人格权重演化、唤醒时序（Mermaid）。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
+- [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
 - [M2 向量检索](impl/m2/README.md)：provider 选择、RRF 融合、索引维护与评测方法。
