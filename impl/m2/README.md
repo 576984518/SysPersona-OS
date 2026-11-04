@@ -78,9 +78,30 @@ score = 0.6*relevance + 0.25*recency + 0.15*importance
 
 小库实测：检索 ~3–5 ms（包含一次哈希 embedding）。
 
+## 实测（bge-m3，5 条记忆 / 5 条改写查询）
+
+用 `bge-m3-q4_k_m`（1024 维，llama.cpp CPU 运行，`-ngl 0 -np 1`）对 5 条种子记忆建索引，
+用 `examples/eval/m2_paraphrase.json` 里 5 条**不与原文共享字面二元组**的改写查询做对照：
+
+| 模式 | recall@5 | MRR | 平均延迟 |
+|---|---|---|---|
+| lexical | 0.60 | 0.60 | 3.4 ms |
+| hybrid（bge-m3） | **1.00** | **1.00** | 64.2 ms |
+
+两条 lexical 漏掉的正是「换个说法」：
+
+- 「截稿日期是哪天？」→ 原文「周五要把稿子交给编辑」；
+- 「家里的无线网老掉线」→ 原文「路由器总是断流」。
+
+延迟里约 50 ms 是 HTTP 调 embedding 服务的开销（每条查询一次），不是检索本身。
+
+**样本只有 5 条，这不是 benchmark**，只说明这条通道在真实模型下确实能补上字面鸿沟。
+复现方法：写入这 5 条记忆 → `embed reindex --all` → 用同一个查询文件跑两种 `--retrieval`。
+
 ## 评测
 
-`examples/eval/m2_queries.json` 是**模板**：`expect` 按子串匹配，命中任一即算该查询命中。请在你自己的记忆库上跑；`lexical` 与 `hybrid` 各跑一次，看 `recall@k` 与 MRR 的差值。
+`examples/eval/m2_queries.json` 是通用模板，`examples/eval/m2_paraphrase.json` 是上面的改写样例。
+`expect` 按子串匹配，命中任一即算该查询命中。请在你自己的记忆库上跑；`lexical` 与 `hybrid` 各跑一次，看 `recall@k` 与 MRR 的差值。
 
 CI 只跑 hash 基线的确定性测试（`impl/m2/tests`），不下载模型、不依赖 ollama。
 
@@ -88,7 +109,7 @@ CI 只跑 hash 基线的确定性测试（`impl/m2/tests`），不下载模型�
 
 - 事实（facts）与画像摘要的向量索引（先做 episode）
 - ANN / 向量库（暴力余弦足够，规模上来再说）
-- rerank 模型
+- rerank 模型（Herdsman 已提供 `/v1/rerank`，可作为下一步）
 - 云端 embedding（隐私边界）
 
 ## 测试
@@ -97,4 +118,4 @@ CI 只跑 hash 基线的确定性测试（`impl/m2/tests`），不下载模型�
 python -m unittest discover -s impl/m2/tests -v
 ```
 
-9 项：provider 确定性、存储幂等、余弦地板、RRF 排序、增量索引、M1 hybrid 接线与 auto 回退。
+11 项：provider 确定性、存储幂等、余弦地板、RRF 排序、增量索引、M1 hybrid 接线、auto 回退、OpenAI 兼容接口解析与 detect 顺序。

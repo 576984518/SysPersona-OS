@@ -105,7 +105,7 @@ CI：`.github/workflows/encryption.yml`（与零依赖的 `simulate` job 并行�
 
 ```powershell
 python -m unittest discover -s impl/m2/tests -v
-# 期望：9 tests OK
+# 期望：11 tests OK
 
 python impl/m1/syspersona.py --home ./sim embed status
 python impl/m1/syspersona.py --home ./sim recall --query "老机器休眠怎么解决的" --retrieval hybrid
@@ -114,6 +114,10 @@ python impl/m1/syspersona.py --home ./sim eval --queries examples/eval/m2_querie
 ```
 
 没有语义 provider 时 `auto` 会回退 lexical，`--retrieval hybrid` 仍可用 hash 基线做通路测试。
+
+**实测（bge-m3，5 条记忆 / 5 条改写查询）**：lexical recall@5 = 0.60 → hybrid **1.00**，MRR 0.60 → 1.00；
+延迟 3.4 ms → 64.2 ms（其中约 50 ms 是每条查询一次 HTTP embedding 调用）。
+样本很小，只证明「换个说法」这条通道有效，不是 benchmark。详见 `impl/m2/README.md` 的「实测」。
 
 ### 5.4 规范可行性夹具（可选，需 Node ≥ 22）
 
