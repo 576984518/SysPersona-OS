@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS entities (
     kind            TEXT    NOT NULL,      -- person / interest / habit / project / place / event
     aliases         TEXT,                  -- JSON 数组，处理词汇鸿沟
     confidence      REAL    NOT NULL DEFAULT 0.8,   -- 用户直说 1.0，模型推断 0.6
+    attention       REAL    NOT NULL DEFAULT 0.0,   -- 关注度（近 7 天，半衰期 2 天）
+    attention_at    TEXT,
     first_seen      TEXT,
     last_seen       TEXT,
     UNIQUE (persona_uuid, name, kind)
