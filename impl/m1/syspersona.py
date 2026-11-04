@@ -264,21 +264,28 @@ class Store:
         )
         self.db.commit()
 
-    def weekly_drift(self, trait_id: str, days: int = 7) -> float:
+    def weekly_drift(self, trait_id: str, days: int = 7) -> tuple[float, float]:
+        """返回 (上行累计, 下行累计)，两个方向分别计算额度。"""
         rows = self.db.execute(
             "SELECT delta, created_at FROM persona_drift_log WHERE trait_id=? ORDER BY id DESC",
             (trait_id,),
         ).fetchall()
         cutoff = datetime.now(timezone.utc).astimezone().timestamp() - days * 86400
-        used = 0.0
+        up = 0.0
+        down = 0.0
         for row in rows:
             try:
                 ts = datetime.fromisoformat(row["created_at"]).timestamp()
             except ValueError:
                 continue
-            if ts >= cutoff:
-                used += abs(float(row["delta"]))
-        return used
+            if ts < cutoff:
+                continue
+            delta = float(row["delta"])
+            if delta > 0:
+                up += delta
+            else:
+                down += -delta
+        return up, down
 
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
@@ -498,14 +505,16 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
         weight = float(trait["weight"])
         baseline = float(trait["baseline"])
         hits = sum(1 for msg in user_msgs if _overlap(trait["target"], msg))
-        used = store.weekly_drift(trait["trait_id"])
-        remaining = max(0.0, weekly_cap - used)
+        up_used, down_used = store.weekly_drift(trait["trait_id"])
 
         if hits >= min_evidence:
-            if remaining <= 0:
-                changes.append(f"{trait['trait_id']} 已达 7 天上限（{used:.1f}/{weekly_cap:.0f}）")
+            remaining_up = max(0.0, weekly_cap - up_used)
+            if remaining_up <= 0:
+                changes.append(
+                    f"{trait['trait_id']} 上行已达 7 天上限（{up_used:.1f}/{weekly_cap:.0f}）"
+                )
                 continue
-            delta = min(max_step, round(0.5 * hits, 1), remaining)
+            delta = min(max_step, round(0.5 * hits, 1), remaining_up)
             new_weight = min(100.0, weight + delta)
             if new_weight <= weight:
                 continue
@@ -516,10 +525,17 @@ def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
             )
             continue
 
-        # 本轮没有足够证据：向基线缓慢回弹，避免只涨不跌
-        if abs(weight - baseline) >= 0.05:
-            step = min(0.5, abs(weight - baseline))
-            new_weight = weight - step if weight > baseline else weight + step
+        # 本轮没有足够证据：向基线缓慢回弹，下行额度单独计算
+        gap = weight - baseline
+        if abs(gap) >= 0.05:
+            remaining_down = max(0.0, weekly_cap - down_used)
+            if remaining_down <= 0:
+                changes.append(
+                    f"{trait['trait_id']} 下行已达 7 天上限（{down_used:.1f}/{weekly_cap:.0f}）"
+                )
+                continue
+            step = min(0.5, abs(gap), remaining_down)
+            new_weight = weight - step if gap > 0 else weight + step
             store.update_trait(
                 trait["trait_id"], new_weight, new_weight - weight, 0, "无新证据，回归基线"
             )
@@ -668,10 +684,10 @@ def cmd_status(args) -> None:
     traits = store.traits()
     if traits:
         for t in traits:
-            used = store.weekly_drift(t["trait_id"])
+            up, down = store.weekly_drift(t["trait_id"])
             print(
                 f"偏好：{t['target']}  {t['weight']:.1f}"
-                f"（基线 {t['baseline']:.1f}，本周已用 {used:.1f}/5）"
+                f"（基线 {t['baseline']:.1f}，本周 上行 {up:.1f}/5 下行 {down:.1f}/5）"
             )
         last = store.db.execute(
             "SELECT * FROM persona_drift_log ORDER BY id DESC LIMIT 1"
