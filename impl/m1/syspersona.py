@@ -759,13 +759,30 @@ def _recency(ts: str, tau_days: float = 7.0) -> float:
     return math.exp(-age_days / tau_days)
 
 
+def persona_salience(traits: list, text: str) -> float:
+    """它自己在意什么：命中偏好权重之和 + 边界类关键词。"""
+    score = 0.0
+    for trait in traits:
+        if _overlap(trait["target"], text):
+            score += float(trait["weight"]) / 100.0
+    for keyword in ("承诺", "答应", "边界", "隐私", "约定"):
+        if keyword in text:
+            score += 0.3
+    return min(1.0, score)
+
+
 def retrieve(
-    store: "Store", query: str, k: int = 3, scores: dict[str, float] | None = None
+    store: "Store",
+    query: str,
+    k: int = 3,
+    scores: dict[str, float] | None = None,
+    persona: dict | None = None,
 ) -> list[tuple[float, object]]:
-    """混合打分：词面重合 0.6 + 时间近因 0.25 + 重要性 0.15，再加画像加分。"""
+    """混合打分：词面重合 + 时间近因 + 重要性 + 画像加分 + 人格加分。"""
     q = _tokens(query)
     if not q:
         return []
+    traits = store.traits() if persona else []
     scored: list[tuple[float, object]] = []
     for row in store.all_episodes():
         t = _tokens(row["content"])
@@ -781,6 +798,8 @@ def retrieve(
                 default=0.0,
             )
             score += 0.25 * boost  # 画像优先级是加分项，不是门槛
+        if traits:
+            score += 0.15 * persona_salience(traits, row["content"])
         scored.append((score, row))
     scored.sort(key=lambda x: -x[0])
     top = scored[:k]
@@ -953,7 +972,7 @@ def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> st
         evict_by_pressure(store, persona)
 
     scores = entity_scores(store)
-    hits = retrieve(store, message, k=3, scores=scores)
+    hits = retrieve(store, message, k=3, scores=scores, persona=persona)
     memory_lines = [
         snippet(row["content"])
         for _, row in hits
@@ -1359,7 +1378,10 @@ def cmd_switch_model(args) -> None:
 def cmd_recall(args) -> None:
     home = Path(args.home)
     store = Store(home)
-    hits = retrieve(store, args.query, k=args.top)
+    persona = store.load_persona()
+    hits = retrieve(
+        store, args.query, k=args.top, scores=entity_scores(store), persona=persona
+    )
     if not hits:
         print("没有匹配的记忆。")
         return
