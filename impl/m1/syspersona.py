@@ -72,6 +72,30 @@ CREATE TABLE IF NOT EXISTS facts (
     UNIQUE(subject, predicate, object)
 );
 
+CREATE TABLE IF NOT EXISTS persona_traits (
+    id INTEGER PRIMARY KEY,
+    trait_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    target TEXT NOT NULL,
+    polarity TEXT,
+    weight REAL,
+    baseline REAL,
+    evidence INTEGER NOT NULL DEFAULT 0,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS persona_drift_log (
+    id INTEGER PRIMARY KEY,
+    trait_id TEXT NOT NULL,
+    old_weight REAL,
+    new_weight REAL,
+    delta REAL,
+    evidence_count INTEGER,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY,
     tag TEXT NOT NULL,
@@ -196,6 +220,44 @@ class Store:
             f"SELECT * FROM facts WHERE {where} ORDER BY confidence DESC, id DESC LIMIT ?",
             (*params, limit),
         ).fetchall()
+
+    # ---------- traits ----------
+    def sync_traits(self, persona: dict) -> None:
+        for p in persona.get("traits", {}).get("preferences", []):
+            weight = float(p.get("weight", 50))
+            self.db.execute(
+                "INSERT OR IGNORE INTO persona_traits"
+                " (trait_id, kind, target, polarity, weight, baseline, evidence, is_locked, updated_at)"
+                " VALUES (?,?,?,?,?,?,0,?,?)",
+                (
+                    p["id"],
+                    "preference",
+                    p["target"],
+                    p.get("polarity", "like"),
+                    weight,
+                    float(p.get("baseline", weight)),
+                    int(bool(p.get("locked", False))),
+                    now(),
+                ),
+            )
+        self.db.commit()
+
+    def traits(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM persona_traits ORDER BY id"
+        ).fetchall()
+
+    def update_trait(self, trait_id: str, new_weight: float, delta: float, count: int, reason: str) -> None:
+        self.db.execute(
+            "UPDATE persona_traits SET weight=?, evidence=evidence+?, updated_at=? WHERE trait_id=?",
+            (new_weight, count, now(), trait_id),
+        )
+        self.db.execute(
+            "INSERT INTO persona_drift_log (trait_id, old_weight, new_weight, delta, evidence_count, reason, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (trait_id, new_weight - delta, new_weight, delta, count, reason, now()),
+        )
+        self.db.commit()
 
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
@@ -328,6 +390,38 @@ def keywords_of(text: str) -> list[str]:
     return [t for t in tokens if t not in stop][:6]
 
 
+def _overlap(target: str, text: str) -> bool:
+    chars = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]", "", target)
+    if len(chars) <= 2:
+        return chars in text
+    grams = {chars[i : i + 2] for i in range(len(chars) - 1)}
+    return any(g in text for g in grams)
+
+
+def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
+    """按证据微调偏好权重：单次有上限，证据不足不动。"""
+    ev = persona.get("evolution", {}) or {}
+    min_evidence = int(ev.get("min_evidence", 3))
+    max_step = float(ev.get("max_step", 2))
+    user_msgs = [r["content"] for r in episodes if r["role"] == "user"]
+
+    changes: list[str] = []
+    for trait in store.traits():
+        if trait["is_locked"]:
+            continue
+        hits = sum(1 for msg in user_msgs if _overlap(trait["target"], msg))
+        if hits < min_evidence:
+            continue
+        delta = min(max_step, round(0.5 * hits, 1))
+        new_weight = min(100.0, float(trait["weight"]) + delta)
+        if new_weight == float(trait["weight"]):
+            continue
+        reason = f"{hits} 条记忆提及「{trait['target']}」"
+        store.update_trait(trait["trait_id"], new_weight, new_weight - trait["weight"], hits, reason)
+        changes.append(f"{trait['trait_id']} {trait['weight']:.0f} → {new_weight:.0f}（证据 {hits} 条）")
+    return changes
+
+
 # ---------------- commands ----------------
 
 def cmd_init(args) -> None:
@@ -337,6 +431,7 @@ def cmd_init(args) -> None:
     persona = json.loads(src.read_text(encoding="utf-8"))
     store.save_persona(persona)
     store.record_persona(persona)
+    store.sync_traits(persona)
     cfg = store.load_config()
     cfg.setdefault("model", "mock-a")
     cfg.setdefault("session_id", str(uuid.uuid4()))
@@ -373,6 +468,7 @@ def cmd_chat(args) -> None:
 def cmd_sleep(args) -> None:
     home = Path(args.home)
     store = Store(home)
+    persona = store.load_persona()
     rows = store.unconsolidated()
     if not rows:
         print("没有需要归档的对话。")
@@ -412,6 +508,12 @@ def cmd_sleep(args) -> None:
     if facts:
         print("  新事实：" + "；".join(f"{p}={o}" for _, p, o in facts))
 
+    changes = apply_drift(store, persona, rows)
+    if changes:
+        print("  人格微调：" + "；".join(changes))
+    else:
+        print("  人格微调：无（证据不足，未达阈值）")
+
 
 def cmd_switch_model(args) -> None:
     home = Path(args.home)
@@ -437,6 +539,17 @@ def cmd_status(args) -> None:
     profile = store.get_profile()
     if profile:
         print(f"画像：{profile}")
+    traits = store.traits()
+    if traits:
+        print("偏好：" + "；".join(
+            f"{t['target']} {t['weight']:.0f}（基线 {t['baseline']:.0f}）" for t in traits
+        ))
+        last = store.db.execute(
+            "SELECT * FROM persona_drift_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if last:
+            print(f"最近漂移：{last['trait_id']} {last['old_weight']:.0f}→{last['new_weight']:.0f}"
+                  f"（{last['reason']}）")
 
 
 def main() -> None:
