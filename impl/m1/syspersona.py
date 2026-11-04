@@ -264,6 +264,22 @@ class Store:
         )
         self.db.commit()
 
+    def weekly_drift(self, trait_id: str, days: int = 7) -> float:
+        rows = self.db.execute(
+            "SELECT delta, created_at FROM persona_drift_log WHERE trait_id=? ORDER BY id DESC",
+            (trait_id,),
+        ).fetchall()
+        cutoff = datetime.now(timezone.utc).astimezone().timestamp() - days * 86400
+        used = 0.0
+        for row in rows:
+            try:
+                ts = datetime.fromisoformat(row["created_at"]).timestamp()
+            except ValueError:
+                continue
+            if ts >= cutoff:
+                used += abs(float(row["delta"]))
+        return used
+
     # ---------- profile ----------
     def set_profile(self, summary: str) -> None:
         self.db.execute(
@@ -468,26 +484,47 @@ def _is_question(text: str) -> bool:
 
 
 def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
-    """按证据微调偏好权重：单次有上限，证据不足不动。"""
+    """按证据微调偏好权重：单次有上限，7 天有累计上限，无证据则回归基线。"""
     ev = persona.get("evolution", {}) or {}
     min_evidence = int(ev.get("min_evidence", 3))
     max_step = float(ev.get("max_step", 2))
+    weekly_cap = float(ev.get("weekly_cap", 5))
     user_msgs = [r["content"] for r in episodes if r["role"] == "user"]
 
     changes: list[str] = []
     for trait in store.traits():
         if trait["is_locked"]:
             continue
+        weight = float(trait["weight"])
+        baseline = float(trait["baseline"])
         hits = sum(1 for msg in user_msgs if _overlap(trait["target"], msg))
-        if hits < min_evidence:
+        used = store.weekly_drift(trait["trait_id"])
+        remaining = max(0.0, weekly_cap - used)
+
+        if hits >= min_evidence:
+            if remaining <= 0:
+                changes.append(f"{trait['trait_id']} 已达 7 天上限（{used:.1f}/{weekly_cap:.0f}）")
+                continue
+            delta = min(max_step, round(0.5 * hits, 1), remaining)
+            new_weight = min(100.0, weight + delta)
+            if new_weight <= weight:
+                continue
+            reason = f"{hits} 条记忆提及「{trait['target']}」"
+            store.update_trait(trait["trait_id"], new_weight, new_weight - weight, hits, reason)
+            changes.append(
+                f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（证据 {hits} 条）"
+            )
             continue
-        delta = min(max_step, round(0.5 * hits, 1))
-        new_weight = min(100.0, float(trait["weight"]) + delta)
-        if new_weight == float(trait["weight"]):
-            continue
-        reason = f"{hits} 条记忆提及「{trait['target']}」"
-        store.update_trait(trait["trait_id"], new_weight, new_weight - trait["weight"], hits, reason)
-        changes.append(f"{trait['trait_id']} {trait['weight']:.0f} → {new_weight:.0f}（证据 {hits} 条）")
+
+        # 本轮没有足够证据：向基线缓慢回弹，避免只涨不跌
+        if abs(weight - baseline) >= 0.05:
+            step = min(0.5, abs(weight - baseline))
+            new_weight = weight - step if weight > baseline else weight + step
+            store.update_trait(
+                trait["trait_id"], new_weight, new_weight - weight, 0, "无新证据，回归基线"
+            )
+            changes.append(f"{trait['trait_id']} {weight:.1f} → {new_weight:.1f}（回归基线）")
+
     return changes
 
 
@@ -556,8 +593,9 @@ def cmd_sleep(args) -> None:
     for subject, predicate, obj in facts:
         store.add_fact(subject, predicate, obj, rows[-1]["id"])
 
-    summary = "；".join(f"{p}：{o}" for _, p, o in facts) or "（本轮没有可提炼的事实）"
-    store.set_profile(summary)
+    summary = "；".join(f"{p}：{o}" for _, p, o in facts)
+    if summary:
+        store.set_profile(summary)
     store.mark_consolidated([r["id"] for r in rows])
 
     snap = home / "snapshots"
@@ -629,14 +667,17 @@ def cmd_status(args) -> None:
         print(f"画像：{profile}")
     traits = store.traits()
     if traits:
-        print("偏好：" + "；".join(
-            f"{t['target']} {t['weight']:.0f}（基线 {t['baseline']:.0f}）" for t in traits
-        ))
+        for t in traits:
+            used = store.weekly_drift(t["trait_id"])
+            print(
+                f"偏好：{t['target']}  {t['weight']:.1f}"
+                f"（基线 {t['baseline']:.1f}，本周已用 {used:.1f}/5）"
+            )
         last = store.db.execute(
             "SELECT * FROM persona_drift_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if last:
-            print(f"最近漂移：{last['trait_id']} {last['old_weight']:.0f}→{last['new_weight']:.0f}"
+            print(f"最近漂移：{last['trait_id']} {last['old_weight']:.1f}→{last['new_weight']:.1f}"
                   f"（{last['reason']}）")
 
 
