@@ -185,6 +185,11 @@ class Store:
             "SELECT * FROM episodes ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
 
+    def all_episodes(self, limit: int = 500) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM episodes ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+
     def unconsolidated(self) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM episodes WHERE consolidated = 0 ORDER BY id"
@@ -301,12 +306,17 @@ class MockModel:
     def __init__(self, name: str = "mock-a"):
         self.name = name
 
-    def reply(self, persona: dict, facts: list[str], message: str) -> str:
+    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str) -> str:
         who = persona["kernel"]["identity"]["name"]
+        head = f"（{self.name} · {who}）"
+        parts: list[str] = []
         if facts:
-            body = "；".join(facts)
-            return f"（{self.name} · {who}）我记得：{body}"
-        return f"（{self.name} · {who}）我还不了解这件事，先记下来。"
+            parts.append("我记得：" + "；".join(facts))
+        if memories:
+            parts.append("你提过：「" + "」「".join(memories) + "」")
+        if parts:
+            return head + " ".join(parts)
+        return head + "我还不了解这件事，先记下来。"
 
 
 class OllamaModel:
@@ -314,13 +324,18 @@ class OllamaModel:
         self.name = name
         self.host = host.rstrip("/")
 
-    def reply(self, persona: dict, facts: list[str], message: str) -> str:
+    def reply(self, persona: dict, facts: list[str], memories: list[str], message: str) -> str:
         k = persona["kernel"]
+        context = []
+        if facts:
+            context.append("已知事实：" + "；".join(facts))
+        if memories:
+            context.append("相关记忆：" + "；".join(memories))
         system = (
             f"你是{k['identity']['name']}。语气：{k['voice_baseline']['tone']}。"
             f"你的价值观：{'、'.join(k['values'])}。"
-            f"已知记忆：{'；'.join(facts) if facts else '（无）'}。"
-            "回答简短，先给结论。"
+            + ("\n".join(context) if context else "（暂无记忆）")
+            + "\n回答简短，先给结论。"
         )
         payload = json.dumps(
             {"model": self.name, "prompt": f"{system}\n\n用户：{message}\n你：", "stream": False}
@@ -398,6 +413,60 @@ def _overlap(target: str, text: str) -> bool:
     return any(g in text for g in grams)
 
 
+def _tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for run in re.findall(r"[\u4e00-\u9fa5]+", text):
+        if len(run) == 1:
+            out.add(run)
+        for i in range(len(run) - 1):
+            out.add(run[i : i + 2])
+    for word in re.findall(r"[A-Za-z0-9_]{2,}", text.lower()):
+        out.add(word)
+    return out
+
+
+def _recency(ts: str, tau_days: float = 7.0) -> float:
+    import math
+
+    try:
+        then = datetime.fromisoformat(ts)
+    except ValueError:
+        return 0.5
+    now_dt = datetime.now(timezone.utc).astimezone()
+    age_days = max(0.0, (now_dt - then).total_seconds() / 86400.0)
+    return math.exp(-age_days / tau_days)
+
+
+def retrieve(store: "Store", query: str, k: int = 3) -> list[tuple[float, object]]:
+    """混合打分：词面重合 0.6 + 时间近因 0.25 + 重要性 0.15。"""
+    q = _tokens(query)
+    if not q:
+        return []
+    scored: list[tuple[float, object]] = []
+    for row in store.all_episodes():
+        t = _tokens(row["content"])
+        overlap = len(q & t) / len(q)
+        if overlap == 0:
+            continue
+        score = 0.6 * overlap + 0.25 * _recency(row["occurred_at"]) + 0.15 * row["importance"]
+        if row["role"] != "user":
+            score *= 0.7          # 助手回复常复述用户内容，降权避免自我强化
+        scored.append((score, row))
+    scored.sort(key=lambda x: -x[0])
+    return scored[:k]
+
+
+def snippet(text: str, n: int = 36) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def _is_question(text: str) -> bool:
+    return bool(re.search(r"[？?]", text)) or bool(
+        re.search(r"什么|怎么|如何|为什么|哪(个|里|些)|吗\s*[。！!]?$", text)
+    )
+
+
 def apply_drift(store: "Store", persona: dict, episodes: list) -> list[str]:
     """按证据微调偏好权重：单次有上限，证据不足不动。"""
     ev = persona.get("evolution", {}) or {}
@@ -455,11 +524,19 @@ def cmd_chat(args) -> None:
         if not message:
             return
 
+    hits = retrieve(store, message, k=3)
+    memory_lines = [
+        snippet(row["content"])
+        for _, row in hits
+        if row["role"] == "user" and not _is_question(row["content"])
+    ]
+    memory_lines = list(dict.fromkeys(memory_lines))[:2]
+
     facts_rows = store.search_facts(keywords_of(message), intent_predicates(message))
     fact_lines = [f"{r['predicate']}：{r['object']}" for r in facts_rows]
 
     store.add_episode(cfg["session_id"], "user", message)
-    reply = model.reply(persona, fact_lines, message)
+    reply = model.reply(persona, fact_lines, memory_lines, message)
     store.add_episode(cfg["session_id"], "assistant", reply)
 
     print(reply)
@@ -527,6 +604,17 @@ def cmd_switch_model(args) -> None:
     print(f"模型已切换：{old} → {args.model}（新会话 {cfg['session_id'][:8]}）")
 
 
+def cmd_recall(args) -> None:
+    home = Path(args.home)
+    store = Store(home)
+    hits = retrieve(store, args.query, k=args.top)
+    if not hits:
+        print("没有匹配的记忆。")
+        return
+    for score, row in hits:
+        print(f"{score:.3f}  [{row['role']:<9}] {snippet(row['content'], 50)}")
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -574,6 +662,11 @@ def main() -> None:
 
     p_status = sub.add_parser("status", help="查看状态")
     p_status.set_defaults(func=cmd_status)
+
+    p_recall = sub.add_parser("recall", help="检索记忆（调试用）")
+    p_recall.add_argument("--query", required=True)
+    p_recall.add_argument("--top", type=int, default=5)
+    p_recall.set_defaults(func=cmd_recall)
 
     args = parser.parse_args()
     args.func(args)
