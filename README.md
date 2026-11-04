@@ -2,6 +2,8 @@
 
 中文 · [English](README.en.md)
 
+[![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
+
 **把 AI 的「人格」与「记忆」从模型里剥离出来，做成可迁移、可版本化、可加密的数据资产。**
 
 > 模型是可替换的算力，硬件是可替换的躯壳。
@@ -578,6 +580,8 @@ vault.verify(container)                 # 校验完整性与来源
 ![M1 最小闭环：加载人格 → 对话 → 归档 → 换模型 → 仍记得](docs/images/m1-demo.png)
 
 上图是 M1 的真实终端输出（本机路径已隐去）：`mock-a` 回答「我还不了解」，归档后换成 `mock-b`，它仍然答得出「NAS 调优项目」。模型换了，记忆没换。
+
+每次 push 会自动跑 14 天虚拟时钟仿真并校验断言（见 [`.github/workflows/simulate.yml`](.github/workflows/simulate.yml)）——改坏任何一个阈值，CI 会直接红。
 
 ---
 
