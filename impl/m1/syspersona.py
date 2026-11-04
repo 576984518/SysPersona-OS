@@ -352,7 +352,7 @@ class Store:
         p = self.home / CONFIG_NAME
         if not p.exists():
             return {"model": "mock-a", "session_id": str(uuid.uuid4())}
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8-sig"))
 
     def save_config(self, cfg: dict) -> None:
         (self.home / CONFIG_NAME).write_text(
@@ -858,6 +858,97 @@ def _tokens(text: str) -> set[str]:
     return out
 
 
+# ---------------- 语义检索（M2，可选） ----------------
+
+_M2_STATE = {"ready": False, "provider": None, "warned": False}
+
+
+def _embedding_provider(cfg: dict):
+    """懒加载 M2；任何失败都只降级，不影响 M1。"""
+    if _M2_STATE["ready"]:
+        return _M2_STATE["provider"]
+    _M2_STATE["ready"] = True
+    try:
+        root = Path(__file__).resolve().parents[1]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from m2.embed.providers import detect
+
+        _M2_STATE["provider"] = detect((cfg or {}).get("retrieval") or {})
+    except Exception as exc:  # noqa: BLE001
+        _M2_STATE["provider"] = None
+        if not _M2_STATE["warned"]:
+            print(f"  [向量检索] provider 不可用：{exc}（回退词面检索）")
+            _M2_STATE["warned"] = True
+    return _M2_STATE["provider"]
+
+
+def _retrieval_mode(cfg: dict, override: str | None = None) -> str:
+    retr = (cfg or {}).get("retrieval") or {}
+    mode = (override or retr.get("mode") or "auto").lower()
+    if mode == "auto":
+        provider = _embedding_provider(cfg)
+        return "hybrid" if provider is not None and getattr(provider, "is_semantic", False) else "lexical"
+    return mode if mode in ("lexical", "hybrid") else "lexical"
+
+
+def _index_episode(store: "Store", episode_id: int, text: str) -> None:
+    cfg = store.load_config()
+    retr = cfg.get("retrieval") or {}
+    if retr.get("index_on_write", True) is False:
+        return
+    provider = _embedding_provider(cfg)
+    if provider is None:
+        return
+    try:
+        from m2.embed import index as embed_index
+
+        embed_index.index_episodes(store.db, [episode_id], provider, provider.model)
+    except Exception as exc:  # noqa: BLE001
+        if not _M2_STATE["warned"]:
+            print(f"  [向量索引] 失败：{exc}（继续词面检索）")
+            _M2_STATE["warned"] = True
+        _M2_STATE["provider"] = None
+
+
+def _vector_candidates(store: "Store", query: str, cfg: dict) -> list[tuple[int, float]]:
+    provider = _embedding_provider(cfg)
+    if provider is None:
+        return []
+    retr = cfg.get("retrieval") or {}
+    try:
+        from m2.embed import search as embed_search
+
+        vector = provider.embed([query])[0]
+        return embed_search.cosine_candidates(
+            store.db,
+            vector,
+            provider.model,
+            floor=float(retr.get("floor", 0.25)),
+            limit=int(retr.get("candidates", 50)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if not _M2_STATE["warned"]:
+            print(f"  [向量检索] 查询失败：{exc}（回退词面检索）")
+            _M2_STATE["warned"] = True
+        _M2_STATE["provider"] = None
+        return []
+
+
+def _reindex_missing(store: "Store", limit: int = 200) -> int:
+    cfg = store.load_config()
+    provider = _embedding_provider(cfg)
+    if provider is None:
+        return 0
+    try:
+        from m2.embed import index as embed_index
+
+        return embed_index.reindex_missing(store.db, provider, provider.model, limit=limit)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+
 def _recency(ts: str, tau_days: float = 7.0) -> float:
     import math
 
@@ -888,19 +979,52 @@ def retrieve(
     k: int = 3,
     scores: dict[str, float] | None = None,
     persona: dict | None = None,
+    mode: str | None = None,
 ) -> list[tuple[float, object]]:
-    """混合打分：词面重合 + 时间近因 + 重要性 + 画像加分 + 人格加分。"""
+    """混合打分：relevance（词面/向量融合）+ 时间近因 + 重要性 + 画像 + 人格。
+
+    向量只替换 relevance，主观调制（画像/关注/人格）仍然是加分项，不是门槛。
+    """
     q = _tokens(query)
     if not q:
         return []
+    cfg = store.load_config()
+    active_mode = _retrieval_mode(cfg, mode)
     traits = store.traits() if persona else []
-    scored: list[tuple[float, object]] = []
+
+    rows_by_id: dict[int, object] = {}
+    lexical: dict[int, float] = {}
     for row in store.all_episodes():
-        t = _tokens(row["content"])
-        overlap = len(q & t) / len(q)
-        if overlap == 0:
+        rows_by_id[row["id"]] = row
+        overlap = len(q & _tokens(row["content"])) / len(q)
+        if overlap > 0:
+            lexical[row["id"]] = overlap
+
+    relevance: dict[int, float] = dict(lexical)
+    if active_mode == "hybrid":
+        lexical_rank = {rid: index + 1 for index, rid in enumerate(
+            sorted(lexical, key=lambda rid: -lexical[rid]))}
+        vector_rank: dict[int, int] = {}
+        for rank, (rid, _sim) in enumerate(_vector_candidates(store, query, cfg), 1):
+            vector_rank[rid] = rank
+            if rid not in rows_by_id:
+                row = store.db.execute("SELECT * FROM episodes WHERE id=?", (rid,)).fetchone()
+                if row is not None:
+                    rows_by_id[rid] = row
+        if vector_rank:
+            try:
+                from m2.embed.search import fuse
+
+                relevance = fuse(lexical_rank, vector_rank)
+            except Exception:  # noqa: BLE001
+                relevance = dict(lexical)
+
+    scored: list[tuple[float, object]] = []
+    for rid, rel in relevance.items():
+        row = rows_by_id.get(rid)
+        if row is None:
             continue
-        score = 0.6 * overlap + 0.25 * _recency(row["occurred_at"]) + 0.15 * row["importance"]
+        score = 0.6 * rel + 0.25 * _recency(row["occurred_at"]) + 0.15 * row["importance"]
         if row["role"] != "user":
             score *= 0.7          # 助手回复常复述用户内容，降权避免自我强化
         if scores:
@@ -1107,10 +1231,10 @@ def cmd_chat(args) -> None:
         if not message:
             return
 
-    print(respond(store, persona, model, cfg, message))
+    print(respond(store, persona, model, cfg, message, retrieval=args.retrieval))
 
 
-def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> str:
+def respond(store: "Store", persona: dict, model, cfg: dict, message: str, retrieval: str | None = None) -> str:
     level = maintenance_level(store, persona)
     if level == "critical":
         print("  [维护优先] 上下文临界，前台让路")
@@ -1120,7 +1244,7 @@ def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> st
         evict_by_pressure(store, persona)
 
     scores = entity_scores(store)
-    hits = retrieve(store, message, k=3, scores=scores, persona=persona)
+    hits = retrieve(store, message, k=3, scores=scores, persona=persona, mode=retrieval)
     memory_lines = [
         snippet(row["content"])
         for _, row in hits
@@ -1149,9 +1273,11 @@ def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> st
         )
         store.bump_stress(trait["trait_id"], 1.0 if supportive else -1.0)
 
-    store.add_episode(cfg["session_id"], "user", message)
+    user_id = store.add_episode(cfg["session_id"], "user", message)
+    _index_episode(store, user_id, message)
     reply = model.reply(persona, fact_lines, memory_lines, message, mood)
-    store.add_episode(cfg["session_id"], "assistant", reply)
+    reply_id = store.add_episode(cfg["session_id"], "assistant", reply)
+    _index_episode(store, reply_id, reply)
     return reply
 
 
@@ -1278,8 +1404,16 @@ def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
             store.db.execute(
                 "UPDATE episodes SET content=?, archived=1 WHERE id=?", (short, row["id"])
             )
+            _index_episode(store, int(row["id"]), short)
             archived += 1
     store.db.commit()
+    if pruned:
+        try:
+            from m2.embed import store as embed_store
+
+            embed_store.prune(store.db)
+        except Exception:  # noqa: BLE001
+            pass
 
     lines: list[str] = []
     if archived:
@@ -1553,6 +1687,9 @@ def run_sleep(store: "Store", persona: dict, home: Path) -> list[str]:
         lines.append("  " + note)
 
     persist_traits_file(store, home)
+    indexed = _reindex_missing(store)
+    if indexed:
+        lines.append(f"  向量索引：补建 {indexed} 条")
     _IN_SLEEP = False
     return lines
 
@@ -1574,7 +1711,8 @@ def cmd_recall(args) -> None:
     store = Store(home)
     persona = store.load_persona()
     hits = retrieve(
-        store, args.query, k=args.top, scores=entity_scores(store), persona=persona
+        store, args.query, k=args.top, scores=entity_scores(store), persona=persona,
+        mode=getattr(args, "retrieval", None),
     )
     if not hits:
         print("没有匹配的记忆。")
@@ -1732,7 +1870,7 @@ def cmd_simulate(args) -> None:
             advance(timedelta(days=1))
             messages = day.get("messages", []) or []
             for message in messages:
-                respond(store, persona, model, cfg, message)
+                respond(store, persona, model, cfg, message, retrieval=args.retrieval)
 
             lines: list[str] = []
             if day.get("sleep", True):
@@ -1913,6 +2051,82 @@ def cmd_layers(args) -> None:
     print(f"合并后：{persona['kernel']['identity']['name']} v{persona.get('version')}")
 
 
+def cmd_embed(args) -> None:
+    """向量索引维护：status / reindex / prune。"""
+    store = Store(Path(args.home))
+    cfg = store.load_config()
+    provider = _embedding_provider(cfg)
+    if provider is None:
+        print("没有可用的 embedding provider。")
+        raise SystemExit(1)
+    from m2.embed import index as embed_index
+    from m2.embed import store as embed_store
+
+    embed_store.ensure_schema(store.db)
+    if args.action == "status":
+        info = embed_store.coverage(store.db, provider.model)
+        print(f"provider：{provider.id}  模型：{provider.model}  语义：{'是' if provider.is_semantic else '否（哈希基线）'}")
+        print(f"已索引：{info['indexed']}/{info['episodes']}（{info['coverage']:.0%}）")
+        for row in info["models"]:
+            print(f"  {row['model']}  {row['count']} 条  dim={row['dim']}")
+        return
+    if args.action == "reindex":
+        if args.all:
+            count = embed_index.reindex_all(store.db, provider, provider.model)
+        else:
+            count = embed_index.reindex_missing(store.db, provider, provider.model, limit=args.limit)
+        print(f"已重建 {count} 条向量（模型 {provider.model}）")
+        return
+    removed = embed_store.prune(store.db)
+    print(f"已清理 {removed} 条失效向量")
+
+
+def cmd_eval(args) -> None:
+    """检索评测：recall@k 与 MRR，词面 vs 混合。"""
+    store = Store(Path(args.home))
+    persona = store.load_persona()
+    spec = json.loads(Path(args.queries).read_text(encoding="utf-8-sig"))
+    queries = spec.get("queries") or []
+    if not queries:
+        print("评测集为空。")
+        raise SystemExit(1)
+    scores = entity_scores(store)
+    hits = 0
+    mrr = 0.0
+    latency = 0.0
+    rows = []
+    for item in queries:
+        text = item["q"]
+        expect = item.get("expect") or []
+        start = time.perf_counter()
+        found = retrieve(store, text, k=args.k, scores=scores, persona=persona, mode=args.retrieval)
+        latency += (time.perf_counter() - start) * 1000
+        rank = None
+        for index, (_score, row) in enumerate(found, 1):
+            if any(term in row["content"] for term in expect):
+                rank = index
+                break
+        if rank:
+            hits += 1
+            mrr += 1.0 / rank
+        rows.append({"q": text, "rank": rank, "expect": expect})
+    stats = {
+        "queries": len(queries),
+        "k": args.k,
+        "recall": hits / len(queries),
+        "mrr": mrr / len(queries),
+        "avg_ms": round(latency / len(queries), 1),
+        "mode": args.retrieval or "auto",
+    }
+    if args.json:
+        print(json.dumps({"stats": stats, "rows": rows}, ensure_ascii=False, indent=2))
+        return
+    for row in rows:
+        print(f"{'✓' if row['rank'] else '×'} rank={row['rank'] or '-'}  {row['q']}")
+    print(f"recall@{args.k}={stats['recall']:.2f}  MRR={stats['mrr']:.2f}  "
+          f"平均 {stats['avg_ms']} ms  模式={stats['mode']}")
+
+
 def cmd_status(args) -> None:
     home = Path(args.home)
     store = Store(home)
@@ -1995,6 +2209,7 @@ def main() -> None:
 
     p_chat = sub.add_parser("chat", help="对话（不带 --say 进入交互）")
     p_chat.add_argument("--say", help="非交互模式，直接给一句输入")
+    p_chat.add_argument("--retrieval", choices=["auto", "lexical", "hybrid"], help="检索模式")
     p_chat.set_defaults(func=cmd_chat)
 
     p_sleep = sub.add_parser("sleep", help="归档：摘要、抽取事实、快照")
@@ -2010,6 +2225,7 @@ def main() -> None:
     p_recall = sub.add_parser("recall", help="检索记忆（调试用）")
     p_recall.add_argument("--query", required=True)
     p_recall.add_argument("--top", type=int, default=5)
+    p_recall.add_argument("--retrieval", choices=["auto", "lexical", "hybrid"], help="检索模式")
     p_recall.set_defaults(func=cmd_recall)
 
     p_flip = sub.add_parser("flip-review", help="查看或确认极性翻转请求")
@@ -2029,7 +2245,21 @@ def main() -> None:
 
     p_sim = sub.add_parser("simulate", help="虚拟时钟：几秒跑完数周")
     p_sim.add_argument("--scenario", help="场景 JSON（默认内置 14 天）")
+    p_sim.add_argument("--retrieval", choices=["auto", "lexical", "hybrid"], default="lexical")
     p_sim.set_defaults(func=cmd_simulate)
+
+    p_embed = sub.add_parser("embed", help="向量索引维护（M2）")
+    p_embed.add_argument("action", choices=["status", "reindex", "prune"])
+    p_embed.add_argument("--all", action="store_true", help="全量重建（默认只补缺失）")
+    p_embed.add_argument("--limit", type=int, default=1000)
+    p_embed.set_defaults(func=cmd_embed)
+
+    p_eval = sub.add_parser("eval", help="检索评测：recall@k / MRR")
+    p_eval.add_argument("--queries", required=True)
+    p_eval.add_argument("--k", type=int, default=5)
+    p_eval.add_argument("--retrieval", choices=["auto", "lexical", "hybrid"])
+    p_eval.add_argument("--json", action="store_true")
+    p_eval.set_defaults(func=cmd_eval)
 
     p_export = sub.add_parser("export", help="把人格与记忆打包成 .syspersona")
     p_export.add_argument("--out", help="输出文件（默认 persona-<id>-<date>.syspersona）")

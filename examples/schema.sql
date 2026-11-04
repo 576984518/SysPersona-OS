@@ -148,11 +148,15 @@ CREATE TABLE IF NOT EXISTS embeddings (
     target_id       INTEGER NOT NULL,
     model           TEXT    NOT NULL,
     dim             INTEGER NOT NULL,
-    vector          BLOB    NOT NULL,
-    created_at      TEXT    NOT NULL
+    content_sha256  TEXT    NOT NULL,   -- 内容没变就不重算
+    norm            REAL    NOT NULL,   -- 预存模长，检索时省一次遍历
+    vector          BLOB    NOT NULL,   -- float32 小端
+    created_at      TEXT    NOT NULL,
+    UNIQUE(persona_uuid, target_kind, target_id, model)
 );
 
 CREATE INDEX IF NOT EXISTS idx_embeddings_target ON embeddings(persona_uuid, target_kind, target_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(persona_uuid, model, target_kind);
 
 -- ---------- 长期画像 ----------
 CREATE TABLE IF NOT EXISTS profile (

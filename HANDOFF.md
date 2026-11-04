@@ -9,11 +9,11 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | `v0.8.0`（M4 加密核心） |
-| CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 |
-| 代码 | `impl/m1/syspersona.py`（约 2000 行，零依赖）+ `impl/m4/vault/`（加密层） |
-| 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db` + `snapshots/`；静止时是 `*.vault` |
-| 运行环境 | Python 3.10+；mock 模型可离线跑；加密需 `pip install -r impl/m4/requirements-m4.txt` |
+| 最新版本 | `v0.9.0-dev`（M4 核心 + M2 向量检索） |
+| CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
+| 代码 | `impl/m1/syspersona.py`（主控，零依赖）+ `impl/m4/vault/`（加密）+ `impl/m2/embed/`（向量） |
+| 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db`（含 embeddings 表）+ `snapshots/`；静止时是 `*.vault` |
+| 运行环境 | Python 3.10+；mock 模型可离线跑；加密需 `cryptography`；语义检索需 ollama 或 `fastembed`（都可选） |
 | 安全规范 | `docs/SECURITY_SPEC.md` v1.0 草案（已实现 v1 核心） |
 | 可行性验证 | 46/46；`docs/SECURITY-FEASIBILITY.md` + `impl/m4/feasibility/` |
 
@@ -39,6 +39,8 @@
 | **内核签名 + 变更批准** | §9 | `vault seal --approve-kernel-change` |
 | **SQLite 生命周期（checkpoint → 关库 → 封装）** | §10 | `seal` 自动 |
 | **设备指纹绑定（none / device）** | §6.4 | `seal --bind device` |
+| **向量检索（RRF 融合，provider 可插拔）** | 6.3 | `recall --retrieval hybrid` / `embed reindex` |
+| **检索评测（recall@k / MRR）** | 15 | `eval --queries ...` |
 
 ---
 
@@ -46,11 +48,11 @@
 
 1. **M4.2：公开模板 publish / fork**（Ed25519 签名、复制即新 UUID）
 2. **M4.2：device-key（OS 密钥库）/ account 绑定、防回滚、增量分块**
-3. **向量/语义检索**（词面之外，换个说法就召回不到）
-4. **模型摘要替代截断**（现在「压成摘要」是截断，违反原则 8 的精神）
+3. **模型摘要替代截断**（现在「压成摘要」是截断，违反原则 8 的精神）
 4. **图的多跳扩散**（`NAS → 项目 → 休眠` 走不通）
 5. **真模型适配**（只有 mock / ollama，没有云端 API）
 6. **探索预算执行、自动环境重置**（现在只出候选与提醒）
+7. **M2 收尾**：facts / 摘要向量、ANN、rerank（当前只索引 episode）
 
 ---
 
@@ -99,7 +101,21 @@ python impl/m1/syspersona.py vault unlock --file ./me.vault --home ./sim2
 
 CI：`.github/workflows/encryption.yml`（与零依赖的 `simulate` job 并行）。
 
-### 5.3 规范可行性夹具（可选，需 Node ≥ 22）
+### 5.3 向量检索（零依赖可跑）
+
+```powershell
+python -m unittest discover -s impl/m2/tests -v
+# 期望：9 tests OK
+
+python impl/m1/syspersona.py --home ./sim embed status
+python impl/m1/syspersona.py --home ./sim recall --query "老机器休眠怎么解决的" --retrieval hybrid
+python impl/m1/syspersona.py --home ./sim eval --queries examples/eval/m2_queries.json --retrieval lexical
+python impl/m1/syspersona.py --home ./sim eval --queries examples/eval/m2_queries.json --retrieval hybrid
+```
+
+没有语义 provider 时 `auto` 会回退 lexical，`--retrieval hybrid` 仍可用 hash 基线做通路测试。
+
+### 5.4 规范可行性夹具（可选，需 Node ≥ 22）
 
 ```powershell
 python impl/m4/feasibility/feasibility.py
@@ -110,31 +126,30 @@ python impl/m4/feasibility/feasibility.py
 
 ---
 
-## 六、下一个任务：M4.2 / 向量检索
+## 六、下一个任务：M2 收尾 / M4.2
 
-M4 核心已完成（见 `impl/m4/README.md`）。剩下的按优先级：
+M2 的 episode 向量检索已落地（见 `impl/m2/README.md`）；M4 核心已完成（见 `impl/m4/README.md`）。剩下的按优先级：
 
-1. **M4.2 公开模板与 fork**：`vault publish` / `vault fork`，Ed25519 签名，复制即新 UUID、空记忆；规范 §13 已定，实现缺口在 `template.py`。
-2. **M4.2 更强绑定**：`device-key`（DPAPI / Keychain / libsecret）、账号绑定；防回滚计数器。
-3. **M2 向量检索**：词面之外换个说法就召回不到；这是检索质量的下一个台阶。
+1. **M2 收尾**：facts / 摘要也建向量；`hash` 之外用真实模型跑一次 recall@5 对照，把数字写进 README；必要时再上 ANN。
+2. **M4.2 公开模板与 fork**：`vault publish` / `vault fork`，Ed25519 签名，复制即新 UUID、空记忆；规范 §13 已定。
+3. **M4.2 更强绑定**：`device-key`（DPAPI / Keychain / libsecret）、账号绑定；防回滚计数器。
 
-### 做 M4.2 前先读
+### 做 M2 收尾前先读
 
-- 规范 §13（模板与 fork）、§6.4（绑定）、§12（恢复）；
-- `impl/m4/vault/container.py` 的 `seal_container` / `open_container`；
-- 负向矩阵 N11（模板篡改）目前在 `tests/` 里是缺口，做模板时一起补。
+- `impl/m2/README.md`（公式、provider、性能）；
+- `impl/m1/syspersona.py` 的 `retrieve()`（约 974 行起）；
+- `examples/eval/m2_queries.json`：在你自己的库上跑，别用空库下结论。
 
-### 验收标准（M4.2）
+### 验收标准（M2 收尾）
 
-- 模板被改一个字节 → `E_SIGNATURE`；
-- fork 后 UUID 与 KS 都是新的，记忆为空，`meta.forked_from` 正确；
-- 删掉口令 wrap 后助记词仍可解（已有测试，别退化）；
-- CI 绿。
+- 同一查询，lexical 与 hybrid 的 recall@5 差值有数字、有查询样例；
+- 1 万条规模检索 ≤ 30 ms（mid 档，`math.sumprod` 路径）；
+- 没有 provider 时行为与 M1 完全一致。
 
 ### 不要顺手做的
 
-- 不要在 M4.2 里改容器 v1 的字节格式；模板是独立格式（`syspersona-template/1`）。
-- 不要为了 fork 方便就复用原 UUID 或原 KS——那等于复制人格而非新生。
+- 不要把向量分加进人格项；原则 9 的三项仍然是加法，不是替代；
+- 不要为跑分调 `floor` 或权重却不留记录——阈值是硬件与数据的函数，写进 README 再改。
 
 ---
 
@@ -142,8 +157,8 @@ M4 核心已完成（见 `impl/m4/README.md`）。剩下的按优先级：
 
 1. 读本文件
 2. 读 `README.md` 的 §0（公理）、§5.4（漂移）、§6.3（检索）、§8（安全）
-3. 要动加密，再读 `docs/SECURITY_SPEC.md` 的 §4–§9、§13–§15，以及 `impl/m4/README.md`
-4. 跑第五节的验证命令，确认环境没坏（M1 仿真 + 26 项加密测试）
-5. 按第六节的顺序实现，每完成一项：commit → 跑测试 → 发版
+3. 要动检索，读 `impl/m2/README.md`；要动加密，读 `docs/SECURITY_SPEC.md` 与 `impl/m4/README.md`
+4. 跑第五节的验证命令（M1 仿真 + 26 项加密 + 9 项向量）
+5. 每完成一项：commit → 跑测试 → 发版
 
 > 一句话提醒：这个项目所有的「聪明」都在文件里，不在上下文里。上下文会断，文件不会。

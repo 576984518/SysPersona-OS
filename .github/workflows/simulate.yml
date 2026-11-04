@@ -34,3 +34,7 @@ jobs:
           python impl/m1/syspersona.py verify --file ./me.syspersona
           python impl/m1/syspersona.py --home ./sim2 import --file ./me.syspersona
           python impl/m1/syspersona.py --home ./sim2 status
+
+      - name: M2 向量检索（哈希基线，零依赖）
+        run: python -m unittest discover -s impl/m2/tests -v
+

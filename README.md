@@ -430,6 +430,8 @@ score = relevance × (w1·profile + w2·attention + w3·persona)
 
 检索预算（token 上限）由启动器分配，避免「检索回来一大段、把上下文挤爆」。
 
+**M2 已把「向量语义」这条通道实现出来**（`impl/m2`）：episode 建向量索引，词面与向量用 RRF 融合得到 `relevance`，再叠加画像/关注/人格三项。Provider 可插拔——本地 ollama（`bge-m3`）、离线 `fastembed`、或零依赖的哈希基线；没有语义 provider 时自动回退纯词面，行为与 M1 一致。换一种说法也能召回，但「什么值得取」仍然由人格决定。
+
 ### 6.4 遗忘
 
 遗忘是功能，不是故障。需要区分四类：
@@ -848,6 +850,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
+- [M2 向量检索](impl/m2/README.md)：provider 选择、RRF 融合、索引维护与评测方法。
 - [English summary](README.en.md)。
 - 术语表：人格文件 / 记忆库 / 工作记忆 / 情景记忆 / 语义记忆 / 画像 / 固化 / 热重载 / 迁移 / 公私分级。
 
