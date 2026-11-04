@@ -196,6 +196,10 @@ class Store:
         ep_cols = {row[1] for row in self.db.execute("PRAGMA table_info(episodes)")}
         if "archived" not in ep_cols:
             self.db.execute("ALTER TABLE episodes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        if "access_count" not in ep_cols:
+            self.db.execute("ALTER TABLE episodes ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+        if "last_access" not in ep_cols:
+            self.db.execute("ALTER TABLE episodes ADD COLUMN last_access TEXT")
         self.db.commit()
 
     # ---------- persona ----------
@@ -748,7 +752,15 @@ def retrieve(store: "Store", query: str, k: int = 3) -> list[tuple[float, object
             score *= 0.7          # 助手回复常复述用户内容，降权避免自我强化
         scored.append((score, row))
     scored.sort(key=lambda x: -x[0])
-    return scored[:k]
+    top = scored[:k]
+    for _, row in top:
+        store.db.execute(
+            "UPDATE episodes SET access_count = access_count + 1, last_access = ? WHERE id = ?",
+            (now(), row["id"]),
+        )
+    if top:
+        store.db.commit()
+    return top
 
 
 def snippet(text: str, n: int = 36) -> str:
@@ -901,7 +913,13 @@ def cmd_chat(args) -> None:
 
 
 def respond(store: "Store", persona: dict, model, cfg: dict, message: str) -> str:
-    evict_by_pressure(store, persona)
+    level = maintenance_level(store, persona)
+    if level == "critical":
+        print("  [维护优先] 上下文临界，前台让路")
+        for line in run_maintenance(store, persona, "临界水位"):
+            print(line)
+    else:
+        evict_by_pressure(store, persona)
 
     hits = retrieve(store, message, k=3)
     memory_lines = [
@@ -1059,20 +1077,44 @@ def cleanup_episodes(store: "Store", persona: dict) -> list[str]:
     return lines
 
 
+def window_size(store: "Store") -> int:
+    return int(
+        store.db.execute("SELECT COUNT(*) FROM episodes WHERE archived=0").fetchone()[0]
+    )
+
+
+def maintenance_level(store: "Store", persona: dict) -> str:
+    """窗口 / 预算：<1 正常，≥1 软水位，≥1.5 临界（前台让路）。"""
+    budget = int((persona.get("memory") or {}).get("context_budget", 12))
+    ratio = window_size(store) / max(1, budget)
+    if ratio >= 1.5:
+        return "critical"
+    if ratio >= 1.0:
+        return "soft"
+    return "none"
+
+
 def evict_by_pressure(store: "Store", persona: dict) -> int:
-    """上下文压力驱逐：窗口超过预算就把最冷的移出，不看年龄。"""
+    """上下文压力驱逐：按最近访问时间淘汰，而不是按创建顺序。"""
     memory_cfg = persona.get("memory") or {}
     budget = int(memory_cfg.get("context_budget", 12))
     low_ratio = float(memory_cfg.get("low_watermark", 0.7))
 
     rows = store.db.execute(
-        "SELECT id, content FROM episodes WHERE archived = 0 ORDER BY id DESC"
+        "SELECT id, content, COALESCE(last_access, occurred_at) AS cold"
+        " FROM episodes WHERE archived = 0 ORDER BY cold ASC, id ASC"
     ).fetchall()
     if len(rows) <= budget:
         return 0
 
     keep = max(4, int(budget * low_ratio))
-    victims = rows[keep:]
+    newest = {
+        row["id"]
+        for row in store.db.execute(
+            "SELECT id FROM episodes WHERE archived=0 ORDER BY id DESC LIMIT 4"
+        ).fetchall()
+    }
+    victims = [row for row in rows if row["id"] not in newest][: len(rows) - keep]
     for row in victims:
         store.db.execute(
             "UPDATE episodes SET content=?, archived=1 WHERE id=?",
@@ -1081,8 +1123,18 @@ def evict_by_pressure(store: "Store", persona: dict) -> int:
     store.db.commit()
     store.audit("evict", f"window={len(rows)} budget={budget} evicted={len(victims)}")
     if victims:
-        print(f"  [实时归档] {len(victims)} 条（窗口 {len(rows)} > 预算 {budget}）")
+        print(f"  [实时归档] {len(victims)} 条（窗口 {len(rows)} > 预算 {budget}，按最久未访问）")
     return len(victims)
+
+
+def run_maintenance(store: "Store", persona: dict, reason: str) -> list[str]:
+    """维护任务：水位到线就检索一遍、压缩归档。临界时由前台让路。"""
+    level = maintenance_level(store, persona)
+    if level == "none":
+        return []
+    evicted = evict_by_pressure(store, persona)
+    store.audit("maintenance", f"level={level} reason={reason} evicted={evicted}")
+    return [f"维护（{reason}，水位 {level}）：归档 {evicted} 条"]
 
 
 def resume_topics(rows: list) -> list[str]:
@@ -1269,6 +1321,10 @@ def cmd_serve(args) -> None:
 
     try:
         while True:
+            if maintenance_level(store, persona) != "none":
+                for line in run_maintenance(store, persona, "空闲维护"):
+                    print(line)
+
             size = inbox.stat().st_size
             if size < pos:
                 pos = 0
