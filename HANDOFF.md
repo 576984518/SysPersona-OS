@@ -45,7 +45,7 @@
 | **设备指纹绑定（none / device）** | §6.4 | `seal --bind device` |
 | **向量检索（RRF 融合，provider 可插拔）** | 6.3 | `recall --retrieval hybrid` / `embed reindex` |
 | **检索评测（recall@k / MRR）** | 15 | `eval --queries ...` |
-| **启动器规范（文档，无代码）** | v1.1.0 | `docs/LAUNCHER_SPEC.md` |
+| **人格运行时规范（文档，无代码）** | v1.1.0 | `docs/LAUNCHER_SPEC.md` |
 | **启动器 L2（对话 / 记忆注入 / 睡眠 / 崩溃恢复）** | LAUNCHER_SPEC §7–§9 | `impl/launcher/`（`smoke.py` 12/12） |
 
 ---
@@ -66,7 +66,7 @@ v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒
 
 1. **静态封存**，不是每轮加密落盘（KDF 实测 1.6 s，聊天会被 I/O 拖死）；
 2. **记忆在尾部注入**，不进开头 system（否则前缀缓存全废，首 token 翻倍）；
-3. **唯一在场 + 结算独占**：同一人格只能有一个可写在场，只有 `origin` 能结算。
+3. **在场模型 + 结算独占**：`exclusive` 下一个可写在场，`concurrent` 下各写各分支；只有 `origin` 能结算与合并。
 
 ---
 
@@ -236,7 +236,7 @@ M2 的 episode 向量检索已落地（见 `impl/m2/README.md`）；M4 核心已
 1. 读本文件，再看 `CHANGELOG.md` 最近三条（知道哪些规则刚被改过）
 2. 读 `README.md` 的 §0（公理）、§5.4（漂移）、§6.3（检索）、§8（安全）
 3. 要动检索，读 `impl/m2/README.md`；要动加密，读 `docs/SECURITY_SPEC.md` 与 `impl/m4/README.md`
-4. 要动启动器，读 `docs/LAUNCHER_SPEC.md` 的 §5.5（唯一在场）、§7（请求流程）、§8（组装）、§12（多设备）、§19（局域网），再读 `impl/launcher/README.md` 的「已知偏差」
+4. 要动启动器，读 `docs/LAUNCHER_SPEC.md` 的 §5.5（在场模型）、§7（请求流程）、§8（组装）、§12（多设备）、§19（局域网），再读 `impl/launcher/README.md` 的「已知偏差」
 5. 跑第六节的验证命令（M1 仿真 + 26 项加密 + 11 项向量 + 12 项 launcher 冒烟）
 6. 每完成一项：commit → 跑测试 → 发版
 
