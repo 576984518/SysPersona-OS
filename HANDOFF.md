@@ -11,8 +11,8 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | **`v1.2.0`**（L2 参考实现）；语义仍以 `v1.0.0` 为准 |
-| 规范 | `docs/LAUNCHER_SPEC.md`（v1.1.0，**规范性**）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex，实测与取舍） |
+| 最新版本 | **`v1.3.0`**（Runtime 规范 v1.2：五职责 + 能力面）；语义仍以 `v1.0.0` 为准 |
+| 规范 | `docs/LAUNCHER_SPEC.md`（**v1.2**，规范性，五职责：加载/组装/路由/执行/归档）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex） |
 | CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
 | 代码 | `impl/m1/syspersona.py` + `impl/m4/vault/` + `impl/m2/embed/` + **`impl/launcher/`（L2 PoC，零依赖）** |
 | 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db`（含 embeddings 表）+ `snapshots/`；静止时是 `*.vault` |
@@ -56,7 +56,8 @@ v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒
 
 - 判定标准是规范 §17 的 **TCK**，不是主观描述；
 - v1.2.0 的实现覆盖 L2：OpenAI 兼容、人格注入、FTS 记忆、睡眠快照、崩溃恢复、12 个错误码；
-- **形态不等于规范**（LAUNCHER_SPEC §2.4）：`impl/launcher` 只是 Profile G（gateway）；把同一套逻辑嵌进 App、不起 HTTP，是 Profile E，同样合规——判据是「加载/组装/路由/归档」四件事，不是端口；
+- **规范 v1.2 多了第五职责：执行**（§11）——模型想动文件 / 联网 / 跑命令 / 开摄像头，由 Runtime 裁决（allow / ask / deny）、执行、记成 action episode。**`impl/launcher` 尚未实现这一层**，所以它只是 L2；
+- **形态不等于规范**（§2.4）：`impl/launcher` 只是 Profile G（gateway）；把同一套逻辑嵌进 App、不起 HTTP，是 Profile E，同样合规——判据是五件事，不是端口；
 - **没有**加密容器、唯一在场、多设备租约、局域网鉴权——那些是 L3/L4；
 - 附录 C「并行在场」是 **v1.2 草案**，不属于任何已发布版本的合规范围，别拿它做验收。
 
@@ -70,7 +71,8 @@ v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒
 
 ## 四、尚未实现（按建议优先级）
 
-1. **Launcher L3**：三种 DataSource 等价（目录 / 容器 / 远端）、`seal/unlock` 接入、binding
+1. **能力面实现（v1.3.0 规范新增，代码未落地）**：`tool_calls` 拦截 → 策略裁决（allow/ask/deny）→ 沙箱执行 → action episode；先做 `fs.read` / `net.fetch` 两个只读能力，`proc.exec` 保持 deny
+2. **Launcher L3**：三种 DataSource 等价（目录 / 容器 / 远端）、`seal/unlock` 接入、binding
 2. **Launcher L4**：唯一在场与交接、租约与 epoch、局域网鉴权与配对码
 3. **L2 加固**：检索 p95 现在 25 ms（目标 15）、并发压测、真实 ollama 的 `prompt_eval_cached_count` 对照
 4. **并行在场（附录 C）转正**：需要改 §5.5 与 L4 判据，并补 TC-N14–N17
