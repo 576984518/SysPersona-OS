@@ -55,6 +55,8 @@
   原因：物理覆盖会把对方那段时间抹掉；像人一样聊一遍，才是增量且可断的。
 - **情境判定与旅行模式（Runtime 规范 §13.7）**：模型只做评估器，输出 `{state, confidence, evidence}`；规则引擎裁决；`shred` 只能由人触发；低置信度只能降级到更安静的状态。
   原因：不能拿速度当判据——它在快递箱里也很快；但也不能让模型自己按下销毁键。
+- **物理接入授权（Runtime 规范 §13.7，v2.2.0）**：`hardware_device_id` 首次生成后只读；人格启动前必须校验 `device_grant`（绑定设备、人格、能力、有效期）；校验先于加载，失败 `physical_unauthorized`；并入 `impl/launcher/device_gate.py`。
+  原因：只验人格不验身体，等于任何灵魂都能插进任何机器人。
 - **身份归属与肉体租约（`docs/PRIVACY_SPEC.md` §7）**：`owner_uuid` / `creator_sig` / `lineage`；身体侧 `device_grant_sig` 与 `body_lease`（限定能力、可随时撤销）；灵魂与肉体所有权分离；伦理高于任何物权授权。
   原因：漫游到租用身体时，灵魂与肉体不是一个主人，权属必须分开写清楚。
 - **伦理边界（`docs/PRIVACY_SPEC.md` §6）**：kernel 内置三条绝对约束（不伤人 / 不破坏不违法 / 不攻击其他智能体），人类签名、模型不可改；物理动作必须经 Runtime 检查，命中即 `E_ETHICS_VIOLATION`；物理急停高于一切；并写明「规则不能替代工程安全」。

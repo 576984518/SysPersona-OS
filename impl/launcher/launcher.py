@@ -817,7 +817,18 @@ def main():
     ap.add_argument("--num-ctx", type=int, default=None)
     ap.add_argument("--tier", choices=list(TIER_CTX), default="low")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--require-grant", action="store_true",
+                    help="启动前校验物理设备授权（v2.2.0）")
+    ap.add_argument("--persona-id", default="lin")
     a = ap.parse_args()
+
+    if a.require_grant:
+        from device_gate import check_grant, ensure_device
+        ensure_device(a.home)
+        ok, reason = check_grant(a.home, a.persona_id)
+        if not ok:
+            sys.stderr.write("E_PHYSICAL_UNAUTHORIZED: %s\n" % reason)
+            sys.exit(3)
     httpd, L = serve(a.home, a.host, a.port, a.provider, a.model, a.num_ctx, a.tier, a.verbose)
     print("launcher ready: http://%s:%d  (persona=%s ctx=%d provider=%s)"
           % (a.host, a.port, L.persona.kernel.get("id"), L.num_ctx, a.provider))
