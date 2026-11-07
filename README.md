@@ -903,6 +903,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
+- [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索，零依赖，今天就能用（v2.4.0）。
 - [进化史](https://github.com/576984518/SysPersona-OS/blob/main/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
 - [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
