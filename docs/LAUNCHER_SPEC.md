@@ -4,7 +4,7 @@
 
 > 状态：**规范（Normative）**，与 v1.0.0 方法规范同级。
 > 发布：**v1.1.0**（2026-11-07）｜位置：`docs/LAUNCHER_SPEC.md`｜配套：`docs/MIDDLEWARE_LAUNCHER.md`
-> 修订：**r1（随 v1.3.0）** 新增 §2.4 形态无关性、§16.1 Profile；TC-C1 降为 Profile G 专属。其余条款不变。
+> 勘误：**r1**（并入本版，不单独发版）新增 §2.4 形态无关性、§16.1 Profile；TC-C1 降为 Profile G 专属。其余条款不变。文档以 `main` 为准，标签是发布时的快照。
 > 关键词：**MUST / MUST NOT / SHOULD / MAY** 按 RFC 2119 解释。
 > 配套文件：`docs/MIDDLEWARE_LAUNCHER.md`（资料性 Annex，含可行性实测与参考实现取舍）。
 > 本文只定义行为与契约，不定义实现语言、不定义 UI、不定义密码学格式（后者见 `docs/SECURITY_SPEC.md`）。
