@@ -890,6 +890,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
+- [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
 - [人格分身规范](docs/AVATAR_SPEC.md)
 - [分身合并 PoC](impl/launcher/avatar_poc.py)：7/7 通过，验证平行记忆合并与来源区分（TC-AV1–AV6）。：多分身常驻、发言权、各记各的与对账同步（v0.1，可实施草案）。
 - [Runtime L2 实现](impl/launcher/README.md)：零依赖，mock 可离线跑；12 项冒烟、开销与已知偏差（v1.2.0）。
