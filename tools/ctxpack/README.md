@@ -16,7 +16,9 @@ python ctxpack.py archive chat.md --title "v2.4 讨论" --tags 规范,提取器
 python ctxpack.py digest chat.md -o HANDOFF-session.md
 
 # 3) 检索：只取命中片段，不把整包塞进上下文
-python ctxpack.py search 分身 --limit 5
+python ctxpack.py search 分身 --limit 5 --sort time   # 按时间
+python ctxpack.py search 分身 --limit 5 --sort freq   # 按命中次数（默认）
+python ctxpack.py status ./notes                      # 哪些还没处理
 ```
 
 ---
@@ -35,6 +37,21 @@ python ctxpack.py search 分身 --limit 5
 | 检索 | 工具，只回片段 | 只占命中的那几行 |
 
 ---
+
+## 只处理"变过的文件"
+
+每次提取都在 `state.json` 里记一行水位（`mtime` + `size`）。下次再跑：
+
+```
+待处理 0 个，已跳过 2 个（未变更）
+没有新内容，不生成摘要。
+```
+
+- 变更的文件才提取，提取过的**先归档、再记水位**——顺序反过来，中途失败就会丢；
+- `digest <目录> --dry-run` 先看会处理哪些，不写任何东西；
+- `status <目录>` 看哪些还没被处理。
+
+这样"每次会话满了再提取一次"就变成了增量动作，不会把老文件重炒一遍。
 
 ## 归档长什么样
 
