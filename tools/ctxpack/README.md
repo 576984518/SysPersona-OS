@@ -38,6 +38,32 @@ python ctxpack.py status ./notes                      # 哪些还没处理
 
 ---
 
+## 会话从哪来（DSH）
+
+DSH 把每次会话存在：
+
+```
+%USERPROFILE%\.dsh\sessions\<工作区哈希>\<会话ID>\session.v4.jsonl.zstd
+```
+
+格式是**多帧 zstd 压缩的 JSONL 事件流**（`session` / `user/message` / `assistant/message` / `tool/call` / `tool/result` …）。
+
+先导出成 Markdown（Node 自带 zstd，无需装包）：
+
+```bash
+node tools/ctxpack/dsh_export.js <会话目录或 .zstd 文件> sessions/2026-11-07.md
+```
+
+再提取：
+
+```bash
+python tools/ctxpack/ctxpack.py digest sessions -o sessions/HANDOFF.md
+```
+
+实测：一次 410 KB 的会话导出后，digest 得到 2.4 KB 的交接摘要——**约为原文的 0.6%**。
+
+> 注意：导出的是你自己的聊天记录，别提交进仓库。`sessions/` 建议加进 `.gitignore`。
+
 ## 只处理"变过的文件"
 
 每次提取都在 `state.json` 里记一行水位（`mtime` + `size`）。下次再跑：
