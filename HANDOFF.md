@@ -52,15 +52,15 @@
 
 ## 三、版本边界（别误会它已经能用）
 
-v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒烟全绿）。两者都还不是 L3/L4。
+规范（现行 v1.1 页）交付**协议**；v1.2.0 交付 **L2 参考实现**（PoC，12 项冒烟全绿）。两者都还不是 L3/L4。
 
 - 判定标准是规范 §17 的 **TCK**，不是主观描述；
-- v1.2.0 的实现覆盖 L2：OpenAI 兼容、人格注入、FTS 记忆、睡眠快照、崩溃恢复、12 个错误码；
-- **规范 v1.2 多了第五职责：执行**（§11）——模型想动文件 / 联网 / 跑命令 / 开摄像头，由 Runtime 裁决（allow / ask / deny）、执行、记成 action episode。**`impl/launcher` 尚未实现这一层**，所以它只是 L2；
+- v1.2.0 的实现覆盖 L2：OpenAI 兼容、人格注入、FTS 记忆、睡眠快照、崩溃恢复、16 个错误码；
+- **第五职责「执行」**（§11）——模型想动文件 / 联网 / 跑命令 / 开摄像头，由 Runtime 裁决（allow / ask / deny）、执行、记成 action episode。**`impl/launcher` 尚未实现这一层**，所以它只是 L2；
 - **形态不等于规范**（§2.4）：`impl/launcher` 只是 Profile G（gateway）；把同一套逻辑嵌进 App、不起 HTTP，是 Profile E，同样合规——判据是五件事，不是端口；
 - **在场有两种模型**（§5.5）：`exclusive`（一次一个）与 `concurrent`（多分支并行、事后收束）；后者放开的是经历，`traits` 仍只有一个写入来源；
 - **没有**加密容器、多设备租约、局域网鉴权——那些是 L3/L4；
-- 附录 C「并行在场」是 **v1.2 草案**，不属于任何已发布版本的合规范围，别拿它做验收。
+- 并行在场已并入 §5.5.2（原附录 C 草案已删除）；它随规范一起有效，但 `impl/launcher` 未实现。
 
 三条最容易被忽略、代价最大的判断：
 
@@ -72,8 +72,8 @@ v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒
 
 ## 四、尚未实现（按建议优先级）
 
-1. **并行在场实现（规范 v1.3 新增，代码未落地）**：分支写入、merge（并集 + `merge_record`）、分支说明注入、`contested` 冲突标记
-2. **能力面实现（规范 v1.2 新增，代码未落地）**：`tool_calls` 拦截 → 策略裁决（allow/ask/deny）→ 沙箱执行 → action episode；先做 `fs.read` / `net.fetch` 两个只读能力，`proc.exec` 保持 deny
+1. **并行在场实现（§5.5.2，代码未落地）**：分支写入、merge（并集 + `merge_record`）、分支说明注入、`contested` 冲突标记
+2. **能力面实现（§11，代码未落地）**：`tool_calls` 拦截 → 策略裁决（allow/ask/deny）→ 沙箱执行 → action episode；先做 `fs.read` / `net.fetch` 两个只读能力，`proc.exec` 保持 deny
 3. **Launcher L3**：三种 DataSource 等价（目录 / 容器 / 远端）、`seal/unlock` 接入、binding
 4. **Launcher L4**：租约与围栏（保护收束与人格写入）、局域网鉴权与配对码
 5. **L2 加固**：检索 p95 现在 25 ms（目标 15）、并发压测、真实 ollama 的 `prompt_eval_cached_count` 对照

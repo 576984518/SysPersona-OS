@@ -890,7 +890,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
-- [启动器 L2 实现](impl/launcher/README.md)：零依赖，mock 可离线跑；12 项冒烟、开销与已知偏差（v1.2.0）。
+- [Runtime L2 实现](impl/launcher/README.md)：零依赖，mock 可离线跑；12 项冒烟、开销与已知偏差（v1.2.0）。
 - [变更记录](CHANGELOG.md)：版本线与逐条修改原因——旧页面就地改正，不保留错误版本。
 - [文档修订策略](docs/EDITORIAL.md)：为什么打补丁会让读者抄到旧规则。
 - [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
