@@ -994,6 +994,8 @@ commit(epoch, lease_id, batch)  → {applied} | 409
 
 ---
 
+> 本章其余条款（KDF、解锁、密钥生命周期）都**只在 `encryption_profile != none` 时适用**；选 `none` 不代表没有安全要求——它要求你在 `manifest.json` 里如实声明，并在文档与界面上说清楚「当前是明文」。
+
 ### 15.1 加密状态：可选，而且能来回转
 
 加密不是一个"建库时按下去就定终身"的开关，而是**一份资产当前的状态**。三种档位写在 `manifest.json` 的 `encryption_profile` 里：
