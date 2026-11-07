@@ -393,7 +393,7 @@ presence(persona_id PK, epoch, holder_device, holder_session,
 
 - **只能跑在 `concurrent`**；`device`（设备强绑定）与 `concurrent` **互斥**，实现 **MUST** 拒绝这个组合；
 - **各记各的**：十个一起聊，就是十份记录；跨分支**不去重**，只保留分支内幂等防重传；
-- **同一时刻只有一个对外说话**（floor）；顶替是换地方，floor 是换嘴；
+- **同一对象前只有一个声音**（floor 按 `session_id` / `peer_id` 加锁）；不同对象之间可并行，顶替是换地方、floor 是换嘴；
 - **同步靠对账**：交换增量并标 `source: peer`，不覆盖对方的库。
 
 全文、接口与验收（TC-AV1–AV6）见 [`docs/AVATAR_SPEC.md`](AVATAR_SPEC.md)。
