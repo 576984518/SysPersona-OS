@@ -1,0 +1,237 @@
+{
+  "passed": 46,
+  "failed": 0,
+  "elapsed_s": 35.4,
+  "items": [
+    {
+      "name": "R1 封装→解封，逐字节一致",
+      "ok": true,
+      "detail": "2958 B 容器，5 个文件，db sha256 5e992c4999b2…"
+    },
+    {
+      "name": "R2a 错口令 → E_UNLOCK",
+      "ok": true,
+      "detail": "E_UNLOCK 保险库无法打开"
+    },
+    {
+      "name": "R2b 篡改密钥包裹 → E_UNLOCK",
+      "ok": true,
+      "detail": "E_UNLOCK 保险库无法打开"
+    },
+    {
+      "name": "R3a 篡改载荷末端 → E_INTEGRITY",
+      "ok": true,
+      "detail": "E_INTEGRITY E_INTEGRITY"
+    },
+    {
+      "name": "R3b 改头部元数据 → E_INTEGRITY",
+      "ok": true,
+      "detail": "E_INTEGRITY 头部与签名不一致"
+    },
+    {
+      "name": "R3c 截断容器 → E_FORMAT",
+      "ok": true,
+      "detail": "E_FORMAT 容器被截断或尾部有多余字节"
+    },
+    {
+      "name": "R3d 尾部追加字节 → E_FORMAT",
+      "ok": true,
+      "detail": "E_FORMAT 容器被截断或尾部有多余字节"
+    },
+    {
+      "name": "R4 未知 KDF → E_UNSUPPORTED",
+      "ok": true,
+      "detail": "E_UNSUPPORTED 不支持的 KDF：argon2i_"
+    },
+    {
+      "name": "R5a 内核签名被改 → E_SIGNATURE",
+      "ok": true,
+      "detail": "E_SIGNATURE 内核签名无效"
+    },
+    {
+      "name": "R5b 内核变化未批准 → E_POLICY",
+      "ok": true,
+      "detail": "E_POLICY 内核自上次封装后已变化；需显式批准"
+    },
+    {
+      "name": "R5c 显式批准后可重建签名",
+      "ok": true,
+      "detail": "新内核 sha256 b940d2904a3a…"
+    },
+    {
+      "name": "R6a 助记词生成与回读",
+      "ok": true,
+      "detail": "24 词：color deal private … thing ozone"
+    },
+    {
+      "name": "R6b 仅凭助记词解封",
+      "ok": true,
+      "detail": "db sha256 5e992c4999b2…"
+    },
+    {
+      "name": "R6c 没有口令包裹时，口令不可用",
+      "ok": true,
+      "detail": "E_UNLOCK 保险库无法打开"
+    },
+    {
+      "name": "R6d 删除口令包裹后，助记词仍可解",
+      "ok": true,
+      "detail": "恢复路径独立于口令"
+    },
+    {
+      "name": "R6e 抄错一个词 → 校验位报错",
+      "ok": true,
+      "detail": "E_MNEMONIC 助记词校验位不匹配（可能抄错了一个词）"
+    },
+    {
+      "name": "R7 离线备份副本 → memory.db 哈希一致",
+      "ok": true,
+      "detail": "sha256 5e992c4999b282a3…"
+    },
+    {
+      "name": "R8a 本机绑定正确 → 可解",
+      "ok": true,
+      "detail": "设备描述 c79de8e8a3d0…"
+    },
+    {
+      "name": "R8b 换一台设备 → E_UNLOCK（同一句报错）",
+      "ok": true,
+      "detail": "E_UNLOCK 保险库无法打开"
+    },
+    {
+      "name": "R9a 复制模板 → 新 UUID",
+      "ok": true,
+      "detail": "9f2b1c3d… → 7b18c683…  记忆=empty"
+    },
+    {
+      "name": "R9b 模板被改 → E_SIGNATURE",
+      "ok": true,
+      "detail": "E_SIGNATURE 模板签名无效"
+    },
+    {
+      "name": "R10a 旧口令失效",
+      "ok": true,
+      "detail": "E_UNLOCK 保险库无法打开"
+    },
+    {
+      "name": "R10b 新口令可解，载荷密文未变",
+      "ok": true,
+      "detail": "容器 2958→2958 B，载荷 2186 B 原样保留"
+    },
+    {
+      "name": "R11a 明文包默认拒绝导入",
+      "ok": true,
+      "detail": "E_POLICY 明文包默认拒绝导入；确需迁移请显式允许"
+    },
+    {
+      "name": "R11b 显式允许后升级为密文，内容一致",
+      "ok": true,
+      "detail": "已封装 2522 B（scrypt 档）"
+    },
+    {
+      "name": "R12 8 次封装 nonce 全不重复",
+      "ok": true,
+      "detail": "16 个 nonce / 16 个唯一"
+    },
+    {
+      "name": "R13 容器内无明文痕迹",
+      "ok": true,
+      "detail": "未出现 NAS / 阿岚 / 口令 / 表名"
+    },
+    {
+      "name": "R14 错口令/错设备不泄露差异",
+      "ok": true,
+      "detail": "统一为 ('E_UNLOCK', '保险库无法打开')"
+    },
+    {
+      "name": "C1 浮点数被拒绝",
+      "ok": true,
+      "detail": "E_FORMAT 规范化 JSON 不允许浮点数"
+    },
+    {
+      "name": "C2 非 NFC 字符串被拒绝",
+      "ok": true,
+      "detail": "E_FORMAT 字符串必须是 NFC"
+    },
+    {
+      "name": "C3 键序不影响规范字节",
+      "ok": true,
+      "detail": "{\"a\":2,\"b\":1}"
+    },
+    {
+      "name": "R15 Node 独立实现可读 Python 容器",
+      "ok": true,
+      "detail": "独立实现读出 5 个文件，内核 c91adfa2c2fa…"
+    },
+    {
+      "name": "K1 生成 KAT 向量",
+      "ok": true,
+      "detail": "AES-GCM 空消息 tag=530f8afbc74536b9…，BIP39 24 词"
+    },
+    {
+      "name": "K2 HKDF 与 RFC 5869 用例一致",
+      "ok": true,
+      "detail": "3cb25f25faacd57a90434f64d0362f2a…"
+    },
+    {
+      "name": "K3 HMAC 与公开向量一致",
+      "ok": true,
+      "detail": "f7bc83f430538424…"
+    },
+    {
+      "name": "M0 进程外 provider 单次调用开销",
+      "ok": true,
+      "detail": "82 ms/次（进程内 provider 无此开销，M2 数字需减去它）"
+    },
+    {
+      "name": "M1 scrypt-low 解锁耗时",
+      "ok": true,
+      "detail": "157 ms（scrypt {'N': 32768, 'r': 8, 'p': 1}）"
+    },
+    {
+      "name": "M1 argon2id-low 解锁耗时",
+      "ok": true,
+      "detail": "111 ms（argon2id {'memory': 19456, 'passes': 2, 'parallelism': 1}）"
+    },
+    {
+      "name": "M1 argon2id-mid 解锁耗时",
+      "ok": true,
+      "detail": "220 ms（argon2id {'memory': 65536, 'passes': 3, 'parallelism': 1}）"
+    },
+    {
+      "name": "M2 48.0 KiB 数据库：封装/解封",
+      "ok": true,
+      "detail": "封装 743 ms，解封 767 ms，头部 732 B，载荷 10 KiB"
+    },
+    {
+      "name": "M2 168.0 KiB 数据库：封装/解封",
+      "ok": true,
+      "detail": "封装 752 ms，解封 727 ms，头部 732 B，载荷 33 KiB"
+    },
+    {
+      "name": "M2 656.0 KiB 数据库：封装/解封",
+      "ok": true,
+      "detail": "封装 781 ms，解封 743 ms，头部 732 B，载荷 126 KiB"
+    },
+    {
+      "name": "M2b 原生 AES-256-GCM 1 MiB",
+      "ok": true,
+      "detail": "0.5 ms/次，1975 MB/s"
+    },
+    {
+      "name": "M2b 原生 AES-256-GCM 8 MiB",
+      "ok": true,
+      "detail": "3.7 ms/次，2272 MB/s"
+    },
+    {
+      "name": "M3 WAL 会在旁路文件留下明文",
+      "ok": true,
+      "detail": "提交后 wal 中含明文=True；checkpoint(TRUNCATE)+close 后残留文件=['wal.db']"
+    },
+    {
+      "name": "M4 删除行后 VACUUM 才真正清除明文",
+      "ok": true,
+      "detail": "DELETE 后残留=True，VACUUM 后残留=False"
+    }
+  ]
+}

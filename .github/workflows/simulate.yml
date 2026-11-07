@@ -1,0 +1,40 @@
+name: simulate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 初始化人格
+        run: python impl/m1/syspersona.py --home ./sim init --persona examples/persona.m1.json
+
+      - name: 14 天仿真 + 断言
+        run: python impl/m1/syspersona.py --home ./sim simulate --scenario examples/scenario.14d.json
+
+      - name: 冒烟：换模型后仍召回
+        run: |
+          python impl/m1/syspersona.py --home ./sim chat --say "我在做一个 NAS 调优项目"
+          python impl/m1/syspersona.py --home ./sim switch-model --model mock-b
+          python impl/m1/syspersona.py --home ./sim chat --say "我在做什么？"
+
+      - name: 导出 / 校验 / 导入
+        run: |
+          python impl/m1/syspersona.py --home ./sim export --out ./me.syspersona
+          python impl/m1/syspersona.py verify --file ./me.syspersona
+          python impl/m1/syspersona.py --home ./sim2 import --file ./me.syspersona
+          python impl/m1/syspersona.py --home ./sim2 status
+
+      - name: M2 向量检索（哈希基线，零依赖）
+        run: python -m unittest discover -s impl/m2/tests -v
+

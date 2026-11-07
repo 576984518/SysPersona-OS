@@ -1,0 +1,62 @@
+# 忽略：本地数据与密钥，绝不能提交
+
+# 人格与记忆的私有数据
+*.persona.yaml
+persona.local.yaml
+*.memory.db
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+snapshots/
+history/
+/vault/
+keys/
+*.key
+*.pem
+*.enc
+*.mne
+
+# 配置与环境
+.env
+.env.*
+config.local.*
+
+# 日志
+*.log
+logs/
+
+# 本地跑 M1 时产生的数据目录
+impl/m1/data*/
+data/
+
+# 可行性验证的运行产物
+impl/m4/feasibility/_run/
+
+# 加密容器（用户数据）
+*.vault
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-lock.yaml
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
