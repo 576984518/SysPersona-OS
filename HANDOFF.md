@@ -11,8 +11,8 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | **`v1.4.0`**（Runtime 规范 v1.3：五职责 + 能力面 + 并行在场）；语义仍以 `v1.0.0` 为准 |
-| 规范 | `docs/LAUNCHER_SPEC.md`（**v1.3**，规范性，五职责：加载/组装/路由/执行/归档）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex） |
+| 最新版本 | 规范 **`v1.1.0`**（唯一现行页，持续修订）｜ 实现 **`v1.2.0`**；语义仍以 `v1.0.0` 为准 |
+| 规范 | `docs/LAUNCHER_SPEC.md`（**现行 v1.1**，规范性，五职责：加载/组装/路由/执行/归档）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex） |
 | CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
 | 代码 | `impl/m1/syspersona.py` + `impl/m4/vault/` + `impl/m2/embed/` + **`impl/launcher/`（L2 PoC，零依赖）** |
 | 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db`（含 embeddings 表）+ `snapshots/`；静止时是 `*.vault` |

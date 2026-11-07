@@ -1,9 +1,9 @@
-# SysPersona Runtime 规范 v1.3
+# SysPersona Runtime 规范（现行）
 
 **Persona Runtime Specification — 加载、组装、路由、执行、归档**
 
 > 状态：**规范（Normative）**，与 v1.0.0 方法规范同级。
-> 发布：仓库 **v1.4.0** ｜ 文档版本 **v1.3** ｜ 位置：`docs/LAUNCHER_SPEC.md`
+> 现行版本：**v1.1**（持续修订，不单独发版）｜ 位置：`docs/LAUNCHER_SPEC.md`
 > 配套：`docs/MIDDLEWARE_LAUNCHER.md`（实测与取舍）、`docs/SECURITY_SPEC.md`（容器与密钥）
 > 关键词：**MUST / MUST NOT / SHOULD / MAY** 按 RFC 2119 解释。
 
