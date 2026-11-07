@@ -770,6 +770,8 @@ vault.verify(container)                 # 校验完整性与来源
 
 「私有基站」模式下，设备只做临时载体：启动时拉取人格与记忆索引，会话结束不留明文。类似无盘系统——本机断电即清空，灵魂留在自己的服务器上。
 
+**启动器规范**：人格与记忆如何接上模型、如何在多设备间保持唯一在场、如何在局域网内被多端接入，见 [`docs/LAUNCHER_SPEC.md`](docs/LAUNCHER_SPEC.md)（v1.1.0）。可行性实测、预算数值与参考实现的取舍见 [`docs/MIDDLEWARE_LAUNCHER.md`](docs/MIDDLEWARE_LAUNCHER.md)。
+
 ---
 
 ## 13. 相关工作与差异
@@ -862,6 +864,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
+- [启动器规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、归档、唯一在场与多端接入（v1.1.0）。
 - [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
 - [M2 向量检索](impl/m2/README.md)：provider 选择、RRF 融合、索引维护与评测方法。
 - [English summary](README.en.md)。
