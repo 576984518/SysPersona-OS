@@ -46,6 +46,7 @@
 | **向量检索（RRF 融合，provider 可插拔）** | 6.3 | `recall --retrieval hybrid` / `embed reindex` |
 | **检索评测（recall@k / MRR）** | 15 | `eval --queries ...` |
 | **人格运行时规范（文档，无代码）** | v1.1.0 | `docs/LAUNCHER_SPEC.md` |
+| **人格分身规范（文档，可实施草案）** | v1.3.0 | `docs/AVATAR_SPEC.md` |
 | **启动器 L2（对话 / 记忆注入 / 睡眠 / 崩溃恢复）** | LAUNCHER_SPEC §7–§9 | `impl/launcher/`（`smoke.py` 12/12） |
 
 ---
