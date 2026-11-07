@@ -5,6 +5,10 @@
 > 条款是否**被本仓库验证过**，见[附录 F](#附录-f--条款状态与证据)；一致性声明方法见 [`CONFORMANCE.md`](CONFORMANCE.md)。
 > 参考实现与可行性验证见 [`SECURITY-FEASIBILITY.md`](SECURITY-FEASIBILITY.md)。
 
+> **范围更正（2026-11-07）**：加密整体是**可选**的——Runtime 规范 §15.1 定义 `encryption_profile`：`none` / `managed` / `device`，并可随时 `seal` / `unseal` 转换。
+> 本规范描述的是**启用加密之后**的容器格式与失败语义：一旦选 `managed` / `device`，`kernel` 与 `traits` **必须**加密，`state` 与 `memory` 可选。
+> 选 `none` 时本规范不适用，但**必须**在 `manifest.json` 里如实声明。
+
 **规范性关键词**：`必须 / 不得` = MUST / MUST NOT；`应当 / 不应当` = SHOULD / SHOULD NOT；`可以` = MAY。出现冲突时，以本文件为准。
 
 ---
