@@ -64,6 +64,27 @@ python tools/ctxpack/ctxpack.py digest sessions -o sessions/HANDOFF.md
 
 > 注意：导出的是你自己的聊天记录，别提交进仓库。`sessions/` 建议加进 `.gitignore`。
 
+## 后台自动抓（网页版）
+
+> 抓**网络层**，不抓网页。所以滚没滚到、虚拟列表渲染了多少，都不影响。
+
+一次性准备：给浏览器快捷方式加参数
+
+```
+msedge.exe --remote-debugging-port=9222
+```
+
+然后开着这个脚本，正常聊天即可：
+
+```bash
+node tools/ctxpack/webwatch.js --port 9222 --out sessions/web.jsonl --match "/api/"
+node tools/ctxpack/webwatch.js --check          # 只检查端口开没开
+```
+
+它会附着到每个新页面，监听 JSON 响应，抽出文本逐条追加到 `sessions/web.jsonl`；之后照常 `digest`。
+
+**代价要说清楚**：调试端口等于把浏览器控制权暴露在本机 9222 上，任何本地程序都能连。用完就关浏览器（或去掉参数）。
+
 ## 只处理"变过的文件"
 
 每次提取都在 `state.json` 里记一行水位（`mtime` + `size`）。下次再跑：
