@@ -770,7 +770,7 @@ vault.verify(container)                 # 校验完整性与来源
 
 「私有基站」模式下，设备只做临时载体：启动时拉取人格与记忆索引，会话结束不留明文。类似无盘系统——本机断电即清空，灵魂留在自己的服务器上。
 
-**启动器规范**：人格与记忆如何接上模型、如何在多设备间保持唯一在场、如何在局域网内被多端接入，见 [`docs/LAUNCHER_SPEC.md`](docs/LAUNCHER_SPEC.md)（v1.1.0）。可行性实测、预算数值与参考实现的取舍见 [`docs/MIDDLEWARE_LAUNCHER.md`](docs/MIDDLEWARE_LAUNCHER.md)。
+**启动器规范**：人格与记忆如何接上模型、如何在多设备间保持唯一在场、如何在局域网内被多端接入，见 [`docs/LAUNCHER_SPEC.md`](docs/LAUNCHER_SPEC.md)（v1.1.0）。可行性实测、预算数值与参考实现的取舍见 [`docs/MIDDLEWARE_LAUNCHER.md`](docs/MIDDLEWARE_LAUNCHER.md)。L2 参考实现见 [`impl/launcher/`](impl/launcher/README.md)（v1.2.0，零依赖，12 项冒烟全绿）。
 
 ---
 
@@ -812,6 +812,8 @@ vault.verify(container)                 # 校验完整性与来源
 上图是 M1 的真实终端输出（本机路径已隐去）：`mock-a` 回答「我还不了解」，归档后换成 `mock-b`，它仍然答得出「NAS 调优项目」。模型换了，记忆没换。
 
 每次 push 会自动跑 14 天虚拟时钟仿真并校验断言（见 [`.github/workflows/simulate.yml`](.github/workflows/simulate.yml)）——改坏任何一个阈值，CI 会直接红。
+
+中间层也已有一个可跑的 L2 实现：[`impl/launcher`](impl/launcher/README.md)。它把「人格 + 记忆」接到任意 OpenAI 兼容客户端上，`python impl/launcher/launcher.py --provider mock` 即可离线验证；`smoke.py` 覆盖 TC-C / TC-M / TC-S 共 12 项，`bench.py` 给出中间层自身开销（总 p95 ≈ 35 ms，不含模型生成）。
 
 ---
 
@@ -865,6 +867,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [启动器规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、归档、唯一在场与多端接入（v1.1.0）。
+- [启动器 L2 实现](impl/launcher/README.md)：零依赖，mock 可离线跑；12 项冒烟、开销与已知偏差（v1.2.0）。
 - [M4 加密实现](impl/m4/README.md)：`vault seal/unlock/verify/passwd/recover/import` 与可选依赖。
 - [M2 向量检索](impl/m2/README.md)：provider 选择、RRF 融合、索引维护与评测方法。
 - [English summary](README.en.md)。

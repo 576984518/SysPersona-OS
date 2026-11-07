@@ -11,10 +11,10 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | **`v1.1.0`**（Launcher 规范）；语义仍以 `v1.0.0` 为准 |
+| 最新版本 | **`v1.2.0`**（L2 参考实现）；语义仍以 `v1.0.0` 为准 |
 | 规范 | `docs/LAUNCHER_SPEC.md`（v1.1.0，**规范性**）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex，实测与取舍） |
 | CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
-| 代码 | 无变化（v1.1.0 **不含代码**）：`impl/m1/syspersona.py` + `impl/m4/vault/` + `impl/m2/embed/` |
+| 代码 | `impl/m1/syspersona.py` + `impl/m4/vault/` + `impl/m2/embed/` + **`impl/launcher/`（L2 PoC，零依赖）** |
 | 数据布局 | `persona/{kernel,traits,state}.json` + `memory.db`（含 embeddings 表）+ `snapshots/`；静止时是 `*.vault` |
 | 运行环境 | Python 3.10+；mock 模型可离线跑；加密需 `cryptography`；语义检索需 ollama 或 `fastembed`（都可选） |
 | 安全规范 | `docs/SECURITY_SPEC.md` **v1.0（条款冻结）**；条款状态见附录 F |
@@ -46,16 +46,18 @@
 | **向量检索（RRF 融合，provider 可插拔）** | 6.3 | `recall --retrieval hybrid` / `embed reindex` |
 | **检索评测（recall@k / MRR）** | 15 | `eval --queries ...` |
 | **启动器规范（文档，无代码）** | v1.1.0 | `docs/LAUNCHER_SPEC.md` |
+| **启动器 L2（对话 / 记忆注入 / 睡眠 / 崩溃恢复）** | LAUNCHER_SPEC §7–§9 | `impl/launcher/`（`smoke.py` 12/12） |
 
 ---
 
-## 三、v1.1.0 的边界（别误会它已经能用）
+## 三、版本边界（别误会它已经能用）
 
-v1.1.0 只交付**协议**：人格与记忆如何被加载、组装、路由、归档，以及多设备下的三条铁律。它没有实现，也没有新代码。
+v1.1.0 只交付**协议**；v1.2.0 补了 **L2 参考实现**（PoC，12 项冒烟全绿）。两者都还不是 L3/L4。
 
 - 判定标准是规范 §17 的 **TCK**，不是主观描述；
-- 合规分 L1–L4，**L2 的工作量估算是 4 人日**（网关 + 人格注入 + FTS 记忆 + 睡眠快照 + 错误码）；
-- 附录 C「并行在场」是 **v1.2 草案**，不属于 v1.1.0 的合规范围，别拿它做验收。
+- v1.2.0 的实现覆盖 L2：OpenAI 兼容、人格注入、FTS 记忆、睡眠快照、崩溃恢复、12 个错误码；
+- **没有**加密容器、唯一在场、多设备租约、局域网鉴权——那些是 L3/L4；
+- 附录 C「并行在场」是 **v1.2 草案**，不属于任何已发布版本的合规范围，别拿它做验收。
 
 三条最容易被忽略、代价最大的判断：
 
@@ -67,16 +69,17 @@ v1.1.0 只交付**协议**：人格与记忆如何被加载、组装、路由、
 
 ## 四、尚未实现（按建议优先级）
 
-1. **Launcher L2 参考实现**（v1.1 规范，4 人日）——目前最大的空缺，也是「能不能真用起来」的分水岭
-2. **Launcher L3/L4**：三种 DataSource、seal/unlock 接入、唯一在场与交接、局域网鉴权与配对
-3. **并行在场（附录 C）转正**：需要改 §5.5 与 L4 判据，并补 TC-N14–N17
-4. **M4.2：公开模板 publish / fork**（Ed25519 签名、复制即新 UUID）
-5. **M4.2：device-key（OS 密钥库）/ account 绑定、防回滚、增量分块**
-6. **模型摘要替代截断**（现在「压成摘要」是截断，违反原则 8 的精神）
-7. **图的多跳扩散**（`NAS → 项目 → 休眠` 走不通）
-8. **真模型适配**（只有 mock / ollama，没有云端 API）
-9. **探索预算执行、自动环境重置**（现在只出候选与提醒）
-10. **M2 收尾**：facts / 摘要向量、ANN、rerank（当前只索引 episode）
+1. **Launcher L3**：三种 DataSource 等价（目录 / 容器 / 远端）、`seal/unlock` 接入、binding
+2. **Launcher L4**：唯一在场与交接、租约与 epoch、局域网鉴权与配对码
+3. **L2 加固**：检索 p95 现在 25 ms（目标 15）、并发压测、真实 ollama 的 `prompt_eval_cached_count` 对照
+4. **并行在场（附录 C）转正**：需要改 §5.5 与 L4 判据，并补 TC-N14–N17
+5. **M4.2：公开模板 publish / fork**（Ed25519 签名、复制即新 UUID）
+6. **M4.2：device-key（OS 密钥库）/ account 绑定、防回滚、增量分块**
+7. **模型摘要替代截断**（现在「压成摘要」是截断，违反原则 8 的精神）
+8. **图的多跳扩散**（`NAS → 项目 → 休眠` 走不通）
+9. **真模型适配**（只有 mock / ollama，没有云端 API）
+10. **探索预算执行、自动环境重置**（现在只出候选与提醒）
+11. **M2 收尾**：facts / 摘要向量、ANN、rerank（当前只索引 episode）
 
 ---
 
@@ -156,30 +159,46 @@ python impl/m4/feasibility/feasibility.py
 
 这是**验证夹具**，不是产品代码：它用 Python 写格式、用 OpenSSL 提供原语、用独立 Node 读取器验证互操作。
 
+### 6.5 Launcher（L2，零依赖）
+
+```powershell
+python impl/launcher/smoke.py     # 期望：12/12 passed
+python impl/launcher/bench.py 30  # 开销：总 p95 ≈ 35 ms，检索 p95 ≈ 25 ms，睡眠 ≈ 320 ms
+```
+
+mock 模型即可跑，不需要 ollama。要接真模型：`--provider ollama --model qwen2.5:1.5b`。
+
 ---
 
 ## 七、下一个任务
 
-### A（建议先做）· Launcher L2 参考实现
+### A（建议先做）· Launcher L3 的第一步：DataSource 等价
 
-只做规范 §16 的 L2，不要顺手做 L3/L4。范围：单进程网关 + OpenAI 兼容 + 人格注入 + FTS 记忆 + 睡眠快照 + 12 个错误码。
+不需要先做加密。目标是：同一个 `persona`（`kernel/traits/state` + `memory.db`）能从三种形态读出来，且字节等价：
 
-**验收（全绿才算完）**
+1. 目录 `file://`（现在的 `--home`）
+2. 单文件包 `vault://`（先做**未加密**的 tar/zip，只验证搬运）
+3. 远端 `https://`（只读拉取，带 etag 校验）
 
-- TC-C1 第三方客户端可直连（`/v1/chat/completions`，流式与非流式都通）
-- TC-C2 第 2/3 轮 `X-SP-Cache-Hit-Ratio ≥ 0.5`
-- TC-C3 注入后 `prompt_eval_count ≤ num_ctx`，且 `promise/boundary` 未被驱逐
-- TC-C4 `X-SP-Bypass: 1` 时零注入
-- TC-M1 每条注入带来源 id；TC-M2 热路径模型调用数 = 0；TC-M3 换 persona 后检索不到上一个人格的条目
-- TC-S1 指针先于清理；TC-S2 kill -9 无半写；TC-S3 清理顺序不可跳步
+**验收**
+
+- 同一 `persona` 从三种形态加载，`persona.hash` 与首轮检索结果完全一致；
+- 只读形态运行 30 分钟后，origin 的 etag 不变（不产生隐式写）；
+- 哈希不匹配时拒绝加载，不"先用了再说"。
 
 **不要顺手做的**
 
-- 不要做多用户、租约、局域网、加密——那是 L3/L4；
-- 不要在热路径做记忆抽取或向量重建；
-- 不要用 200 掩盖降级，任何降级都要可见（响应头或错误码）。
+- 不要在这一步引入加密（L4，`docs/SECURITY_SPEC.md` 已有格式，别自造）；
+- 不要做多设备租约与在场（L4）；
+- 不要把三种形态做成三套代码路径——差异只允许出现在 DataSource 实现里。
 
-### B · 原有队列（M2 收尾 / M4.2）
+### B · L2 加固
+
+- 检索 p95 25 ms → 目标 15 ms（候选降到 30 条，或把打分换成 `numpy` 向量化；先测再改）；
+- 用真 ollama 跑一次，把 `prompt_eval_cached_count / prompt_eval_count` 与 mock 的代理值对照，确认 TC-C2 不是自欺；
+- 两个并发客户端压一次，确认 `429 busy` 与写队列不丢数据。
+
+### C · 原有队列（M2 收尾 / M4.2）
 
 M2 的 episode 向量检索已落地（见 `impl/m2/README.md`）；M4 核心已完成（见 `impl/m4/README.md`）。剩下的：
 
@@ -211,8 +230,8 @@ M2 的 episode 向量检索已落地（见 `impl/m2/README.md`）；M4 核心已
 1. 读本文件
 2. 读 `README.md` 的 §0（公理）、§5.4（漂移）、§6.3（检索）、§8（安全）
 3. 要动检索，读 `impl/m2/README.md`；要动加密，读 `docs/SECURITY_SPEC.md` 与 `impl/m4/README.md`
-4. 要动启动器，读 `docs/LAUNCHER_SPEC.md` 的 §5.5（唯一在场）、§7（请求流程）、§8（组装）、§12（多设备）、§19（局域网）
-5. 跑第六节的验证命令（M1 仿真 + 26 项加密 + 11 项向量）
+4. 要动启动器，读 `docs/LAUNCHER_SPEC.md` 的 §5.5（唯一在场）、§7（请求流程）、§8（组装）、§12（多设备）、§19（局域网），再读 `impl/launcher/README.md` 的「已知偏差」
+5. 跑第六节的验证命令（M1 仿真 + 26 项加密 + 11 项向量 + 12 项 launcher 冒烟）
 6. 每完成一项：commit → 跑测试 → 发版
 
 > 一句话提醒：这个项目所有的「聪明」都在文件里，不在上下文里。上下文会断，文件不会。
