@@ -11,6 +11,7 @@
 **分身 = 同一 `persona_id` 的一个独立实例**。每个分身：
 
 - 有自己的 `branch_id`（技术主键）与 `display_name`（人看的名字）；
+- **MUST**：`branch_id` 全局唯一；`display_name` 在同一台设备内唯一——同名两个分身，日志与发言权都会对不上；
 - 有自己的 `state` 与本地 `memory.db`；
 - 与其他分身共享 `kernel` / `traits` / `permissions` 的**只读副本**。
 
