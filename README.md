@@ -3,7 +3,7 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v3.1.9-blue)
+![version](https://img.shields.io/badge/version-v4.0.0-blue)
 
 > **本项目是「数字生命记忆架构」的概念验证（PoC）与参考方案，不是开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：`tools/ctxpack/` 与 `impl/` 都是参考实现，
@@ -24,7 +24,7 @@
 > **固定格式**（顺序 / 上限，改需人确认）；交接只读一次一级索引，细节再检索。
 > → [`tools/ctxpack/README.md`](tools/ctxpack/README.md)
 
-**当前 v3.1.9**（NavWatch 改调包装脚本）· 上一版 v3.1.8 · [变更记录](CHANGELOG.md)
+**当前 v4.0.0**（工作模式成文）· 上一版 v3.1.9 · [变更记录](CHANGELOG.md)
 
 📜 [进化史](EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
 
