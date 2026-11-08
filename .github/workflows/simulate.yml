@@ -35,6 +35,12 @@ jobs:
           python impl/m1/syspersona.py --home ./sim2 import --file ./me.syspersona
           python impl/m1/syspersona.py --home ./sim2 status
 
+      - name: 能力面与拒绝落库（PERSONA_SPEC §2.1 / §5）
+        run: python impl/m1/test_policy.py
+
+      - name: Launcher L2 冒烟（零依赖）
+        run: python impl/launcher/smoke.py
+
       - name: M2 向量检索（哈希基线，零依赖）
         run: python -m unittest discover -s impl/m2/tests -v
 

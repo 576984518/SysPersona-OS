@@ -14,7 +14,9 @@
 | 项 | 值 |
 |---|---|
 | 仓库 | https://github.com/576984518/SysPersona-OS |
-| 最新版本 | 规范 **`v1.1.0`**（唯一现行页，持续修订）｜ 实现 **`v1.2.0`**；语义仍以 `v1.0.0` 为准 |
+| 最新版本 | 仓库 **`v4.2.0`**（2026-11-08）｜ 规范 **`v1.1.0`**（唯一现行页）｜ 实现 **`v1.2.0`** |
+| 运行规范 | `docs/WORK_MODE.md`（交互 v4.0）· `docs/HANDOFF_SPEC.md`（交接 v2.1）· `docs/PERMISSIONS.md`（权限矩阵） |
+| 人格规范 | `docs/PERSONA_SPEC.md` **v1.1**（kernel/traits/state/memory/冲突落库） |
 | 规范 | `docs/LAUNCHER_SPEC.md`（**现行 v1.1**，规范性，五职责：加载/组装/路由/执行/归档）+ `docs/MIDDLEWARE_LAUNCHER.md`（Annex） |
 | CI | 绿：14 天仿真 12 条断言 + 换模型冒烟 + 导出导入冒烟 + 加密端到端 + M2 检索测试 |
 | 代码 | `impl/m1/syspersona.py` + `impl/m4/vault/` + `impl/m2/embed/` + **`impl/launcher/`（L2 PoC，零依赖）** |
