@@ -149,7 +149,8 @@ ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode';
 - 本仓库**没有正式人格文件**，只有 `examples/persona.m1.json` 与记忆库 `整理/_sim-20261108/persona/*.json`；
 - 模拟件**不要改**：改了会让 `impl/m1` 一致性测试失去意义；
 - 待补：正式人格的存放位置、`vault` 加密接入、跨设备迁移时的 kernel 校验流程；
-- `permissions` 与 `episodes.memory_type` 是**本版新增**，`impl/` 尚未实现，属规范先行。
+- `permissions` 与 `episodes.memory_type` 规范先行；**自 v4.2.0 起 `impl/m1` 已实现**（`decide_capability` / `record_refusal`，自测 `impl/m1/test_policy.py`）。
+- 仍未实现：工具执行层的拦截与沙箱（`LAUNCHER_SPEC` §11），本次只有裁决与留痕。
 
 ## 9.1 正式人格的存放与迁移（规范先行，实现部分已就绪）
 
