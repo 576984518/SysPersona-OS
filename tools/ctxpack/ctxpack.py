@@ -445,8 +445,9 @@ def main():
     s.add_argument("--limit", type=int, default=5)
     s.add_argument("--sort", choices=["freq", "time"], default="freq")
     s.add_argument("--source", default=None)
-    s.add_argument("--hybrid", action="store_true",
-                   help="可选：叠上向量路（需要 index/ 与本地模型）；不可用时自动退回关键词")
+    s.add_argument("--hybrid", action="store_true", help="（已默认开启，保留兼容）")
+    s.add_argument("--no-vector", action="store_true",
+                   help="只走关键词：零依赖、不连模型、结果可预期")
 
     st = sub.add_parser("status")
     st.add_argument("path", default=".")
@@ -464,7 +465,9 @@ def main():
     elif args.cmd == "status":
         return cmd_status(args.path, state)
     else:
-        if getattr(args, 'hybrid', False):
+        # 默认走混合（记忆优先：宁慢勿漏），失败静默退回关键词。
+        # 要纯关键词（零依赖、可预期）用 --no-vector。
+        if not getattr(args, 'no_vector', False):
             # 可选增强：向量路只做加法，不改变"关键词永远可用"的底线。
             # 模型没起、索引缺失、依赖没装——一律静默退回关键词，绝不返回"没找到"了事。
             try:
