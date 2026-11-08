@@ -81,6 +81,7 @@ const EXTRACT = `(async () => {
     text: parts.join('\\n\\n---\\n\\n'),
     count: out.length,
     tail: out.slice(-${TAIL_N}).map((m) => m.body).join('\\n---\\n'),
+    tailMsgs: out.slice(-${TAIL_N}).map((m) => ({ role: m.role, body: m.body })),
   };
 })()`;
 
@@ -201,6 +202,14 @@ function writeConv(rec, id) {
   // 幂等：正文与已存文件一致就不动它（mtime 不变 → digest 会自动跳过，不重复归档）
   const cur = readHead(file);
   if (cur.old) {
+    // 防"残缺快照覆盖完整版"：页面重载时只渲染一部分，条数会从 402 掉到 151。
+    // 条数变少一律不写——宁可这轮空转，也不要把已有的完整归档换成残卷。
+    const m = /- 消息数：(\d+)/.exec(cur.old);
+    const oldCount = m ? parseInt(m[1], 10) : -1;
+    if (oldCount >= 0 && rec.count < oldCount) {
+      console.log(`[SKIP] ${id} 条数变少 ${oldCount} → ${rec.count}（疑似页面未渲染完，不覆盖）`);
+      return null;
+    }
     const cut = cur.old.indexOf('\n---\n');
     if (cut >= 0 && cur.old.slice(cut + 5) === body) return null;
   }
