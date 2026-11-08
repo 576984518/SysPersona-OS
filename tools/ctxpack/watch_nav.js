@@ -13,7 +13,7 @@
  * 不按 F5，DOM 不会变，轮询本来就是空转。
  */
 import { spawn } from 'node:child_process';
-import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,8 +23,9 @@ const OUT = process.argv[2] || join(HERE, 'sessions');
 const HB = process.argv[3] || join(process.env.LOCALAPPDATA || HERE, 'SysPersona', 'navwatch.heartbeat');
 const LOG = join(dirname(HB), 'navwatch.log');
 
-const DEBOUNCE_MS = 3000;
-let ws = null, capturing = false, pending = null, lastLog = 0;
+const DEBOUNCE_MS = 6000;   // 重载后 CDP target 会换，等页面稳定再抓
+let ws = null, capturing = false, pending = null, lastLog = 0, retries = 0;
+const STATE = join(process.env.LOCALAPPDATA || HERE, 'SysPersona', 'last.json');
 
 function log(msg) {
   const line = `${new Date().toLocaleString('sv-SE').slice(5, 19)}  ${msg}\n`;
@@ -47,12 +48,25 @@ function capture(reason) {
   if (capturing) { pending = reason; return; }
   capturing = true;
   log(`触发抓取（${reason}）`);
-  const node = process.execPath;
-  const p = spawn(node, [join(HERE, 'deepseek_sweep.js'), OUT, '--active'], { stdio: 'ignore' });
+  // 必须走 PowerShell 包装脚本：归档 + 重出 HANDOFF + 写 last.json 都在它里面。
+  // 直接调 deepseek_sweep.js 只会落盘 .md，后面三步全被绕过（2026-11-08 踩过）。
+  const ps = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  const wrapper = join(process.env.LOCALAPPDATA || HERE, 'SysPersona', 'sweep_live.ps1');
+  const p = spawn(ps, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapper], { stdio: 'ignore' });
   p.on('exit', (code) => {
     capturing = false;
     log(`抓取结束 code=${code}`);
     beat('idle');
+    // 重载瞬间 CDP target 会被替换，抓取可能拿到旧句柄而失败——自动重试最多两次
+    let st = '';
+    try { st = JSON.parse(readFileSync(STATE, 'utf8')).status || ''; } catch {}
+    if (st === 'FAIL' && retries < 2) {
+      retries += 1;
+      log(`抓取失败（${st}），第 ${retries} 次重试`);
+      setTimeout(() => capture('retry'), 6000);
+      return;
+    }
+    retries = 0;
     if (pending) { const r = pending; pending = null; setTimeout(() => capture(r + ':queued'), DEBOUNCE_MS); }
   });
 }
