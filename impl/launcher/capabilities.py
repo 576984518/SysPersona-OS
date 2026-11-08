@@ -12,6 +12,7 @@
 """
 from dataclasses import dataclass
 import os
+import re
 
 DEFAULT = "deny"
 MAX_BYTES = 64 * 1024
@@ -46,9 +47,17 @@ def decide(permissions, capability):
     return Decision(capability, d, "default")
 
 
+_WIN_ABS = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def _looks_absolute(p):
+    """跨平台绝对路径判断：POSIX 用 os.path.isabs，另加 Windows 盘符与 UNC。"""
+    return bool(p) and (os.path.isabs(p) or bool(_WIN_ABS.match(p)))
+
+
 def resolve_path(root, rel):
-    """把 rel 解析到 root 下；越界（含 ../ 与符号链接）返回 None。"""
-    if not rel or os.path.isabs(rel):
+    """把 rel 解析到 root 下；越界（含 ../、符号链接、异平台绝对路径）返回 None。"""
+    if _looks_absolute(rel):
         return None
     root_real = os.path.realpath(root)
     cand = os.path.realpath(os.path.join(root_real, rel))

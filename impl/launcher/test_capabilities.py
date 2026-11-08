@@ -32,6 +32,8 @@ def main():
     assert C.resolve_path(root, "ok.txt") is not None
     assert C.resolve_path(root, "../escape.txt") is None
     assert C.resolve_path(root, "C:\\Windows\\win.ini") is None
+    assert C.resolve_path(root, "/etc/passwd") is None
+    assert C.resolve_path(root, "..\\escape.txt") is None
     assert C.resolve_path(root, "") is None
 
     # 3. 执行：只读能力可用，越权/未实现不执行
