@@ -659,6 +659,10 @@ class OllamaModel:
         system = (
             f"你是{k['identity']['name']}。语气：{k['voice_baseline']['tone']}。"
             f"你的价值观：{'、'.join(k['values'])}。"
+            + ("交互：先回一句「收到」再开工，后台任务不要阻塞对话。"
+               if (k.get("interaction") or {}).get("ack_first") else "")
+            + ("边界：删记忆、改内核、换底座必须先问人；与内核冲突时要拒绝并记下冲突。"
+               if (k.get("constitution") or {}).get("right_to_refuse") else "")
             + ("\n".join(context) if context else "（暂无记忆）")
             + "\n回答简短，先给结论。"
         )
