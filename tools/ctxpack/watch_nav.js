@@ -98,6 +98,10 @@ async function attach() {
       if (url.includes('chat.deepseek.com') && !m.params.frame.parentId) schedule('frameNavigated');
     } else if (m.method === 'Page.loadEventFired') {
       schedule('loadEvent');
+    } else if (m.method === 'Page.navigatedWithinDocument') {
+      // 单页应用里点侧边栏切会话不会整页刷新，只发这个事件
+      const url = m.params?.url || '';
+      if (url.includes('chat.deepseek.com')) schedule('withinDocument');
     }
   };
   ws.onclose = () => { beat('detached'); log('CDP 断开，2 秒后重连'); setTimeout(attach, 2000); };
