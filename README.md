@@ -3,7 +3,7 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v3.1.0-blue)
+![version](https://img.shields.io/badge/version-v3.1.1-blue)
 
 > **本项目是「数字生命记忆架构」的概念验证（PoC）与参考方案，不是开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：`tools/ctxpack/` 与 `impl/` 都是参考实现，
@@ -18,7 +18,9 @@
 > 不抹平模型的天性，只约束它的边界。冲突只拦截、只记录，**绝不修改底层权重**。
 > → [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md)
 
-**当前 v3.1.0**（混合检索 + 增量索引）· 上一版 v3.0.0（从设计走到实现）· [变更记录](CHANGELOG.md) · [进化史](EVOLUTION.md)
+**当前 v3.1.1**（检索可选化 + 自测工具）· 上一版 v3.1.0（混合检索 + 增量索引）· [变更记录](CHANGELOG.md)
+
+📜 [进化史](EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
 
 ---
 
