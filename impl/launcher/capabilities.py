@@ -56,7 +56,15 @@ def _looks_absolute(p):
 
 
 def resolve_path(root, rel):
-    """把 rel 解析到 root 下；越界（含 ../、符号链接、异平台绝对路径）返回 None。"""
+    """把 rel 解析到 root 下；越界（含 ../、符号链接、异平台绝对路径）返回 None。
+
+    先把反斜杠统一成 "/"：调用方（模型/用户）可能写 Windows 风格路径，
+    而判断不该因为跑在 Windows 还是 Linux 而不同。POSIX 上 "..\\x" 只是普通文件名，
+    但在混合输入下它就是穿越——统一按分隔符处理，宁可拒错也不放行。
+    """
+    if not isinstance(rel, str):
+        return None
+    rel = rel.replace("\\", "/")
     if _looks_absolute(rel):
         return None
     root_real = os.path.realpath(root)
