@@ -244,7 +244,7 @@ def _mtime(p):
         return 0
 
 
-def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False):
+def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False, includes=None):
     changed, skipped = scan(root, st)
     if all_files:
         extra = [(os.path.join(ROOT, rel.replace("/", os.sep)), rel) for rel in skipped]
@@ -262,6 +262,15 @@ def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False):
         return 0
 
     parts = ["# 交接摘要", "", "> 由 `ctxpack.py digest` 生成 · %s" % time.strftime("%Y-%m-%d %H:%M"), ""]
+    for inc in (includes or []):
+        try:
+            body = _read(inc)
+        except OSError:
+            continue
+        parts.append("## 附：%s（全文）" % os.path.basename(inc))
+        parts.append("")
+        parts.append(body)
+        parts.append("")
     used, cut = 0, []
     for p, rel in changed:
         block = digest_text(p) or "（无可抽取内容）"
@@ -316,9 +325,42 @@ def cmd_status(root, st):
     return 0
 
 
+QSTOP = set("""的 了 是 要 在 有 和 与 或 什么 怎么 为什么 哪 哪个 多少 多久 吗 呢 吧 会 能 可以 叫
+一个 这个 那个 里 中 上 下 前 后 时 及 我 你 他 它 我们 你们 他们 现在 已经 还是 就是 一次 应该 时候""".split())
+
+
+def _terms(q):
+    """把查询拆成词元：先按标点，再按中文虚词切，去掉虚词与单字。"""
+    q = q.strip()
+    parts = re.split(r"[\s,，。！？?、;；:：\"'“”‘’（）()\[\]【】{}/\\|]+", q)
+    pat = "|".join(sorted(QSTOP, key=len, reverse=True))
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        for seg in re.split(pat, p) if pat else [p]:
+            seg = seg.strip()
+            if not seg or seg in QSTOP:
+                continue
+            if len(seg) == 1 and not seg.isdigit():
+                continue
+            out.append(seg)
+    # 去重保序
+    seen, uniq = set(), []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
 def search(q, limit=5, ctx=1, sort="freq", source=None):
     if not os.path.isdir(ARCHIVE):
         return []
+    terms = _terms(q)
+    multi = len(terms) > 1
+    if not terms:
+        terms = [q]
     hits = []
     for dirpath, dirnames, filenames in os.walk(ARCHIVE):
         dirnames.sort(reverse=True)
@@ -338,13 +380,36 @@ def search(q, limit=5, ctx=1, sort="freq", source=None):
                 lines = _read(p).splitlines()
             except OSError:
                 continue
-            idxs = [i for i, l in enumerate(lines) if q.lower() in l.lower()]
-            if not idxs:
+            if not multi:
+                idxs = [i for i, l in enumerate(lines) if q.lower() in l.lower()]
+                if not idxs:
+                    continue
+                i = idxs[0]
+                hits.append({"file": os.path.relpath(p, ROOT).replace("\\", "/"),
+                             "day": day, "source": src, "score": len(idxs),
+                             "snippet": "\n".join(lines[max(0, i - ctx):i + ctx + 1]).strip()})
                 continue
-            i = idxs[0]
-            snippet = "\n".join(lines[max(0, i - ctx):i + ctx + 1]).strip()
+            # 多词：按"命中的词长度之和"打分，长词更具体；返回前 3 个高分行，别只给一行
+            scored = []
+            for i, l in enumerate(lines):
+                low = l.lower()
+                matched = [t for t in terms if t.lower() in low]
+                if not matched:
+                    continue
+                s = sum(len(t) for t in matched) + 2 * len(matched)
+                scored.append((s, i))
+            if not scored:
+                continue
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            top = scored[:3]
+            best_s = top[0][0]
+            picks = []
+            for _, i in top:
+                seg = lines[max(0, i - ctx):i + ctx + 1]
+                picks.append("\n".join(seg).strip())
             hits.append({"file": os.path.relpath(p, ROOT).replace("\\", "/"),
-                         "day": day, "source": src, "score": len(idxs), "snippet": snippet})
+                         "day": day, "source": src, "score": best_s,
+                         "snippet": "\n…\n".join(picks)})
     if sort == "time":
         hits.sort(key=lambda x: (x["day"], x["file"]), reverse=True)
     else:
@@ -373,6 +438,7 @@ def main():
     d.add_argument("--dry-run", action="store_true")
     d.add_argument("--max-chars", type=int, default=0, help="摘要总字数上限，0 为不限")
     d.add_argument("--all", action="store_true", help="忽略水位，把所有文件重新出一份摘要")
+    d.add_argument("--include", action="append", default=None, help="额外并入摘要的文件（如 DECISIONS.md），可重复")
 
     s = sub.add_parser("search")
     s.add_argument("query")
@@ -392,7 +458,7 @@ def main():
         print("archived:", full)
         print("gz:      ", full + ".gz")
     elif args.cmd == "digest":
-        return cmd_digest(args.path, args.out, args.dry_run, state, args.max_chars, args.all)
+        return cmd_digest(args.path, args.out, args.dry_run, state, args.max_chars, args.all, args.include)
     elif args.cmd == "status":
         return cmd_status(args.path, state)
     else:
