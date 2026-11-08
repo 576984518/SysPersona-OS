@@ -17,6 +17,7 @@
 | 判断"该不该动文件 / 该不该开工" | `DECISIONS.md` 0.1、0.2、5.4 |
 | 写检索、索引、导出代码 | `tools/ctxpack/SKILL.md` + 本备忘 §二 |
 | 回答"上次做到哪 / 下一步" | `HANDOFF.md` + `BACKLOG.md` |
+| 加载 / 新增技能 | 本备忘 §十（注册位置与热加载规则） |
 
 
 ## 一、发版规则（2026-11-08 澄清）
@@ -166,3 +167,34 @@ $gh = 'D:\ProgramData\GitHub CLI\gh.exe'
 3. 提交前扫一眼 `status`，`sessions/`、`archive/`、`*.db`、`*.zip` 一律不许进仓库。
 4. 改了仓库文件，记得同步记忆库那边对应的 `备忘` / `DECISIONS`，否则下一次交接又读不到。
 5. 找不到 git / gh 时**先查本节**，不要再满世界搜（2026-11-08 已踩：误判机器上没有 git）。
+
+## 十、技能注册表（2026-11-08 建立）
+
+> 规则：**备忘是事实与教训，技能是"该怎么做"。** 技能只是入口，命令与细节仍以本备忘和 `docs/` 为准，
+> 所以**改了备忘里的命令/路径，必须同步技能**，否则技能会教出错的做法。
+
+**发现机制**（`@deepseek-ai/dsh-skill-filesystem`，本机实测生效）：
+
+| 优先级 | 位置 | 说明 |
+|---|---|---|
+| 100 | `<项目根>/.dsh/skills` | 项目根 = 最近的含 `.git` 的祖先目录 |
+| 200 | `<项目根>/.agents/skills` | 兼容 agents 约定 |
+| 400 | `C:\Users\Huang\.dsh\skills` | **本机实际注册位置** |
+| 500 | `~/.agents/skills` | 共享 |
+
+- 结构：`<name>/SKILL.md`；`name` 必须 kebab-case，`description` 必填；
+- 热加载：新增/改名/删目录或改 frontmatter 会触发 catalog 刷新，**不用重启**；改正文不需要缓存失效。
+
+**已注册（运行域 3 + 代码域 2）**
+
+| 技能 | 域 | 管什么 |
+|---|---|---|
+| `session-recall` | 运行 | 唤醒顺序、一级索引、zsearch 检索 |
+| `ctxguard-ops` | 运行 | 水位、450K 出包、剪贴板、定时任务核对 |
+| `capture-pipeline` | 运行 | F5 抓取、read_watch、导出、残缺快照防护 |
+| `release-ops` | 代码 | 发版判定、CHANGELOG、tag、Release、台账回写 |
+| `ctxpack-tools` | 代码 | 索引、检索、eval 回归、排障 |
+
+**与旧文件的关系**：记忆库 `SKILL.md`（session-recall 全文，16.6 KB）降级为**详版手册**；
+技能是**入口与流程**，两者冲突时以本备忘 + `docs/` 正文为准。仓库 `tools/ctxpack/SKILL.md` 是它的备份副本。
+
