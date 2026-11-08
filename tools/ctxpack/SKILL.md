@@ -5,7 +5,7 @@ description: 从 NAS 记忆库取回历史会话上下文（DSH 会话 + DeepSee
 
 # 会话检索（SysPersona 记忆外挂）
 
-记忆库在 `\\Nas-1900\文档\会话检索261107\`（映射盘 `Z:`）。
+记忆库在 `D:\4590-PC-文件\AI会话检索记录\`（映射盘 `Z:`）。
 放的是**记忆**，不是源码；源码在 `D:\文档\deepseek-harness\default-workspace`。
 
 ## 什么时候用
@@ -55,9 +55,9 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 ## 3. 检索
 
 ```powershell
-& $PY Z:\会话检索261107\ctxpack.py search 人格 --limit 5
-& $PY Z:\会话检索261107\ctxpack.py search J1900 --source 网页对话 --sort time
-& $PY Z:\会话检索261107\ctxpack.py status Z:\会话检索261107\sessions
+& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py search 人格 --limit 5
+& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py search J1900 --source 网页对话 --sort time
+& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py status D:\4590-PC-文件\AI会话检索记录\sessions
 ```
 
 `--source` 可选：`电脑会话`（另一台电脑的 DSH 工作区）、`网页对话`、`网页文章`。
@@ -69,8 +69,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 关键词路（IDF + 回声降权）与向量路（bge-m3）并行，RRF 融合，默认 K=100。
 
 ```powershell
-& $PY Z:\会话检索261107\zsearch.py "防止舔狗化的具体惩罚规则" --k 100
-& $PY Z:\会话检索261107\zsearch.py "960 显卡" --no-vector   # 模型没起时降级
+& $PY D:\4590-PC-文件\AI会话检索记录\zsearch.py "防止舔狗化的具体惩罚规则" --k 100
+& $PY D:\4590-PC-文件\AI会话检索记录\zsearch.py "960 显卡" --no-vector   # 模型没起时降级
 ```
 
 实测（20 题跨文件、去回声）：关键词 20/20、向量 19/20、合并 **20/20**。
@@ -79,8 +79,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 ### 3.2 自测：`eval.py`
 
 ```powershell
-& $PY Z:\会话检索261107\eval.py                  # 内置 20 题，报三条路 recall
-& $PY Z:\会话检索261107\eval.py --no-vector      # 只测关键词
+& $PY D:\4590-PC-文件\AI会话检索记录\eval.py                  # 内置 20 题，报三条路 recall
+& $PY D:\4590-PC-文件\AI会话检索记录\eval.py --no-vector      # 只测关键词
 ```
 
 改动检索相关代码后**必须跑一次**，别凭感觉。当前基线：关键词 20/20、向量 19/20、合并 20/20。
@@ -93,19 +93,45 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 抓取每分钟在写，全量重建跑完即旧。所以按文件 `sha256` 记账，只重嵌变过的文件：
 
 ```powershell
-& $PY Z:\会话检索261107\index_inc.py --dry-run   # 看要嵌多少块
-& $PY Z:\会话检索261107\index_inc.py             # 增量，通常几十秒
+& $PY D:\4590-PC-文件\AI会话检索记录\index_inc.py --dry-run   # 看要嵌多少块
+& $PY D:\4590-PC-文件\AI会话检索记录\index_inc.py             # 增量，通常几十秒
 ```
 
 产物在 `index\`：`vectors.npy` + `meta.jsonl` + `manifest.json`；写入原子替换，重建期间旧索引照常可查。
 索引是云端免费 bge-m3 建的、查询走本地量化版，属混合索引——实测损失可接受，别指望完全同分布。
 
+### 3.4 长检索怎么办：两条路，任选
+
+`--deep`（重排池 100）单次要 20–30 秒。**不要在前台干等**，下面两种都能做到"先回话、后出结果"。
+
+**A. 代理层后台作业（零代码，适合 AI / 脚本）**
+
+把检索丢进宿主的后台任务，自己继续对话，跑完再取。规则：**凡预计超过 3 秒的检索，一律后台化**。
+缺点是只有能开子进程的调用方能用，纯命令行用户没有这个能力。
+
+**B. 工具内 `--async`（适合任何调用方，包括裸 CLI）**
+
+```powershell
+# 立刻返回 job id（实测 0.3 秒）
+& $PY zsearch.py "拒绝权 内核" --k 3 --deep --async
+# 20261108-144151-3432
+
+# 过一会儿取结果；没跑完会打印 RUNNING
+& $PY zsearch.py --result 20261108-144151-3432
+```
+
+结果落在 `index\jobs\<id>.json`，跑完才出现——**看到 RUNNING 就说明还在跑，不是失败**。
+缺点是每次都会留一个子进程和一份结果文件，需要偶尔清理 `index\jobs\`。
+
+> **两种都保留，用哪个取决于使用者。** A 不占工具进程，B 不依赖宿主；
+> 唯一必须守住的底线是：**不能让"等结果"把对话卡死**。
+
 ## 4. 归档 + 出摘要
 
 ```powershell
 # 日常（推荐）：未变的不重新归档（按内容哈希幂等），摘要重写成全量版
-& $PY Z:\会话检索261107\ctxpack.py digest Z:\会话检索261107\sessions `
-     -o Z:\会话检索261107\HANDOFF.md --all --max-chars 14000
+& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py digest D:\4590-PC-文件\AI会话检索记录\sessions `
+     -o D:\4590-PC-文件\AI会话检索记录\HANDOFF.md --all --max-chars 14000
 ```
 
 - `--all`：忽略水位，把所有来源汇成一份总摘要（唤醒用）；
@@ -129,10 +155,10 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 
 ```powershell
 # 日常：最近 10 个，约 1 分钟
-& $NODE Z:\会话检索261107\deepseek_sweep.js Z:\会话检索261107\sessions\<今天>\网页对话
+& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js D:\4590-PC-文件\AI会话检索记录\sessions\<今天>\网页对话
 
 # 周期全量：--full；连续 15 个未变即提前收工
-& $NODE Z:\会话检索261107\deepseek_sweep.js <目录> --full --stop-after 15
+& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js <目录> --full --stop-after 15
 
 # 只看前几个 / 只看不变动
 ... --limit 3        ... --dry-run
@@ -144,7 +170,7 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 ### 实时模式（只盯当前会话）
 
 ```powershell
-& $NODE Z:\会话检索261107\deepseek_sweep.js <目录> --active
+& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js <目录> --active
 ```
 
 **不跳转**，只读当前标签的 DOM；只看**最近 4 条**尾部指纹，没变 0.3 秒退出，变了才临时撑高视口抓全量，抓完还原视口与滚动位置。
@@ -179,9 +205,9 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 ## 8. 导出本机 DSH 会话
 
 ```powershell
-& $NODE Z:\会话检索261107\dsh_export.js `
+& $NODE D:\4590-PC-文件\AI会话检索记录\dsh_export.js `
   "$env:USERPROFILE\.dsh\sessions\<工作区哈希>\<会话ID>" `
-  Z:\会话检索261107\sessions\<日期>\电脑会话\<日期>.md
+  D:\4590-PC-文件\AI会话检索记录\sessions\<日期>\电脑会话\<日期>.md
 ```
 
 原始文件在 `...\sessions\<工作区哈希>\<会话ID>\session.v4.jsonl.zstd`（多帧 zstd 的 JSONL）；

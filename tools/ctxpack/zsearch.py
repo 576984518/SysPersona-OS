@@ -18,6 +18,7 @@ import math
 import os
 import re
 import sys
+import subprocess
 import tempfile
 import time
 
@@ -63,12 +64,18 @@ def _cache_path():
     return os.path.join(tempfile.gettempdir(), 'zsearch_blocks_%08x.json' % h)
 
 
+_MEMO = {}
+
+
 def blocks():
-    """产出 (file, day, source, role, text)。缓存到磁盘，一次查询只读一遍盘。"""
+    """产出 (file, day, source, role, text)。进程内只读一遍，跨进程落盘缓存。"""
+    if 'bl' in _MEMO:
+        return _MEMO['bl']
     key = _cache_path()
     if os.path.exists(key):
         try:
             raw = json.load(io.open(key, encoding='utf-8'))
+            _MEMO['bl'] = raw
             return raw
         except Exception:
             pass
@@ -121,12 +128,15 @@ def blocks():
 
 
 def idf(bl):
+    if 'df' in _MEMO:
+        return _MEMO['df']
     df = {}
     for _, _, _, _, t in bl:
         for w in set(tokens(t)):
             df[w] = df.get(w, 0) + 1
     n = max(1, len(bl))
-    return {w: math.log(1 + n / (1 + c)) for w, c in df.items()}
+    _MEMO['df'] = {w: math.log(1 + n / (1 + c)) for w, c in df.items()}
+    return _MEMO['df']
 
 
 def norm(s):
@@ -188,7 +198,7 @@ def rerank_all(q, cands, topn=40):
         return None
 
 
-def merged(q, k=100, use_vector=True, use_rerank=True):
+def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40):
     """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
 
     返回 [{file, day, source, role, text, score, why}, ...]
@@ -222,25 +232,86 @@ def merged(q, k=100, use_vector=True, use_rerank=True):
                     'text': text, 'score': sc, 'why': ','.join(why[key])})
 
     if use_rerank and len(out) > 1:
-        rr = rerank_all(q, out)
+        rr = rerank_all(q, out, topn=rerank_top)
         if rr is not None:
             for it in rr:
                 it['why'] = (it.get('why', '') + ',rerank').strip(',')
             out = rr
     return out[:k]
 
+JOBS = os.path.join(ROOT, 'index', 'jobs')
+
+
+def _job_path(jid):
+    return os.path.join(JOBS, jid + '.json')
+
+
+def run_job(jid, q, k, deep):
+    try:
+        out = merged(q, k=k, rerank_top=(100 if deep else 40))
+        data = {'id': jid, 'q': q, 'done': True, 'at': time.time(), 'items': out}
+    except Exception as e:
+        data = {'id': jid, 'q': q, 'done': True, 'error': str(e), 'at': time.time()}
+    os.makedirs(JOBS, exist_ok=True)
+    io.open(_job_path(jid), 'w', encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
+
+
+def start_async(q, k, deep):
+    """立刻返回 job id；真正的检索在 detached 子进程里跑，结果写 index/jobs/<id>.json。"""
+    os.makedirs(JOBS, exist_ok=True)
+    jid = time.strftime('%Y%m%d-%H%M%S') + '-%d' % os.getpid()
+    cmd = [sys.executable, os.path.abspath(__file__), '--run-job', jid, q, '--k', str(k)]
+    if deep:
+        cmd.append('--deep')
+    flags = 0x00000008 if os.name == 'nt' else 0   # DETACHED_PROCESS
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=flags, close_fds=True)
+    return jid
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('query')
+    ap.add_argument('query', nargs='?')
     ap.add_argument('--k', type=int, default=100)
     ap.add_argument('--no-vector', action='store_true')
     ap.add_argument('--no-rerank', action='store_true')
+    ap.add_argument('--deep', action='store_true', help='重排池放到 100：更准但慢约 6 倍')
+    ap.add_argument('--async', dest='async_', action='store_true',
+                    help='立刻打印 job id，检索在 detached 子进程里跑')
+    ap.add_argument('--run-job', default=None, help=argparse.SUPPRESS)
+    ap.add_argument('--result', default=None, help='取某个 async 任务的结果（没跑完则打印 RUNNING）')
     a = ap.parse_args()
+
+    if a.run_job:
+        run_job(a.run_job, a.query, a.k, a.deep)
+        return 0
+
+    if a.result:
+        p = _job_path(a.result)
+        if not os.path.exists(p):
+            print('RUNNING %s' % a.result)
+            return 0
+        d = json.load(io.open(p, encoding='utf-8'))
+        if d.get('error'):
+            print('ERROR %s' % d['error'])
+            return 1
+        for it in d.get('items', []):
+            print('--- %.4f  [%s] %s  %s' % (it['score'], it['role'],
+                                             os.path.basename(it['file'])[:46], it['why']))
+            print(it['text'][:260].replace('\n', ' '))
+        print('\n[%d 条]' % len(d.get('items', [])))
+        return 0
+
+    if a.async_:
+        if not a.query:
+            ap.error('--async 需要查询词')
+        print(start_async(a.query, a.k, a.deep))
+        return 0
+
     t0 = time.time()
 
     bl = blocks()
-    out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank)
+    out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank,
+                 rerank_top=(100 if a.deep else 40))
     if not out:
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
         out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback'} for b in recent]
