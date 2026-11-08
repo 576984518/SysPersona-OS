@@ -10,6 +10,19 @@
 
 ---
 
+## 2026-11-08 — 人格规范补全：permissions / state / memory_type / 冲突落库（不发版）
+
+**为什么不动版本**：补齐的是规范定义，`impl/` 尚未实现，不影响任何已通过的合规判定。
+
+- `docs/PERSONA_SPEC.md` **v1.1**：
+  - 补 **`permissions`** 定义（allow / ask / deny，`proc.exec` 默认 deny，单写者）；
+  - 补 **`state.json` 字段表**（情绪四维 ±1、`updated_at`，与 `impl/m1` 实际结构一致）；
+  - 补 **`memory.db` 结构**与 `examples/schema.sql` 的对应；
+  - 新增 **`episodes.memory_type`**（`episode` / `persona_conflict` / `action`），检索默认排除 `action`；
+  - 新增 **§5 冲突落库**：拒绝时追加 `episodes` 行（role=system、importance=0.9）+ `audit_log`，
+    经 `episodes_fts` 可被任何检索工具查到——拒绝权从"哲学"变成"可验证"。
+- `docs/PROJECT_MEMO.md` §十 增「技能 ↔ 文档同步责任」表：技能里的命令必须能在正文找到出处。
+
 ## 2026-11-08 — 冲突收敛：一律以最新版为准（不发版）
 
 **为什么不动版本**：只消除文档内部矛盾，没有新增能力、不改变合规判定，按 `RELEASING.md` 只记在这里。

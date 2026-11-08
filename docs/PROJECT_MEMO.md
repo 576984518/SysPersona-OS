@@ -198,3 +198,14 @@ $gh = 'D:\ProgramData\GitHub CLI\gh.exe'
 **与旧文件的关系**：记忆库 `SKILL.md`（session-recall 全文，16.6 KB）降级为**详版手册**；
 技能是**入口与流程**，两者冲突时以本备忘 + `docs/` 正文为准。仓库 `tools/ctxpack/SKILL.md` 是它的备份副本。
 
+**同步责任（技能 ↔ 正文）**
+
+| 技能 | 依赖的正文 | 正文改了必须检查 |
+|---|---|---|
+| `session-recall` | `HANDOFF_SPEC.md`、`index_l1.py` 用法 | 唤醒顺序、命令块 |
+| `ctxguard-ops` | `HANDOFF_SPEC.md`、本备忘 §四 | 水位阈值、任务名 |
+| `capture-pipeline` | 本备忘 §二（坑表）、`tools/ctxpack/` | 抓取命令、`---` 分隔线规则 |
+| `release-ops` | `RELEASING.md`、本备忘 §一/§九 | 发版判定、git/gh 路径、四段式 |
+| `ctxpack-tools` | `tools/ctxpack/SKILL.md` | 参数默认值（K=100）、回归基线 |
+
+> 规矩：**技能里的命令块必须能在正文里找到出处**；找不到出处 = 技能在裸奔，补正文或删命令。
