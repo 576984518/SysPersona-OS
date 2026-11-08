@@ -147,6 +147,53 @@ def parse(path):
     return out
 
 
+def bigrams(text):
+    """取字面二元组：中文按滑窗切，英文/数字整词。用来衡量"说法是否跨会话复现"。"""
+    s = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", " ", text)
+    out = set()
+    for seg in s.split():
+        if not seg:
+            continue
+        if re.match(r"^[A-Za-z0-9]", seg):
+            if len(seg) >= 3:
+                out.add(seg.lower())
+        else:
+            for i in range(len(seg) - 1):
+                g = seg[i:i + 2]
+                if g[0] in "的了是在有和与或就都也还很太我你他它这那什么怎么" and g[1] in "的了是在有和与或":
+                    continue
+                out.add(g)
+    return out
+
+
+def build_df(files):
+    """每个二元组出现在多少个会话里（跨会话复现率的底座）。"""
+    df = {}
+    for p in files:
+        try:
+            t = io.open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for g in bigrams(t):
+            df[g] = df.get(g, 0) + 1
+    return df
+
+
+def score_recurrence(text, df):
+    """复现率：这条消息里有多少说法是"在别的会话也出现过"的。
+    只出现一次的当噪声，铺满全库的当口头禅，两头都不算。"""
+    bs = bigrams(text)
+    if not bs:
+        return 0, ""
+    shared = [g for g in bs if 2 <= df.get(g, 0) <= 30]
+    ratio = len(shared) / float(len(bs))
+    # 短消息只有一两个二元组，命中就是 100%，没有信息量——按长度打折
+    ratio *= min(1.0, len(bs) / 12.0)
+    s = int(round(100 * ratio))
+    why = "复现率%d%%(%d/%d 个说法跨会话出现)" % (s, len(shared), len(bs))
+    return clip(s, 0, 100), why
+
+
 def build():
     if os.path.exists(DB):
         os.remove(DB)
@@ -154,12 +201,17 @@ def build():
     con.execute("""CREATE TABLE memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session TEXT, day TEXT, source TEXT, role TEXT,
-        user_w INTEGER, persona_w INTEGER, emotion_w INTEGER, total REAL,
-        bucket TEXT, text TEXT, why TEXT, created REAL)""")
+        user_w INTEGER, persona_w INTEGER, emotion_w INTEGER, recurrence INTEGER,
+        total REAL, bucket TEXT, text TEXT, why TEXT, created REAL)""")
     con.execute("CREATE INDEX idx_total ON memory(total DESC)")
+    con.execute("CREATE INDEX idx_rec ON memory(recurrence DESC)")
 
     files = [p for p in glob.glob(os.path.join(ROOT, "sessions", "**", "*.md"), recursive=True)
              if "HANDOFF" not in os.path.basename(p).upper()]
+    print("建复现率索引…（%d 个会话）" % len(files))
+    df = build_df(files)
+    print("二元组词表 %d，其中跨会话出现过 2 次以上的 %d" %
+          (len(df), sum(1 for v in df.values() if v >= 2)))
     n = 0
     for p in files:
         rel = os.path.relpath(p, ROOT).replace("\\", "/")
@@ -170,13 +222,14 @@ def build():
             u, wu = score_user(role, clean)
             pe, wp = score_persona(role, clean)
             e, we = score_emotion(role, clean)
-            total = round(W_USER * u + W_PERSONA * pe + W_EMO * e, 1)
+            rc, wr = score_recurrence(clean, df)
+            total = round(0.35 * u + 0.28 * pe + 0.17 * e + 0.20 * rc, 1)
             if role == "助手":
                 total = round(total * 0.75, 1)   # 助手的解释是派生信息，不该压过用户原话
-            con.execute("INSERT INTO memory (session,day,source,role,user_w,persona_w,emotion_w,total,bucket,text,why,created)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (name, day, src, role, u, pe, e, total, bucket(total),
-                         clean[:600], "user:" + wu + " | persona:" + wp + " | emo:" + we, time.time()))
+            con.execute("INSERT INTO memory (session,day,source,role,user_w,persona_w,emotion_w,recurrence,total,bucket,text,why,created)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (name, day, src, role, u, pe, e, rc, total, bucket(total),
+                         clean[:600], "user:" + wu + " | persona:" + wp + " | emo:" + we + " | " + wr, time.time()))
             n += 1
     con.commit()
     recalibrate(con)
