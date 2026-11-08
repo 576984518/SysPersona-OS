@@ -41,6 +41,9 @@ jobs:
       - name: Launcher L2 冒烟（零依赖）
         run: python impl/launcher/smoke.py
 
+      - name: 能力面裁决与 fs.read 沙箱
+        run: python impl/launcher/test_capabilities.py
+
       - name: M2 向量检索（哈希基线，零依赖）
         run: python -m unittest discover -s impl/m2/tests -v
 

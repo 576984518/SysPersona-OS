@@ -10,6 +10,19 @@
 
 ---
 
+## 2026-11-08 — 能力面拦截的最小实现（不发版）
+
+**为什么不动版本**：模块与测试到位，但**尚未接入 `chat()` 的工具调用循环**（provider 还不会返回
+`tool_calls`），运行时行为零变化，故不发版。
+
+- 新增 `impl/launcher/capabilities.py`：
+  - `decide(permissions, cap)` → allow / ask / deny（deny 优先，无权限表按 deny）；
+  - `resolve_path(root, rel)`：realpath 比对，`..` 与符号链接都拦；
+  - `execute(permissions, root, cap, args)`：**只实现 `fs.read`**（≤64 KB），其余 `not-implemented`；
+    `ask` / `deny` 一律不执行。
+- 新增 `impl/launcher/test_capabilities.py`：11 条断言（裁决优先级、路径穿越、超限、未实现、拒执行）。
+- CI 增加该自测步骤。
+
 ## v4.2.0 — 2026-11-08：能力面与拒绝落库（规范落到代码）
 
 **为什么算一个版本**：新增了可运行的能力（`decide_capability` / `record_refusal` / `episodes.memory_type`），
