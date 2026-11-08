@@ -1,8 +1,8 @@
-﻿# 项目备忘（只和本仓库有关）
+# 项目备忘（只和本仓库有关）
 
 > 这份不许并进全局交接包。全局的人格 / 记忆 / 交互规则在记忆库的 `DECISIONS.md`；
 > 这里只记**项目事务**：发版规矩、今天踩的坑、常用命令、定时任务、当前状态。
-> 最后更新：2026-11-08 16:0x
+> 最后更新：2026-11-08 16:55
 
 ## 〇、动手前先查表（2026-11-08 定）
 
@@ -11,6 +11,7 @@
 | 要做的事 | 先读 |
 |---|---|
 | 发版 / 改版本号 / 打 tag | 本备忘 §一 + `CHANGELOG.md` 顶部两条规则 |
+| **GitHub 操作（发版 / tag / Release / 改仓库文件 / 查提交）** | **本备忘 §九 + `docs/RELEASING.md` + §一** |
 | 改 PowerShell 脚本 / 计划任务 | 本备忘 §二（BOM、路径）+ §四（现有任务） |
 | 出包 / 改交接格式 / 改索引 | 记忆库 `续接\交接文件规范-v2.md` + `DECISIONS.md` 0.1 |
 | 判断"该不该动文件 / 该不该开工" | `DECISIONS.md` 0.1、0.2、5.4 |
@@ -36,6 +37,7 @@
 | 检索块缓存不失效 | 新抓的会话检索不到，旧缓存永远命中 | 缓存键带「文件数 + 总字节 + 最新 mtime」签名 |
 | 导出器没有消息分隔线 | 电脑会话在索引里是"文档块"，角色全丢 | 消息之间写 `---`，索引与检索都靠它切块 |
 | 页面未渲染完就归档 | 消息数从 402 掉到 151，残缺快照会覆盖完整版 | 写入前比对条数，**变少一律不写**；空壳页面不算新内容 |
+| git / gh 不在 PATH | 满世界找 git.exe，误判"机器上没有 git" | 路径固定写在 §九，先查备忘再动手 |
 
 ## 三、常用命令
 
@@ -67,10 +69,12 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 ## 五、当前状态
 
-- 版本：**v3.1.9**（未发新版）；`main` 已推送。
+- 版本：**v3.1.9**（未发新版）；`main` 已推送，HEAD `8e723b0`。
 - 工具：`ctxguard.py` / `index_l1.py` / `read_watch.py` / `zsearch.py` / `index_inc.py` / `eval.py` 均在 `tools/ctxpack/`。
 - 待办：无阻塞项；B8–B11f 已关账，B24「满 100」定为每跨 100K 提醒一次。
 - 交接文件：v2.1（分锁定段 / 自动段 / 固定格式），规格见记忆库 `续接\交接文件规范-v2.md`。
+- **已知偏差**：记忆库台账 / 检索最新只到 **v3.1.3**；实际已发到 **v3.1.9**（v3.1.4 修 dry-run 假信号、
+  v3.1.5 工具可移植、v3.1.6 本地重排、v3.1.7 `--async`、v3.1.8 F5 触发、v3.1.9 链路修补）。**待补台账。**
 
 ## 六、你指出过的问题（按时间，一条都不删）
 
@@ -90,6 +94,7 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 | 10 | 写备忘 / 出交接还要先问一句 | **写备忘、写交接、出包属自主执行**，直接写，不等确认；人只在出错时指出 | 本备忘 §〇、`DECISIONS.md` 5.4 |
 | 11 | 每次读取只读一次，读完就停 | **起点 = 你说话的那一刻，读完立刻以新时间点续挂**，始终跟到最新 | `read_watch.py --since`、`SKILL.md` |
 | 12 | 小事也要先问一句才做 | **耗时短、不会造成严重后果的，自己判断自己做**，不问；出了事再纠正 | 本备忘 §六、`DECISIONS.md` 5.4 |
+| 13 | GitHub 工具路径没进备忘，每次都现找 | **GitHub 相关先读 §九**；不够再回检索翻以前做法，然后把新发现补回 §九 | 本备忘 §九 |
 
 ## 七、待做：记忆库根目录瘦身（2026-11-08 记，未执行）
 
@@ -118,3 +123,45 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 - 计划任务：`SysPersona-Repo-Backup`，每天 23:30（记忆库备份 23:00 之后）。
 - 校验：`git bundle verify 备份\xxx.bundle`；恢复用 `git clone 备份\xxx.bundle 新目录`。
 
+## 九、GitHub 工具链与提交动作（2026-11-08 补记）
+
+> **凡是 GitHub 相关的事——发版、打 tag、建/改 Release、改仓库文件、查提交——先读本节 +
+> `docs/RELEASING.md` + 本备忘 §一；本节不够，再回检索翻以前的做法，翻到新东西就补回本节。**
+
+| 项 | 值 |
+|---|---|
+| GitHub CLI | `D:\ProgramData\GitHub CLI\gh.exe`（v2.103.3，**不在 PATH**） |
+| Git | `D:\ProgramData\MinGit\cmd\git.exe`（2.56.0，**不在 PATH**） |
+| 认证 | `gh auth status` → 账号 `576984518`（keyring，scope: gist / read:org / repo） |
+| git 凭据 | `credential.helper = manager`（Git Credential Manager，走系统登录态） |
+| 工作副本 | `D:\文档\SysPersona-OS`（`main` 与 `origin/main` 同步；远端是权威） |
+| 远端 | `https://github.com/576984518/SysPersona-OS.git` |
+
+提交文档（本备忘 / CHANGELOG / docs 下任何 md）：
+
+```powershell
+$git = 'D:\ProgramData\MinGit\cmd\git.exe'
+$R   = 'D:\文档\SysPersona-OS'
+
+& $git -C $R status --short          # 先看改了什么、有没有夹带私密文件
+& $git -C $R add -A
+& $git -C $R commit -m "docs(memo): …"
+& $git -C $R push origin main
+```
+
+查 / 发版：
+
+```powershell
+$gh = 'D:\ProgramData\GitHub CLI\gh.exe'
+& $gh release list  --repo 576984518/SysPersona-OS --limit 5     # 看最新版本
+& $gh release view  v3.1.9 --repo 576984518/SysPersona-OS        # 看正文全文
+& $gh api repos/576984518/SysPersona-OS/commits --jq '.[0:3][]|.sha[0:7]+" "+.commit.message'
+```
+
+规矩：
+
+1. **文档修订只提交，不发版**（§一）；要发版先过 `docs/RELEASING.md` §七 自检六问。
+2. **不建 Release 就不要打 tag**；打错了按 §一 删 tag，并在 CHANGELOG 记「撤销」。
+3. 提交前扫一眼 `status`，`sessions/`、`archive/`、`*.db`、`*.zip` 一律不许进仓库。
+4. 改了仓库文件，记得同步记忆库那边对应的 `备忘` / `DECISIONS`，否则下一次交接又读不到。
+5. 找不到 git / gh 时**先查本节**，不要再满世界搜（2026-11-08 已踩：误判机器上没有 git）。
