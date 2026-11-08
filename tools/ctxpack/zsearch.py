@@ -18,6 +18,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -56,9 +57,15 @@ def tokens(q):
     return [t for t in dict.fromkeys(out) if t not in STOP]
 
 
+def _cache_path():
+    """缓存必须按库区分：以前固定叫 _blocks_cache.json，换一个记忆库就会读到上一个库的块。"""
+    h = hash((os.path.abspath(ROOT), os.path.abspath(ARCHIVE))) & 0xFFFFFFFF
+    return os.path.join(tempfile.gettempdir(), 'zsearch_blocks_%08x.json' % h)
+
+
 def blocks():
-    """产出 (file, day, source, role, text)。缓存到内存，一次查询只读一遍盘。"""
-    key = '_blocks_cache.json'
+    """产出 (file, day, source, role, text)。缓存到磁盘，一次查询只读一遍盘。"""
+    key = _cache_path()
     if os.path.exists(key):
         try:
             raw = json.load(io.open(key, encoding='utf-8'))
@@ -166,7 +173,22 @@ def vector_rank(q, topn=60):
         return []
 
 
-def merged(q, k=100, use_vector=True):
+def rerank_all(q, cands, topn=40):
+    """用本地 cross-encoder 重排候选。失败返回 None，调用方保持 RRF 顺序——绝不因为重排挂了就丢结果。"""
+    try:
+        sys.path.insert(0, ROOT)
+        import vs
+        docs = [c['text'][:1200] for c in cands[:topn]]
+        res = vs.post('/rerank', {'model': 'bge-reranker-v2-m3', 'query': q, 'documents': docs}, timeout=180)
+        sc = {r['index']: r['relevance_score'] for r in res['results']}
+        order = sorted(range(len(docs)), key=lambda i: -sc.get(i, -1e9))
+        return [cands[i] for i in order] + list(cands[topn:])
+    except Exception as e:
+        print('[warn] 重排不可用（保持 RRF 顺序）：%s' % e, file=sys.stderr)
+        return None
+
+
+def merged(q, k=100, use_vector=True, use_rerank=True):
     """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
 
     返回 [{file, day, source, role, text, score, why}, ...]
@@ -198,7 +220,14 @@ def merged(q, k=100, use_vector=True):
             f, day, src, role, text = base
         out.append({'file': f, 'day': day, 'source': src, 'role': role,
                     'text': text, 'score': sc, 'why': ','.join(why[key])})
-    return out
+
+    if use_rerank and len(out) > 1:
+        rr = rerank_all(q, out)
+        if rr is not None:
+            for it in rr:
+                it['why'] = (it.get('why', '') + ',rerank').strip(',')
+            out = rr
+    return out[:k]
 
 
 def main():
@@ -206,41 +235,19 @@ def main():
     ap.add_argument('query')
     ap.add_argument('--k', type=int, default=100)
     ap.add_argument('--no-vector', action='store_true')
+    ap.add_argument('--no-rerank', action='store_true')
     a = ap.parse_args()
     t0 = time.time()
 
     bl = blocks()
-    df = idf(bl)
-    kr = keyword_rank(a.query, bl, df)
-    vr = [] if a.no_vector else vector_rank(a.query)
-
-    fused, why = {}, {}
-    for rank, (i, s) in enumerate(kr):
-        key = ('b', i)
-        fused[key] = fused.get(key, 0) + 1.0 / (60 + rank)
-        why.setdefault(key, []).append('kw#%d(%.1f)' % (rank + 1, s))
-    for rank, (f, r, t, sc) in enumerate(vr):
-        key = ('v', f, r, t[:40])
-        fused[key] = fused.get(key, 0) + 1.0 / (60 + rank)
-        why.setdefault(key, []).append('vec#%d(%.3f)' % (rank + 1, sc))
-
-    out = []
-    for key, sc in sorted(fused.items(), key=lambda x: -x[1])[:a.k]:
-        if key[0] == 'b':
-            f, day, src, role, text = bl[key[1]]
-            out.append((f, role, text, sc, ','.join(why[key])))
-        else:
-            _, f, r, t = key
-            full = next((b[4] for b in bl if b[0] == f and b[3] == r and b[4][:40] == t), t)
-            out.append((f, r, full, sc, ','.join(why[key])))
-
+    out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank)
     if not out:
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
-        out = [(b[0], b[3], b[4], 0.0, 'timeline-fallback') for b in recent]
+        out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback'} for b in recent]
 
-    for f, role, text, sc, w in out:
-        print('--- %.4f  [%s] %s  %s' % (sc, role, os.path.basename(f)[:46], w))
-        print(text[:260].replace('\n', ' '))
+    for it in out:
+        print('--- %.4f  [%s] %s  %s' % (it['score'], it['role'], os.path.basename(it['file'])[:46], it['why']))
+        print(it['text'][:260].replace('\n', ' '))
     print('\n[%d 条 / %.2fs]' % (len(out), time.time() - t0))
 
 
