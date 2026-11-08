@@ -908,7 +908,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [项目备忘](docs/PROJECT_MEMO.md)：发版规则、踩过的坑、常用命令、定时任务、当前状态（只和本仓库有关）。
 - [状态机](docs/STATE-MACHINE.md)：生命周期、人格权重演化、唤醒时序（Mermaid）。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
-- [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
+- [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 **C1/C2/C3**，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [架构哲学](docs/PHILOSOPHY.md)：告别强制洗脑，拥抱分身投影——最高层约定，与任何规范冲突时以它为准。
 - [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引 / **交接包 v2.1 / 一级索引 / 读索引后台重试**（2026-11-08 更新）。
