@@ -151,6 +151,43 @@ ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode';
 - 待补：正式人格的存放位置、`vault` 加密接入、跨设备迁移时的 kernel 校验流程；
 - `permissions` 与 `episodes.memory_type` 是**本版新增**，`impl/` 尚未实现，属规范先行。
 
+## 9.1 正式人格的存放与迁移（规范先行，实现部分已就绪）
+
+> 目的：解决"正式人格放哪、怎么加密、怎么搬家"——这三件事此前只有 `impl/` 的代码，没有规范。
+
+### 存放
+
+```
+<personaRoot>/                 默认 %LOCALAPPDATA%\SysPersona\persona（可配置）
+├─ kernel.json                 人改（P1）
+├─ traits.json                 结算点写
+├─ state.json                  运行时实时写
+├─ memory.db                   记忆（SQLite，WAL）
+└─ snapshots/                  pre_consolidate / pre_migrate 快照
+```
+
+- **禁止**把 `memory.db` 放在 SMB / NFS / OneDrive：SQLite 锁在那里不成立，会静默损坏；
+- 仓库与记忆库里都**不放正式人格**，只放示例与模拟件。
+
+### 加密（静态封存）
+
+- 静止时是单个 `*.vault`（`seal` 封装，`unlock` 解封）；
+- 只做**静态封存**，不是每轮加密落盘（KDF 实测 1.6 s，聊天会被 I/O 拖死）；
+- 口令丢失只能靠 24 词恢复短语；两者都丢 = 人格丢失，这是设计上的取舍，不设后门。
+
+### 迁移
+
+1. `export` 导出迁移包 → `verify` 校验 manifest 与逐文件 sha256；
+2. 目标机 `import` → 校验 `persona_uuid` 与 `kernel` 内容哈希；
+3. **kernel 在迁移中变更必须显式批准**（`seal --approve-kernel-change`），否则拒绝加载；
+4. 迁移完成后 `snapshots/pre_migrate` 保留至少一份。
+
+### 边界
+
+- 人格**不可合并**：迁移是整体搬运，不是合并（`PHILOSOPHY` §5）；
+- 多设备共享走 API，不共享文件（`memory.db` 的锁问题）；
+- 本节的 `personaRoot` 默认值尚未写进 `impl/` 的默认参数，属**规范先行**。
+
 ## 10. 修订记录
 
 | 日期 | 版本 | 改了什么 | 为什么 |
