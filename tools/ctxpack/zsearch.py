@@ -17,6 +17,7 @@ import io
 import json
 import math
 import os
+import hashlib
 import re
 import sys
 import subprocess
@@ -24,6 +25,13 @@ import tempfile
 import time
 
 import numpy as np
+
+# 输出编码：GBK 控制台遇到 emoji（🔧）会抛 UnicodeEncodeError，统一转 UTF-8。
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 def _find_root():
     """记忆库根目录：优先环境变量 SYSPERSONA_ROOT，否则向上找含 archive/ 的目录。"""
@@ -290,8 +298,32 @@ def recent_boost(out, bl, recent_days):
     return out
 
 
+_TOOL_RE = re.compile(r'🔧\s*`?(edit|read|write|pwsh|job_output|glob|grep|present|task)`?\s*\{')
+
+
+def _norm(text):
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _is_tool_noise(text):
+    """工具调用流水（🔧 edit {...} / 🔧 pwsh {...}）不是正文，默认丢弃。"""
+    return bool(_TOOL_RE.search(text))
+
+
+def _dedupe(rows):
+    """同一段正文在多个快照（接续包互相嵌套）里重复出现时只留一条。"""
+    seen, out = set(), []
+    for it in rows:
+        key = hashlib.sha1(_norm(it['text'])[:600].encode('utf-8')).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
 def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=False,
-           recent_days=0, device=None, model=None):
+           keep_tools=False, recent_days=0, device=None, model=None):
     """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
 
     返回 [{file, day, source, role, text, device, model, score, why}, ...]
@@ -328,6 +360,11 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
         out.append({'file': f, 'day': day, 'source': src, 'role': role,
                     'text': text, 'device': dev, 'model': mod,
                     'score': sc, 'why': ','.join(why[key])})
+
+    # 先剔噪声与重复，再重排：省算力，也别让副本把 Top-K 稀释。
+    if not keep_tools:
+        out = [it for it in out if not _is_tool_noise(it['text'])]
+    out = _dedupe(out)
 
     # 分身字段过滤：放在重排之前，省得为一个注定被滤掉的块去调 cross-encoder。
     if device or model:
@@ -367,7 +404,7 @@ def run_job(jid, q, k, deep, **kw):
     io.open(_job_path(jid), 'w', encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
 
 
-def start_async(q, k, deep, recent=0, device=None, model=None):
+def start_async(q, k, deep, recent=0, device=None, model=None, keep_tools=False):
     """立刻返回 job id；真正的检索在 detached 子进程里跑，结果写 index/jobs/<id>.json。"""
     os.makedirs(JOBS, exist_ok=True)
     jid = time.strftime('%Y%m%d-%H%M%S') + '-%d' % os.getpid()
@@ -380,6 +417,8 @@ def start_async(q, k, deep, recent=0, device=None, model=None):
         cmd += ['--device', device]
     if model:
         cmd += ['--model', model]
+    if keep_tools:
+        cmd.append('--keep-tools')
     flags = 0x00000008 if os.name == 'nt' else 0   # DETACHED_PROCESS
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
@@ -392,6 +431,8 @@ def main():
     ap.add_argument('--no-vector', action='store_true')
     ap.add_argument('--no-rerank', action='store_true')
     ap.add_argument('--deep', action='store_true', help='重排池放到 100：更准但慢约 6 倍')
+    ap.add_argument('--keep-tools', action='store_true', dest='keep_tools',
+                    help='保留工具调用流水（🔧 edit {...}）；默认过滤')
     ap.add_argument('--weighted', action='store_true', help='叠加三维权重（用户/决定词抬高，捧场话术压低）')
     ap.add_argument('--recent', type=int, default=0, metavar='N',
                     help='最近 N 天优先：只加分、不减分，默认 0=关')
@@ -428,14 +469,15 @@ def main():
     if a.async_:
         if not a.query:
             ap.error('--async 需要查询词')
-        print(start_async(a.query, a.k, a.deep, a.recent, a.device, a.model))
+        print(start_async(a.query, a.k, a.deep, a.recent, a.device, a.model, a.keep_tools))
         return 0
 
     t0 = time.time()
 
     bl = blocks()
     out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank,
-                 rerank_top=(100 if a.deep else 40), weighted=a.weighted, **kw)
+                 rerank_top=(100 if a.deep else 40), weighted=a.weighted,
+                 keep_tools=a.keep_tools, **kw)
     if not out and not (a.device or a.model):
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
         out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback'} for b in recent]
