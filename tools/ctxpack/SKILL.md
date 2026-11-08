@@ -42,7 +42,7 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 
 ```
 会话检索261107\
-├─ ctxpack.py  dsh_export.js  webwatch.js
+├─ ctxpack.py  zsearch.py  index_inc.py  dsh_export.js  webwatch.js
 ├─ webdump.js（实时抓）  deepseek_sweep.js（批量抓）
 ├─ SKILL.md  README.md  HANDOFF.md  state.json
 ├─ sessions\<日期>\<来源>\      ← 可读正文（来源 = 电脑会话 / 网页对话 / 网页文章）
@@ -61,6 +61,31 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 
 `--source` 可选：`电脑会话`（另一台电脑的 DSH 工作区）、`网页对话`、`网页文章`。
 输出只给**命中片段**，把这几行贴进上下文即可，不要整篇读。
+
+### 3.1 混合检索（首选）：`zsearch.py`
+
+`ctxpack.py search` 是**子串**检索——你知道要查哪个词才行。整句提问请用 `zsearch.py`：
+关键词路（IDF + 回声降权）与向量路（bge-m3）并行，RRF 融合，默认 K=100。
+
+```powershell
+& $PY Z:\会话检索261107\zsearch.py "防止舔狗化的具体惩罚规则" --k 100
+& $PY Z:\会话检索261107\zsearch.py "960 显卡" --no-vector   # 模型没起时降级
+```
+
+实测（20 题跨文件、去回声）：关键词 20/20、向量 19/20、合并 **20/20**。
+默认 K 必须是 **100**——「备份保留几份」这类题的正确块在 78–85 名，K=30 会漏。
+
+### 3.2 索引维护：`index_inc.py`
+
+抓取每分钟在写，全量重建跑完即旧。所以按文件 `sha256` 记账，只重嵌变过的文件：
+
+```powershell
+& $PY Z:\会话检索261107\index_inc.py --dry-run   # 看要嵌多少块
+& $PY Z:\会话检索261107\index_inc.py             # 增量，通常几十秒
+```
+
+产物在 `index\`：`vectors.npy` + `meta.jsonl` + `manifest.json`；写入原子替换，重建期间旧索引照常可查。
+索引是云端免费 bge-m3 建的、查询走本地量化版，属混合索引——实测损失可接受，别指望完全同分布。
 
 ## 4. 归档 + 出摘要
 

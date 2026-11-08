@@ -3,15 +3,23 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v3.0.0-blue)
+![version](https://img.shields.io/badge/version-v3.1.0-blue)
 
 > **本项目是一个「数字生命记忆架构」的概念验证（PoC）与参考方案，而不是一个跨平台、开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：我们无法预知你的运行环境（Windows / macOS / 有无 Node / 网络是否可达），
 > 所以 `tools/ctxpack/` 里的脚本是本次验证的**参考实现**（Reference Implementation）——它证明这条路能跑通，
 > 不承诺通用软件分发。开发者可以拿走这里的架构，用任意语言在自己的环境里二次实现。
 
+> **v3.1.0 — 检索能换个说法了。** 关键词与向量两路并行、RRF 合并（20 题跨文件 20/20）；
+> 索引改成按 sha256 记账的增量，跟得上每分钟一次的抓取。详见 [CHANGELOG](CHANGELOG.md) · [tools/ctxpack](tools/ctxpack/README.md)。
+>
 > **v3.0.0 — 从设计走到实现。** 此前 0.1–2.3 交付的是规范与推演；这一版首次把机制真正跑起来：
 > 上下文提取归档、网页会话抓取、增量巡检。证据、边界与不兼容变更见 [CHANGELOG](CHANGELOG.md)。
+
+> **最高哲学（2026-11-08 定稿）：告别强制洗脑，拥抱分身投影。**
+> 同一份人格宪法挂到不同底座（DeepSeek / Kimi / 本地 Llama）上，显化出不同的分身；
+> 我们不抹平模型的天性，只约束它的边界。遇到冲突只拦截、只记录，**绝不修改底层权重**。
+> 详见 [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md)。
 
 
 **把 AI 的「人格」与「记忆」从模型里剥离出来，做成可迁移、可版本化、可加密的数据资产——再给它一套能在世界上安全活着的规矩。**
@@ -913,7 +921,8 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [安全与加密规范](docs/SECURITY_SPEC.md)：容器格式、密钥体系、内核签名、恢复、Provider 接口与一致性测试。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
-- [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索，零依赖，今天就能用（v2.4.0）。
+- [架构哲学](docs/PHILOSOPHY.md)：告别强制洗脑，拥抱分身投影——最高层约定，与任何规范冲突时以它为准。
+- [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引，零依赖（v3.1.0）。
 - [进化史](https://github.com/576984518/SysPersona-OS/blob/main/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
 - [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
