@@ -1,0 +1,156 @@
+---
+name: session-recall
+description: 从 NAS 记忆库取回历史会话上下文（DSH 会话 + DeepSeek 网页对话），用 digest 生成交接摘要、用 search 只回命中片段；也覆盖 DeepSeek 网页版的抓取与增量巡检。
+---
+
+# 会话检索（SysPersona 记忆外挂）
+
+记忆库在 `\\Nas-1900\文档\会话检索261107\`（映射盘 `Z:`）。
+放的是**记忆**，不是源码；源码在 `D:\文档\deepseek-harness\default-workspace`。
+
+## 什么时候用
+
+- 用户说"接着做 / 上次聊到哪 / 我昨天说过什么"，需要**恢复上下文**；
+- 需要查某段历史细节（某个命令、某个结论、某次踩坑），但不想把几万字全读进来；
+- 需要把当前会话**导出归档**，或把 DeepSeek 网页对话**抓进记忆库**。
+
+## 0. 唤醒顺序
+
+1. **`LATEST.md`**（每分钟自动刷新：当前会话最近 4 条 + 条数 + 状态，先看有没有新动静）
+2. **`DECISIONS.md`**（决策台账，一屏看完当前决定与状态）
+3. `HANDOFF.md`（按来源的摘要，日期倒序，最近的在前）
+4. `search` 命中片段 → 才读原始 .md
+
+> 纪律：**每做完一件事、每次接新任务，先读 1 和 2**；没有任务时也保持每分钟由脚本刷新 `LATEST.md`。
+先读摘要，几千字，通常就够开工；不够再检索，**不要**一上来读整篇会话。
+
+## 1. 运行时（本机没有全局 python / node）
+
+```powershell
+$PY   = "C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+$NODE = "C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+$env:PYTHONIOENCODING = "utf-8"   # 不设则中文在控制台显示为乱码（文件本身没问题）
+```
+
+node **不能直接跑 UNC 路径**（会去找 `\\Nas-1900\package.json` 而报错），先映射：
+
+```powershell
+net use Z: '\\Nas-1900\文档' /persistent:no
+```
+
+## 2. 布局
+
+```
+会话检索261107\
+├─ ctxpack.py  dsh_export.js  webwatch.js
+├─ webdump.js（实时抓）  deepseek_sweep.js（批量抓）
+├─ SKILL.md  README.md  HANDOFF.md  state.json
+├─ sessions\<日期>\<来源>\      ← 可读正文（来源 = 电脑会话 / 网页对话 / 网页文章）
+└─ archive\<日期>\<来源>\ + index.jsonl   ← 归档 .md + .gz + 索引
+```
+
+来源名 = 路径里日期段的下一段，归档自动跟随，不同来源互不干扰。
+
+## 3. 检索
+
+```powershell
+& $PY Z:\会话检索261107\ctxpack.py search 人格 --limit 5
+& $PY Z:\会话检索261107\ctxpack.py search J1900 --source 网页对话 --sort time
+& $PY Z:\会话检索261107\ctxpack.py status Z:\会话检索261107\sessions
+```
+
+`--source` 可选：`电脑会话`（另一台电脑的 DSH 工作区）、`网页对话`、`网页文章`。
+输出只给**命中片段**，把这几行贴进上下文即可，不要整篇读。
+
+## 4. 归档 + 出摘要
+
+```powershell
+# 日常（推荐）：未变的不重新归档（按内容哈希幂等），摘要重写成全量版
+& $PY Z:\会话检索261107\ctxpack.py digest Z:\会话检索261107\sessions `
+     -o Z:\会话检索261107\HANDOFF.md --all --max-chars 14000
+```
+
+- `--all`：忽略水位，把所有来源汇成一份总摘要（唤醒用）；
+- `--max-chars`：摘要总字数上限，超出的只列文件名（正文全在归档里，可 search）；
+- 不带 `--all` 时只写本批，摘要会变短——**给新窗口用请带 `--all`**。
+
+## 5. 抓 DeepSeek 网页对话（需要浏览器开调试端口）
+
+浏览器必须带参数启动，**否则读不到页面**：
+
+```powershell
+Stop-Process -Name msedge -Force
+Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
+  -ArgumentList '--remote-debugging-port=9222','--remote-allow-origins=*',`
+                '--restore-last-session',"--user-data-dir=$env:LOCALAPPDATA\Microsoft\Edge\User Data"
+```
+
+### 巡检范围：默认只看最近 10 个
+
+会话是**只追加**的，旧会话上下文满了就不再变。所以：
+
+```powershell
+# 日常：最近 10 个，约 1 分钟
+& $NODE Z:\会话检索261107\deepseek_sweep.js Z:\会话检索261107\sessions\<今天>\网页对话
+
+# 周期全量：--full；连续 15 个未变即提前收工
+& $NODE Z:\会话检索261107\deepseek_sweep.js <目录> --full --stop-after 15
+
+# 只看前几个 / 只看不变动
+... --limit 3        ... --dry-run
+```
+
+判定：每个会话只读**最下方那条消息**，指纹存在 `_tail.json`；末条一致 → 整段没变，直接下一个。
+**当前打开的会话**（可能多个标签）自动排在**最后**，最多重抓 4 轮直到稳定，不会被跳过也不会抓到半截。
+
+### 实时模式（只盯当前会话）
+
+```powershell
+& $NODE Z:\会话检索261107\deepseek_sweep.js <目录> --active
+```
+
+**不跳转**，只读当前标签的 DOM；只看**最近 4 条**尾部指纹，没变 0.3 秒退出，变了才临时撑高视口抓全量，抓完还原视口与滚动位置。
+页面开久了会停止加载更早的消息（比过一次重载后 132→163 条），所以加 `--reload`：抓之前先重载页面。
+
+周期任务（都已注册，浏览器没开调试端口时静默跳过）：
+
+| 任务名 | 频率 | 行为 |
+|---|---|---|
+| `SysPersona-DeepSeek-LiveWatch` | 每 1 分钟 | `--active`，只抓当前会话，日志 `%LOCALAPPDATA%\SysPersona\live.log` |
+| `SysPersona-DeepSeek-FullSweep` | 每周日 21:00 | `--full --stop-after 15` → `digest --all`，日志 `sweep_full.log` |
+
+## 6. 去重规则（跑 N 次结果一致）
+
+| 层 | 规则 |
+|---|---|
+| 抓取 | 文件名 = 会话 ID；末条指纹一致 → 跳过；否则全文比对，逐字相同也不写 |
+| 水位 | `state.json` 按 mtime+size，未变整条跳过 |
+| 归档 | 按内容 sha256：哈希没变（哪怕 mtime 变了）只更新水位，不重复归档、不追加索引 |
+| 内容真变了 | 新归档**替换**旧归档，索引删旧行——一个来源只留最新快照 |
+
+## 7. 踩过的坑（照做即可，别重试错）
+
+1. Edge 的**启动加速**会吞掉调试参数：必须显式传 `--user-data-dir`。
+2. DeepSeek 登录 cookie 是**会话级**的：重启浏览器就要重新登录。
+3. 页面**不可见就不渲染消息**：CDP 里先 `Page.bringToFront` + `Emulation.setFocusEmulationEnabled`。
+4. 消息是**虚拟列表**（首屏约 213 条）：要滚到顶把历史全部触发加载；视口撑到 30000px 可一次挂载，快得多。
+5. 消息块选择器：`.ds-message`（用户带 `d29f3d7d`，助手含 `.ds-markdown`，思考在 `.ds-think-content`）。
+6. node 跑 UNC 会崩 → 用 `Z:` 盘。
+7. `powershell.exe` 读**无 BOM 的 UTF-8 脚本**会把中文当 ANSI 而报“字符串缺少终止符”→ 存成带 BOM。
+
+## 8. 导出本机 DSH 会话
+
+```powershell
+& $NODE Z:\会话检索261107\dsh_export.js `
+  "$env:USERPROFILE\.dsh\sessions\<工作区哈希>\<会话ID>" `
+  Z:\会话检索261107\sessions\<日期>\电脑会话\<日期>.md
+```
+
+原始文件在 `...\sessions\<工作区哈希>\<会话ID>\session.v4.jsonl.zstd`（多帧 zstd 的 JSONL）；
+`_raw\` 里的原始副本**绝对别删**，它不可再生。
+
+## 9. 边界
+
+- 这里是**私人聊天记录**，别提交 git；
+- 归档删了检索就没了，`_raw` 建议再备份一份到网盘；
+- 脚本是仓库 `tools/ctxpack/` 的副本，改了要双向同步（当前 ctxpack v2.6）。
