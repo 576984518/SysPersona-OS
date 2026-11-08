@@ -3,7 +3,7 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v3.1.1-blue)
+![version](https://img.shields.io/badge/version-v3.2.0-blue)
 
 > **本项目是「数字生命记忆架构」的概念验证（PoC）与参考方案，不是开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：`tools/ctxpack/` 与 `impl/` 都是参考实现，
@@ -18,7 +18,13 @@
 > 不抹平模型的天性，只约束它的边界。冲突只拦截、只记录，**绝不修改底层权重**。
 > → [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md)
 
-**当前 v3.1.1**（检索可选化 + 自测工具）· 上一版 v3.1.0（混合检索 + 增量索引）· [变更记录](CHANGELOG.md)
+> **最高交互 · 前台只等会话，其余后台跑（v3.2.0）**
+> 长任务先回一句「收到，正在…」再丢后台，跑完作为「事件插播」汇报；超过 5 秒的操作不占前台。
+> 交接文件分三类——**锁定段**（哲学 / 红线，只人改）、**自动段**（待办 / 上一轮收尾，限长自动更新）、
+> **固定格式**（顺序 / 上限，改需人确认）；交接只读一次一级索引，细节再检索。
+> → [`tools/ctxpack/README.md`](tools/ctxpack/README.md)
+
+**当前 v3.2.0**（交接文件 v2.1 + 一级索引 + 异步非阻塞交互）· 上一版 v3.1.9（NavWatch 改调包装脚本）· [变更记录](CHANGELOG.md)
 
 📜 [进化史](EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
 
@@ -904,7 +910,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [一致性声明](docs/CONFORMANCE.md)：第三方如何声明符合 L1/L2/L3，以及必须给出的证据。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [架构哲学](docs/PHILOSOPHY.md)：告别强制洗脑，拥抱分身投影——最高层约定，与任何规范冲突时以它为准。
-- [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引，零依赖（v3.1.0）。
+- [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引 / **交接包 v2.1 / 一级索引 / 读索引后台重试**（v3.2.0）。
 - [进化史](https://github.com/576984518/SysPersona-OS/blob/main/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
 - [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
