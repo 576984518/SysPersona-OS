@@ -445,6 +445,8 @@ def main():
     s.add_argument("--limit", type=int, default=5)
     s.add_argument("--sort", choices=["freq", "time"], default="freq")
     s.add_argument("--source", default=None)
+    s.add_argument("--hybrid", action="store_true",
+                   help="可选：叠上向量路（需要 index/ 与本地模型）；不可用时自动退回关键词")
 
     st = sub.add_parser("status")
     st.add_argument("path", default=".")
@@ -462,6 +464,26 @@ def main():
     elif args.cmd == "status":
         return cmd_status(args.path, state)
     else:
+        if getattr(args, 'hybrid', False):
+            # 可选增强：向量路只做加法，不改变"关键词永远可用"的底线。
+            # 模型没起、索引缺失、依赖没装——一律静默退回关键词，绝不返回"没找到"了事。
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import zsearch
+                zsearch.ROOT = ROOT
+                zsearch.ARCHIVE = ARCHIVE
+                zsearch.INDEX = os.path.join(ROOT, 'index')
+                rows = zsearch.merged(args.query, k=args.limit)
+                if rows:
+                    for r in rows:
+                        print("== %s  (rrf=%.4f, %s, source=%s)  [%s]"
+                              % (r['file'], r['score'], r['day'], r['source'] or '-', r['why']))
+                        print(r['text'][:400].strip())
+                        print()
+                    return 0
+                print("（混合路无结果，退回关键词）", file=sys.stderr)
+            except Exception as e:
+                print("（混合检索不可用，退回关键词：%s）" % e, file=sys.stderr)
         hits = search(args.query, args.limit, sort=args.sort, source=args.source)
         if not hits:
             print("no hits")

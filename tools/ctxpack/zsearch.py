@@ -154,6 +154,41 @@ def vector_rank(q, topn=60):
         return []
 
 
+def merged(q, k=100, use_vector=True):
+    """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
+
+    返回 [{file, day, source, role, text, score, why}, ...]
+    """
+    bl = blocks()
+    df = idf(bl)
+    kr = keyword_rank(q, bl, df)
+    vr = vector_rank(q) if use_vector else []
+
+    fused, why = {}, {}
+    for rank, (i, s) in enumerate(kr):
+        key = ('b', i)
+        fused[key] = fused.get(key, 0) + 1.0 / (60 + rank)
+        why.setdefault(key, []).append('kw#%d(%.1f)' % (rank + 1, s))
+    for rank, (f, r, t, sc) in enumerate(vr):
+        key = ('v', f, r, t[:40])
+        fused[key] = fused.get(key, 0) + 1.0 / (60 + rank)
+        why.setdefault(key, []).append('vec#%d(%.3f)' % (rank + 1, sc))
+
+    out = []
+    for key, sc in sorted(fused.items(), key=lambda x: -x[1])[:k]:
+        if key[0] == 'b':
+            f, day, src, role, text = bl[key[1]]
+        else:
+            _, f, r, t = key
+            base = next((b for b in bl if b[0] == f and b[3] == r and b[4][:40] == t), None)
+            if base is None:
+                continue
+            f, day, src, role, text = base
+        out.append({'file': f, 'day': day, 'source': src, 'role': role,
+                    'text': text, 'score': sc, 'why': ','.join(why[key])})
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('query')
