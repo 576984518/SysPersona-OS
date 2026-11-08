@@ -24,7 +24,19 @@ import urllib.request
 
 import numpy as np
 
-ROOT = r'D:\4590-PC-文件\AI会话检索记录'
+def _find_root():
+    """记忆库根目录：优先环境变量 SYSPERSONA_ROOT，否则向上找含 archive/ 的目录。"""
+    env = os.environ.get('SYSPERSONA_ROOT')
+    if env:
+        return env
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (here, os.path.dirname(here)):
+        if os.path.isdir(os.path.join(cand, 'archive')):
+            return cand
+    return here
+
+
+ROOT = _find_root()
 ARCHIVE = os.path.join(ROOT, 'archive')
 IDX = os.path.join(ROOT, 'index')
 MANIFEST = os.path.join(IDX, 'manifest.json')
