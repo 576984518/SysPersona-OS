@@ -188,12 +188,16 @@ def _l1_rows(limit=6):
     return rows[:limit]
 
 
-def prepare(c=None, clip=True):
+def prepare(c=None, clip=True, canonical=False):
+    """canonical=True：写到固定的 `接续包-最新.md`（覆盖），给周期任务用。
+
+    定时快照不该每 30 分钟就堆一份会话原文，所以 1 小时内已有导出就直接复用。
+    """
     c = c or current()
     out_dir = os.path.join(ROOT, "续接")
     os.makedirs(out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M")
-    md = os.path.join(out_dir, "接续包-%s.md" % stamp)
+    md = os.path.join(out_dir, "接续包-最新.md" if canonical else "接续包-%s.md" % stamp)
 
     # 先记住"上一轮"的原文，再导出本轮——否则 newest 会变成刚导出的这一份。
     old = sorted(glob.glob(os.path.join(ROOT, "sessions", "*", "电脑会话", "续接前-*.md")),
@@ -202,7 +206,11 @@ def prepare(c=None, clip=True):
     sess = latest_session_dir()
     export_line = "（未导出）"
     target = ""
-    if sess:
+    fresh = old and (time.time() - os.path.getmtime(old[0]) < 3600)
+    if canonical and fresh:
+        export_line = old[0]          # 一小时内的导出够用，别每个周期都生成一份
+        target = old[0]               # 让"上一轮"仍取另一个会话
+    elif sess:
         target = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "电脑会话", "续接前-%s.md" % stamp)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         try:
@@ -337,6 +345,15 @@ def prepare(c=None, clip=True):
     io.open(md, "w", encoding="utf-8", newline="\n").write(text)
 
     print("接续包已生成: %s（%d 字 / %.1f KB）" % (md, len(text), len(text.encode("utf-8")) / 1024.0))
+
+    # 带时间戳的包只留最近 30 份：周期任务写的是固定文件，不占这份额度。
+    if not canonical:
+        olds = sorted(glob.glob(os.path.join(out_dir, "接续包-2*.md")), key=os.path.getmtime)
+        for f in olds[:-30]:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
     print("会话原文: %s" % export_line)
     if c["ctx"] >= CLEAN:
         print("提示：水位 %s 已过 450K —— 该清理了（本次只出包，未删除任何记忆）" % human(c["ctx"]))
@@ -357,12 +374,13 @@ if __name__ == "__main__":
     ap.add_argument("--no-clip", action="store_true", help="出包但不覆盖剪贴板")
     ap.add_argument("--clip", action="store_true", help="只复制最近生成的包到剪贴板")
     ap.add_argument("--ctx", type=int, default=0, help="强制指定上下文规模（测试到线行为）")
+    ap.add_argument("--canonical", action="store_true", help="写到固定的 接续包-最新.md（覆盖），给周期任务用")
     a = ap.parse_args()
 
     c = report(a.ctx or None)
     if a.prepare:
         print()
-        prepare(c, clip=not a.no_clip)
+        prepare(c, clip=not a.no_clip, canonical=a.canonical)
     elif a.clip:
         files = sorted(glob.glob(os.path.join(ROOT, "续接", "接续包-*.md")))
         if not files:

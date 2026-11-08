@@ -224,16 +224,93 @@ def cloud_embed(texts):
     raise RuntimeError('云端单条嵌入失败')
 
 
+def fill_missing_main():
+    """只补"解析规则变新后多出来的块"（例如每份会话的第一句），不重嵌已有块。
+
+    全量重嵌 1.5 万块要 2 个多小时；补首句只有一两百块，一两分钟。
+    幂等：跑第二遍时这些块已在，直接报 0。
+    """
+    mp = os.path.join(IDX, 'meta.jsonl')
+    vp = os.path.join(IDX, 'vectors.npy')
+    if not (os.path.exists(mp) and os.path.exists(vp)):
+        print('索引不存在，先跑一次全量')
+        return 1
+    vecs = np.load(vp)
+    metas = [json.loads(l) for l in io.open(mp, encoding='utf-8') if l.strip()]
+    if len(vecs) != len(metas):
+        print('向量与元数据行数不一致（%d vs %d），先修索引' % (len(vecs), len(metas)))
+        return 1
+
+    rows_by_file = {}
+    for i, m in enumerate(metas):
+        rows_by_file.setdefault(m['file'], []).append(i)
+
+    files = []
+    for dp, _, fns in os.walk(ARCHIVE):
+        for fn in fns:
+            if fn.endswith('.md'):
+                files.append(os.path.join(dp, fn))
+    files.sort()
+
+    add_rows, add_texts = [], []
+    for p in files:
+        rel = os.path.relpath(p, ROOT).replace('\\', '/')
+        idxs = rows_by_file.get(rel)
+        if not idxs:
+            continue
+        have = {metas[i]['text'] for i in idxs}
+        parts = rel.split('/')
+        day = parts[1] if len(parts) > 2 else ''
+        src = parts[2] if len(parts) > 3 else ''
+        dev, mod = header_fields(p)
+        if not dev and not mod:
+            dev, mod = bucket_defaults(rel)
+        for role, txt in chunks_of(p):
+            if txt in have:
+                continue
+            add_rows.append({'file': rel, 'day': day, 'source': src, 'role': role,
+                             'device': dev, 'model': mod, 'text': txt})
+            add_texts.append('【%s】%s' % (role, txt))
+
+    print('补块：%d 块 / %d 文件' % (len(add_texts), len({r['file'] for r in add_rows})), flush=True)
+    if not add_texts:
+        return 0
+
+    t0 = time.time()
+    parts = []
+    for i in range(0, len(add_texts), 400):
+        parts.append(safe_embed(add_texts[i:i + 400]))
+    new_vecs = np.vstack(parts)
+    mat = np.vstack([vecs, new_vecs])
+    metas = metas + add_rows
+
+    tmp_v = os.path.join(IDX, 'vectors.tmp')
+    tmp_m = os.path.join(IDX, 'meta.jsonl.tmp')
+    with open(tmp_v, 'wb') as fh:
+        np.save(fh, mat.astype('float32'))
+    with io.open(tmp_m, 'w', encoding='utf-8', newline='\n') as f:
+        for m in metas:
+            f.write(json.dumps(m, ensure_ascii=False) + '\n')
+    os.replace(tmp_v, os.path.join(IDX, 'vectors.npy'))
+    os.replace(tmp_m, os.path.join(IDX, 'meta.jsonl'))
+    print('DONE 补入 %d 块，索引 %d 块｜%.1f 分钟' % (len(add_rows), len(metas), (time.time() - t0) / 60), flush=True)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--backfill-fields', action='store_true',
                     help='只给现有 meta.jsonl 补 设备/底座 两列，不重嵌、不改向量')
+    ap.add_argument('--fill-missing', action='store_true',
+                    help='只补解析规则升级后多出来的块（如会话首句），不重嵌已有块')
     a = ap.parse_args()
 
     if a.backfill_fields:
         backfill_fields(dry_run=a.dry_run)
         return
+    if a.fill_missing:
+        return fill_missing_main()
 
     t0 = time.time()
     files = []
