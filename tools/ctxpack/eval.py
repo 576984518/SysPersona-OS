@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """eval.py — 检索召回自测
 
-给一份题库，分别跑三条路，报 recall@K：
+给一份题库，分别跑几条路，报 recall@K：
 
   关键词（IDF + 回声降权） / 向量（bge-m3） / 合并（RRF）
+  加 --merged 再测一遍真正的合并路，加 --recent N 同时报"最近 N 天优先"叠加前后的差异
 
 题库格式（JSONL，一行一题）：
   {"q": "为什么一个人格要配 500GB 存储", "want": ["500GB", "500G"]}
@@ -13,6 +14,7 @@
   python eval.py                      # 内置 20 题（跨文件）
   python eval.py --set my.jsonl --k 50
   python eval.py --no-vector          # 只测关键词路
+  python eval.py --merged --no-vector # 只对比合并路：开/关"最近 N 天优先"
 
 为什么要"去回声"：问题本身常常就躺在语料里，检索会把"你刚问的那句"排到答案前面。
 所以默认逐行剔除引用提问的行，再判命中——否则测的是"能不能找到自己刚说的话"。
@@ -85,6 +87,9 @@ def main():
     ap.add_argument('--set', default=None, help='JSONL 题库；不给就用内置 20 题')
     ap.add_argument('--k', type=int, default=100)
     ap.add_argument('--no-vector', action='store_true')
+    ap.add_argument('--merged', action='store_true', help='追加测合并路（zsearch.merged）')
+    ap.add_argument('--recent', type=int, default=0,
+                    help='合并路叠加"最近 N 天优先"，同时报叠加前后；0=不测')
     ap.add_argument('--root', default=os.environ.get('ZSEARCH_ROOT', zsearch.ROOT))
     a = ap.parse_args()
 
@@ -96,31 +101,52 @@ def main():
     bl = zsearch.blocks()
     df = zsearch.idf(bl)
 
-    k_ok = v_ok = m_ok = 0
+    routes = ['kw', 'vec', 'union']
+    if a.merged:
+        routes += ['merged', 'merged_recent']
+    tally = {r: 0 for r in routes}
+    labels = {'kw': '关键词', 'vec': '向量', 'union': '合并(并集)',
+              'merged': '合并路', 'merged_recent': '合并路+近%d天' % a.recent}
+
     t0 = time.time()
     for q, want in qs:
         kr = zsearch.keyword_rank(q, bl, df, topn=a.k)
         ktext = [bl[i][4] for i, _ in kr]
-        k_hit = hit(ktext, want, q)
 
         vr = [] if a.no_vector else zsearch.vector_rank(q, topn=a.k)
         vtext = [t for _, _, t, _ in vr]
-        v_hit = hit(vtext, want, q)
 
-        mtext = ktext + vtext
-        m_hit = hit(mtext, want, q)
+        got = {'kw': ktext, 'vec': vtext, 'union': ktext + vtext}
+        if a.merged:
+            try:
+                m0 = zsearch.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False)
+                got['merged'] = [r['text'] for r in m0]
+                if a.recent:
+                    m1 = zsearch.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False,
+                                        recent_days=a.recent)
+                    got['merged_recent'] = [r['text'] for r in m1]
+                else:
+                    got['merged_recent'] = got['merged']
+            except Exception as e:
+                print('[warn] 合并路不可用：%s' % e, file=sys.stderr)
+                got['merged'] = got['merged_recent'] = []
 
-        k_ok += k_hit
-        v_ok += v_hit
-        m_ok += m_hit
-        flag = ('✓' if k_hit else '✗') + ('✓' if v_hit else '✗')
-        print('%-52s %s' % (q[:50], flag))
+        flags = []
+        for r in routes:
+            ok = hit(got.get(r, []), want, q)
+            tally[r] += ok
+            flags.append(('✓' if ok else '✗') + r)
+        print('%-46s %s' % (q[:44], ' '.join(flags)))
 
     n = len(qs)
-    vdisp = '-' if a.no_vector else str(v_ok)
-    print('-' * 68)
-    print('关键词 %d/%d   向量 %s/%d   合并 %d/%d   %.0fs'
-          % (k_ok, n, vdisp, n, m_ok, n, time.time() - t0))
+    print('-' * 76)
+    parts = []
+    for r in routes:
+        if r == 'vec' and a.no_vector:
+            parts.append('%s -/%d' % (labels[r], n))
+        else:
+            parts.append('%s %d/%d' % (labels[r], tally[r], n))
+    print('   '.join(parts) + '   %.0fs' % (time.time() - t0))
 
 
 if __name__ == '__main__':

@@ -80,7 +80,8 @@ def chunks_of(path):
         body = text
     out, got = [], 0
     for blk in SEP_BLOCK.split(body):
-        m = MSG_HEAD.match(blk)
+        # 同 zsearch：分隔线后的空行会让块以 "\n## 用户" 开头，直接 match 会漏掉第一句。
+        m = MSG_HEAD.match(blk.lstrip('\n'))
         if not m:
             continue
         got += 1
@@ -100,6 +101,69 @@ def chunks_of(path):
         if buf:
             out.append(('文档', buf))
     return out
+
+
+def header_fields(path):
+    """从元信息头取分身字段 设备 / 底座（B11e）。只读前 4 KB——两行元数据不值得读整份。
+
+    没有这两行的老文件返回空串；宁可为空，也不要瞎猜成"网页"或"电脑"。
+    """
+    try:
+        head = io.open(path, encoding='utf-8', errors='replace').read(4096)
+    except OSError:
+        return '', ''
+    head = head.partition('\n---\n')[0]
+    dev = re.search(r'(?m)^-\s*设备：\s*(.+?)\s*$', head)
+    mod = re.search(r'(?m)^-\s*底座：\s*(.+?)\s*$', head)
+    return (dev.group(1) if dev else ''), (mod.group(1) if mod else '')
+
+
+def bucket_defaults(rel):
+    """头里没写时按来源桶兜底：网页对话一定来自网页，这条是事实不是猜。
+
+    电脑会话不兜底——旧记忆可能来自另一台机器，写死本机主机名就是编造。
+    """
+    parts = rel.split('/')
+    src = parts[2] if len(parts) > 3 else ''
+    if src == '网页对话':
+        return '网页', 'deepseek-web'
+    return '', ''
+
+
+def backfill_fields(dry_run=False):
+    """给现有 index/meta.jsonl 补 device/model，不重嵌、不动 vectors.npy。
+
+    补字段本来可以等"文件下次变动时顺便带上"，但那样新字段要等全部文件重写一遍才齐；
+    14851 块重嵌一次是 5 分钟 + 几百万 token，而补两列只要读 68 个文件头。
+    """
+    mp = os.path.join(IDX, 'meta.jsonl')
+    if not os.path.exists(mp):
+        print('没有 meta.jsonl，先跑一次全量索引')
+        return 0
+    metas = [json.loads(l) for l in io.open(mp, encoding='utf-8') if l.strip()]
+    cache = {}
+    changed = 0
+    for m in metas:
+        f = m['file']
+        if f not in cache:
+            dev, mod = header_fields(os.path.join(ROOT, f.replace('/', os.sep)))
+            if not dev and not mod:
+                dev, mod = bucket_defaults(f)
+            cache[f] = (dev, mod)
+        dev, mod = cache[f]
+        if m.get('device') != dev or m.get('model') != mod:
+            m['device'], m['model'] = dev, mod
+            changed += 1
+    print('meta %d 行｜需补字段 %d 行｜文件 %d 个' % (len(metas), changed, len(cache)))
+    if dry_run or not changed:
+        return changed
+    tmp = mp + '.tmp'
+    with io.open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        for m in metas:
+            f.write(json.dumps(m, ensure_ascii=False) + '\n')
+    os.replace(tmp, mp)
+    print('已补字段：%s' % mp)
+    return changed
 
 
 def safe_embed(texts, depth=0):
@@ -163,7 +227,13 @@ def cloud_embed(texts):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--backfill-fields', action='store_true',
+                    help='只给现有 meta.jsonl 补 设备/底座 两列，不重嵌、不改向量')
     a = ap.parse_args()
+
+    if a.backfill_fields:
+        backfill_fields(dry_run=a.dry_run)
+        return
 
     t0 = time.time()
     files = []
@@ -207,8 +277,12 @@ def main():
         parts = rel.split('/')
         day = parts[1] if len(parts) > 2 else ''
         src = parts[2] if len(parts) > 3 else ''
+        dev, mod = header_fields(p)
+        if not dev and not mod:
+            dev, mod = bucket_defaults(rel)
         for role, txt in chunks_of(p):
-            new_rows.append({'file': rel, 'day': day, 'source': src, 'role': role, 'text': txt})
+            new_rows.append({'file': rel, 'day': day, 'source': src, 'role': role,
+                             'device': dev, 'model': mod, 'text': txt})
             new_texts.append('【%s】%s' % (role, txt))
 
     print('文件 %d｜未变 %d｜待重嵌 %d 个文件 / %d 块｜总块 %d'

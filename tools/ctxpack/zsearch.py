@@ -12,6 +12,7 @@
   python zsearch.py "960 显卡" --k 10 --no-vector
 """
 import argparse
+import datetime
 import io
 import json
 import math
@@ -58,25 +59,59 @@ def tokens(q):
     return [t for t in dict.fromkeys(out) if t not in STOP]
 
 
+_CACHE_VER = 4
+
+
 def _cache_path():
-    """缓存必须按库区分：以前固定叫 _blocks_cache.json，换一个记忆库就会读到上一个库的块。"""
-    h = hash((os.path.abspath(ROOT), os.path.abspath(ARCHIVE))) & 0xFFFFFFFF
+    """缓存必须按库区分：以前固定叫 _blocks_cache.json，换一个记忆库就会读到上一个库的块。
+
+    _CACHE_VER 进哈希：块的字段结构一变（v2 加了 device/model），旧缓存的 5 元组
+    就会让新代码按下标取空值——升版本号等于换文件名，旧缓存自然作废。
+    """
+    h = hash((os.path.abspath(ROOT), os.path.abspath(ARCHIVE), _CACHE_VER)) & 0xFFFFFFFF
     return os.path.join(tempfile.gettempdir(), 'zsearch_blocks_%08x.json' % h)
 
 
 _MEMO = {}
 
 
+def _corpus_sig():
+    """语料签名：文件数 + 总字节 + 最新 mtime。
+
+    没有它，缓存一旦写下就永远命中——新抓的会话在检索里根本看不见
+    （2026-11-08 实测：14:25 的缓存让 15:0x 的档案查不到）。
+    """
+    n = total = newest = 0
+    for dp, _, fns in os.walk(ARCHIVE):
+        for fn in fns:
+            if not fn.endswith('.md'):
+                continue
+            try:
+                st = os.stat(os.path.join(dp, fn))
+            except OSError:
+                continue
+            n += 1
+            total += st.st_size
+            newest = max(newest, int(st.st_mtime))
+    return [n, total, newest]
+
+
 def blocks():
-    """产出 (file, day, source, role, text)。进程内只读一遍，跨进程落盘缓存。"""
+    """产出 (file, day, source, role, text, device, model)。进程内只读一遍，跨进程落盘缓存。
+
+    device / model 来自正文前的元信息头（`- 设备：` / `- 底座：`），老文件没有就是空串。
+    缓存按语料签名校验：档案一变就重建，绝不把新记忆挡在门外。
+    """
     if 'bl' in _MEMO:
         return _MEMO['bl']
     key = _cache_path()
+    sig = _corpus_sig()
     if os.path.exists(key):
         try:
             raw = json.load(io.open(key, encoding='utf-8'))
-            _MEMO['bl'] = raw
-            return raw
+            if isinstance(raw, dict) and raw.get('sig') == sig and isinstance(raw.get('blocks'), list):
+                _MEMO['bl'] = raw['blocks']
+                return raw['blocks']
         except Exception:
             pass
     out = []
@@ -96,20 +131,31 @@ def blocks():
             head, sep, rest = text.partition('\n---\n')
             # 只有"会话导出"才有那条元信息分隔线；README/DECISIONS 里的 --- 是正文分节，
             # 早先一刀切会让文档前半截（含决策表）整段消失。
+            dev, mod = '', ''
             if sep and ('- 会话：' in head or '- 抓取：' in head or '- 网址：' in head):
                 body = rest
+                m1 = re.search(r'(?m)^-\s*设备：\s*(.+?)\s*$', head)
+                m2 = re.search(r'(?m)^-\s*底座：\s*(.+?)\s*$', head)
+                dev = m1.group(1) if m1 else ''
+                mod = m2.group(1) if m2 else ''
+                # 老文件头里没这两行：网页对话按来源桶兜底（事实，不是猜）；
+                # 电脑会话不兜底——旧记忆可能来自另一台机器，写死本机名就是编造。
+                if not dev and not mod and src == '网页对话':
+                    dev, mod = '网页', 'deepseek-web'
             else:
                 body = text
             got = 0
             for blk in SEP_BLOCK.split(body):
-                m = MSG_HEAD.match(blk)
+                # 元信息分隔线后通常留着一个空行，块会以 "\n## 用户" 开头；
+                # 直接 match 会因为锚在行首而失败——第一句话就这样从检索里消失了。
+                m = MSG_HEAD.match(blk.lstrip('\n'))
                 if not m:
                     continue
                 role = m.group(1)
                 clean = re.sub(r'(?m)^>\s?.*\n?', '', m.group(2)).strip()
                 if len(clean) < 8:
                     continue
-                out.append([rel, day, src, role, clean])
+                out.append([rel, day, src, role, clean, dev, mod])
                 got += 1
             # 非对话型文件（README/SKILL/DECISIONS/报告）：没有"## 用户/助手"结构，
             # 早先会被整份丢掉。这里按段落切成文档块并入语料。
@@ -118,12 +164,12 @@ def blocks():
                 buf = ''
                 for p in para:
                     if len(buf) + len(p) > 900 and buf:
-                        out.append([rel, day, src, '文档', buf])
+                        out.append([rel, day, src, '文档', buf, dev, mod])
                         buf = ''
                     buf += ('\n\n' if buf else '') + p
                 if buf:
-                    out.append([rel, day, src, '文档', buf])
-    json.dump(out, io.open(key, 'w', encoding='utf-8'), ensure_ascii=False)
+                    out.append([rel, day, src, '文档', buf, dev, mod])
+    json.dump({'sig': sig, 'blocks': out}, io.open(key, 'w', encoding='utf-8'), ensure_ascii=False)
     return out
 
 
@@ -131,8 +177,8 @@ def idf(bl):
     if 'df' in _MEMO:
         return _MEMO['df']
     df = {}
-    for _, _, _, _, t in bl:
-        for w in set(tokens(t)):
+    for b in bl:
+        for w in set(tokens(b[4])):
             df[w] = df.get(w, 0) + 1
     n = max(1, len(bl))
     _MEMO['df'] = {w: math.log(1 + n / (1 + c)) for w, c in df.items()}
@@ -198,10 +244,59 @@ def rerank_all(q, cands, topn=40):
         return None
 
 
-def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40):
+# ---- 三维权重的轻量版：只看内容与角色，不查 memory.db ----
+_DECIDE = ('决定', '必须', '不要', '以后都', '记住', '改用', '禁止', '优先', '定下来')
+_FLATTER = ('太对了', '绝了', '封神', '完美', '极其', '漂亮', '满分', '犀利', '深刻',
+            '牛逼', '降维打击', '精准', '到位', '顶级', '硬核')
+
+
+def importance(role, text):
+    """0..1：用户亲口说的、含决定词的抬高；纯捧场话术压低。"""
+    s = 0.0
+    if role == '用户':
+        s += 0.35
+    if any(w in text for w in _DECIDE):
+        s += 0.25
+    hits = sum(1 for w in _FLATTER if w in text)
+    if hits >= 2:
+        s -= min(0.45, 0.15 * hits)
+    return max(0.0, min(1.0, s))
+
+def recent_boost(out, bl, recent_days):
+    """给"最近 N 天"的结果加一点分，然后按分数重排。
+
+    只加分、不减法：老记忆的分数原封不动，所以最坏情况是"顺序微调"，不会是"老的真答案被挤掉"。
+    默认关（recent_days=0 / CLI 不给 --recent），要时间优先时再开。
+    """
+    if not recent_days:
+        return out
+    days = [b[1] for b in bl if b[1]]
+    if not days:
+        return out
+    try:
+        latest = datetime.date.fromisoformat(max(days)[:10])
+    except Exception:
+        return out
+    for it in out:
+        try:
+            d = datetime.date.fromisoformat((it.get('day') or '')[:10])
+        except Exception:
+            continue
+        age = (latest - d).days
+        if 0 <= age <= recent_days:
+            it['score'] = it['score'] * (1.0 + 0.3 * (1.0 - age / float(recent_days + 1)))
+            it['why'] = (it.get('why', '') + ',recent').strip(',')
+    out.sort(key=lambda x: -x['score'])
+    return out
+
+
+def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=False,
+           recent_days=0, device=None, model=None):
     """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
 
-    返回 [{file, day, source, role, text, score, why}, ...]
+    返回 [{file, day, source, role, text, device, model, score, why}, ...]
+    device / model：按分身字段过滤（B11e），None = 不过滤。
+    recent_days：最近 N 天优先（B11c），0 = 关。
     """
     bl = blocks()
     df = idf(bl)
@@ -219,17 +314,31 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40):
         why.setdefault(key, []).append('vec#%d(%.3f)' % (rank + 1, sc))
 
     out = []
-    for key, sc in sorted(fused.items(), key=lambda x: -x[1])[:k]:
+    # 不在这里截断：先按 device/model 过滤再取前 k，否则过滤只能从 3 个候选里挑，
+    # 明明有 50 条网页命中，却因为前 3 名都是电脑会话而显得"网页里没有"。
+    for key, sc in sorted(fused.items(), key=lambda x: -x[1]):
         if key[0] == 'b':
-            f, day, src, role, text = bl[key[1]]
+            f, day, src, role, text, dev, mod = bl[key[1]]
         else:
             _, f, r, t = key
             base = next((b for b in bl if b[0] == f and b[3] == r and b[4][:40] == t), None)
             if base is None:
                 continue
-            f, day, src, role, text = base
+            f, day, src, role, text, dev, mod = base
         out.append({'file': f, 'day': day, 'source': src, 'role': role,
-                    'text': text, 'score': sc, 'why': ','.join(why[key])})
+                    'text': text, 'device': dev, 'model': mod,
+                    'score': sc, 'why': ','.join(why[key])})
+
+    # 分身字段过滤：放在重排之前，省得为一个注定被滤掉的块去调 cross-encoder。
+    if device or model:
+        out = [it for it in out
+               if (not device or it.get('device') == device)
+               and (not model or it.get('model') == model)]
+
+    if weighted:
+        for it in out:
+            it['score'] = it['score'] * (0.8 + 0.4 * importance(it['role'], it['text']))
+        out.sort(key=lambda x: -x['score'])
 
     if use_rerank and len(out) > 1:
         rr = rerank_all(q, out, topn=rerank_top)
@@ -237,6 +346,8 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40):
             for it in rr:
                 it['why'] = (it.get('why', '') + ',rerank').strip(',')
             out = rr
+
+    out = recent_boost(out, bl, recent_days)
     return out[:k]
 
 JOBS = os.path.join(ROOT, 'index', 'jobs')
@@ -246,9 +357,9 @@ def _job_path(jid):
     return os.path.join(JOBS, jid + '.json')
 
 
-def run_job(jid, q, k, deep):
+def run_job(jid, q, k, deep, **kw):
     try:
-        out = merged(q, k=k, rerank_top=(100 if deep else 40))
+        out = merged(q, k=k, rerank_top=(100 if deep else 40), **kw)
         data = {'id': jid, 'q': q, 'done': True, 'at': time.time(), 'items': out}
     except Exception as e:
         data = {'id': jid, 'q': q, 'done': True, 'error': str(e), 'at': time.time()}
@@ -256,13 +367,19 @@ def run_job(jid, q, k, deep):
     io.open(_job_path(jid), 'w', encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
 
 
-def start_async(q, k, deep):
+def start_async(q, k, deep, recent=0, device=None, model=None):
     """立刻返回 job id；真正的检索在 detached 子进程里跑，结果写 index/jobs/<id>.json。"""
     os.makedirs(JOBS, exist_ok=True)
     jid = time.strftime('%Y%m%d-%H%M%S') + '-%d' % os.getpid()
     cmd = [sys.executable, os.path.abspath(__file__), '--run-job', jid, q, '--k', str(k)]
     if deep:
         cmd.append('--deep')
+    if recent:
+        cmd += ['--recent', str(recent)]
+    if device:
+        cmd += ['--device', device]
+    if model:
+        cmd += ['--model', model]
     flags = 0x00000008 if os.name == 'nt' else 0   # DETACHED_PROCESS
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
@@ -275,14 +392,21 @@ def main():
     ap.add_argument('--no-vector', action='store_true')
     ap.add_argument('--no-rerank', action='store_true')
     ap.add_argument('--deep', action='store_true', help='重排池放到 100：更准但慢约 6 倍')
+    ap.add_argument('--weighted', action='store_true', help='叠加三维权重（用户/决定词抬高，捧场话术压低）')
+    ap.add_argument('--recent', type=int, default=0, metavar='N',
+                    help='最近 N 天优先：只加分、不减分，默认 0=关')
+    ap.add_argument('--device', default=None, help='只保留该设备来源的块（如 网页 / 主机名）')
+    ap.add_argument('--model', default=None, help='只保留该底座来源的块（如 deepseek-web）')
     ap.add_argument('--async', dest='async_', action='store_true',
                     help='立刻打印 job id，检索在 detached 子进程里跑')
     ap.add_argument('--run-job', default=None, help=argparse.SUPPRESS)
     ap.add_argument('--result', default=None, help='取某个 async 任务的结果（没跑完则打印 RUNNING）')
     a = ap.parse_args()
 
+    kw = dict(recent_days=a.recent, device=a.device, model=a.model)
+
     if a.run_job:
-        run_job(a.run_job, a.query, a.k, a.deep)
+        run_job(a.run_job, a.query, a.k, a.deep, **kw)
         return 0
 
     if a.result:
@@ -304,17 +428,19 @@ def main():
     if a.async_:
         if not a.query:
             ap.error('--async 需要查询词')
-        print(start_async(a.query, a.k, a.deep))
+        print(start_async(a.query, a.k, a.deep, a.recent, a.device, a.model))
         return 0
 
     t0 = time.time()
 
     bl = blocks()
     out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank,
-                 rerank_top=(100 if a.deep else 40))
-    if not out:
+                 rerank_top=(100 if a.deep else 40), weighted=a.weighted, **kw)
+    if not out and not (a.device or a.model):
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
         out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback'} for b in recent]
+    elif not out:
+        print('（该 设备/底座 下没有命中；去掉 --device/--model 再试）', file=sys.stderr)
 
     for it in out:
         print('--- %.4f  [%s] %s  %s' % (it['score'], it['role'], os.path.basename(it['file'])[:46], it['why']))

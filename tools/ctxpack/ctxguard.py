@@ -1,0 +1,372 @@
+# -*- coding: utf-8 -*-
+"""
+ctxguard.py — 上下文守卫：测当前上下文、到线就准备"接续包"
+
+  python ctxguard.py                 # 报当前上下文规模与水位
+  python ctxguard.py --prepare       # 生成接续包 v2（导出本会话 + 汇总状态）
+
+原理：cost-meter 账本里 cacheRead/calls 就是"每次调用携带的上下文规模"。
+     这是唯一不用猜的实测口径。
+
+接续包 v2（2026-11-08 重定义）：
+  L0 铁律（0.0 交互 + 5.3/5.4/5.6 红线）→ L1 现状 + 待办 → L2 指针。
+  只带"必读"，其余用指针指回台账/待办/原文；硬上限 3000 字（约 9 KB）。
+  超了就截断并注明——宁短，不要一份没人读完的长包。
+"""
+import argparse
+import glob
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+LEDGER = os.path.join(HOME, ".dsh", "storages", "cost-meter", "ledger.json")
+ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
+NODE = r"C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+
+# OK/WARN/HOT 是"上下文水位"；CLEAN 是"该清理了"的线。
+# 450K 与计划任务里的 ctxguard.ps1 对齐——两处阈值不一致时，脚本说"该清理了"、
+# CLI 却说"健康"，等于没有提醒（2026-11-08 修）。
+OK, CLEAN, WARN, HOT = 300_000, 450_000, 500_000, 700_000
+LIMIT = 1_000_000
+PACK_LIMIT = 3600          # 接续包硬上限（字符，约 10 KB UTF-8）
+
+
+def human(n):
+    return "%.0fK" % (n / 1000) if n < 1_000_000 else "%.2fM" % (n / 1_000_000)
+
+
+def current():
+    data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
+    days = data.get("days") or {}
+    day = days[sorted(days)[-1]]
+    rec = max(day.get("sessions") or [], key=lambda s: s.get("calls", 0))
+    calls = max(1, rec.get("calls", 1))
+    return {
+        "session": rec.get("id", "?"),
+        "calls": rec.get("calls", 0),
+        "cache": rec.get("cacheRead", 0),
+        "input": rec.get("input", 0),
+        "output": rec.get("output", 0),
+        "cost": rec.get("costCny", 0),
+        "ctx": rec.get("cacheRead", 0) / calls,     # 每次调用的上下文规模
+    }
+
+
+def level(ctx):
+    if ctx >= HOT:
+        return "HOT", "该开新会话了"
+    if ctx >= WARN:
+        return "WARN", "准备接续包"
+    if ctx >= CLEAN:
+        return "CLEAN", "该清理了（只出包、只提示；删记忆必须你点头，见 5.4）"
+    if ctx >= OK:
+        return "注意", "还能撑，但别再加长文档"
+    return "OK", "健康"
+
+
+def report(ctx=None):
+    c = current()
+    if ctx:
+        c["ctx"] = ctx          # 测试/复算用：不依赖账本也能验证到线行为
+    lv, tip = level(c["ctx"])
+    pct = 100.0 * c["ctx"] / LIMIT
+    print("[上下文] %s · %s（%.1f%% / 上限 %s）· 调用 %d 次 · ￥%.3f"
+          % (human(c["ctx"]), lv, pct, human(LIMIT), c["calls"], c["cost"]))
+    print("         建议：%s" % tip)
+    return c
+
+
+def latest_session_dir():
+    best, best_t = None, 0
+    for f in glob.glob(os.path.join(HOME, ".dsh", "sessions", "*", "*", "session.v4.jsonl.zstd")):
+        t = os.path.getmtime(f)
+        if t > best_t:
+            best, best_t = f, t
+    return best
+
+
+def copy_to_clipboard(text):
+    """把文本塞进剪贴板。返回成功与否——失败不该让整个出包流程算失败。"""
+    try:
+        p = subprocess.run("clip", input=text.encode("utf-16-le"), shell=True)
+        return p.returncode == 0
+    except Exception as e:
+        print("复制剪贴板异常: %s" % e)
+        return False
+
+
+# ---- 从台账里"按小节取、按行压缩"：不手抄，免得台账改了包没改 ----
+
+def _section(txt, start, stops=("\n## ", "\n### ")):
+    i = txt.find(start)
+    if i < 0:
+        return ""
+    j = len(txt)
+    for stop in stops:
+        k = txt.find(stop, i + len(start))
+        if k > 0:
+            j = min(j, k)
+    return txt[i:j].strip()
+
+
+def _bullets(txt, start=None, cap=99):
+    """取条目行；不以条目符号开头的后续行接回上一条——否则一句话会被腰斩。
+
+    start 为 None 时，txt 本身已经是某一小节的正文（调用方已经切好）。
+    """
+    sec = _section(txt, start) if start else txt
+    out = []
+    for line in sec.splitlines():
+        s = line.strip()
+        if re.match(r"^(-|>|\d+\.)\s", s):
+            out.append(s)
+        elif out and s and not s.startswith(("#", "|", "```")):
+            out[-1] += s
+    return out[:cap]
+
+
+def _fence(sec):
+    m = re.search(r"```[^\n]*\n(.*?)```", sec, re.S)
+    if not m:
+        return []
+    return [l.rstrip() for l in m.group(1).splitlines() if l.strip()]
+
+
+def _rows(sec, limit=None):
+    rows = [l for l in sec.splitlines()
+            if l.startswith("|") and not re.match(r"^\|[\s:|-]+\|?$", l)]
+    rows = [r for r in rows if not re.match(r"^\|\s*#\s*\|", r)]
+    rows = [r for r in rows if _cells(r)[0] not in ("—", "-", "")]
+    return rows[-limit:] if limit else rows
+
+
+def _cells(row):
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _clip(s, n):
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _session_id(path):
+    try:
+        head = io.open(path, encoding="utf-8", errors="replace").read(800)
+    except OSError:
+        return ""
+    m = re.search(r"- 会话：`([^`]+)`", head)
+    return m.group(1) if m else ""
+
+
+def _last_assistant(path, cap=300):
+    """上一轮收尾：取上一份会话原文里最后一条助手消息，压成一段。"""
+    try:
+        text = io.open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return ""
+    i = text.rfind("\n## 助手")
+    if i < 0:
+        return ""
+    body = text[i:].split("\n", 1)[-1].strip()
+    body = "\n".join(l for l in body.splitlines()
+                     if not l.strip().startswith(("|", "#", "```")))
+    return _clip(re.sub(r"\s*\n\s*", " ", body), cap)
+
+
+def _l1_rows(limit=6):
+    p = os.path.join(ROOT, "index", "L1.jsonl")
+    if not os.path.exists(p):
+        return []
+    try:
+        rows = [json.loads(l) for l in io.open(p, encoding="utf-8") if l.strip()]
+    except Exception:
+        return []
+    return rows[:limit]
+
+
+def prepare(c=None, clip=True):
+    c = c or current()
+    out_dir = os.path.join(ROOT, "续接")
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M")
+    md = os.path.join(out_dir, "接续包-%s.md" % stamp)
+
+    # 先记住"上一轮"的原文，再导出本轮——否则 newest 会变成刚导出的这一份。
+    old = sorted(glob.glob(os.path.join(ROOT, "sessions", "*", "电脑会话", "续接前-*.md")),
+                 key=os.path.getmtime, reverse=True)
+
+    sess = latest_session_dir()
+    export_line = "（未导出）"
+    target = ""
+    if sess:
+        target = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "电脑会话", "续接前-%s.md" % stamp)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        try:
+            r = subprocess.run([NODE, os.path.join(ROOT, "dsh_export.js"), os.path.dirname(sess), target],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+            export_line = target if r.returncode == 0 else "导出失败: " + r.stderr[:120]
+        except Exception as e:
+            export_line = "导出异常: %s" % e
+
+    dec_path = os.path.join(ROOT, "DECISIONS.md")
+    dec_txt = io.open(dec_path, encoding="utf-8").read() if os.path.exists(dec_path) else ""
+
+    parts = [
+        "# 接续包 %s · v2（极简）" % stamp,
+        "",
+        "> 上下文 %s（%.0f%% 上限）。**读完先回一句「已读完，当前任务=…」，然后等指示**；"
+        "没指示不动文件、不推待办。" % (human(c["ctx"]), 100.0 * c["ctx"] / LIMIT),
+        "> 本包只带必读；全文在 `DECISIONS.md` / `BACKLOG.md` / `HANDOFF.md`。",
+        "",
+    ]
+
+    if c["ctx"] >= CLEAN:
+        parts += [
+            "## 清理提示（只准备，不删除）",
+            "",
+            "- 水位 **%s**，已过 450K：**该清理了**；本次只出包 + 导出原文，**没删任何记忆**。" % human(c["ctx"]),
+            "- 删记忆须你确认（5.4）；删光记忆是内核红线，单次对话不执行。",
+            "",
+        ]
+
+    if dec_txt:
+        zero = _section(dec_txt, "## 0.0 异步非阻塞")
+        if zero:
+            parts += [_clip(zero, 520), ""]
+
+        phi = _section(dec_txt, "## 〇、最高架构哲学")
+        if phi:
+            keep = [l.strip() for l in phi.splitlines()
+                    if l.strip().startswith((">", "1.", "2.", "3.", "4."))]
+            parts += ["## 〇、哲学", "", _clip("\n".join(keep), 520), ""]
+
+        red = ["## 红线（5.3 仲裁 / 5.4 边界 / 5.6 拒绝权）", ""]
+        s53 = _section(dec_txt, "### 5.3 冲突仲裁")
+        ladder = _fence(s53)
+        if ladder:
+            red += ["```"] + ladder + ["```", ""]
+        # 代码块里那几行是"优先级梯子"，上面已经原样贴过了；再当条目抓一遍会重复。
+        red += _bullets(re.sub(r"```.*?```", "", s53, flags=re.S)) + [""]
+
+        # 5.4 / 5.6 用整段原文（裁掉标题与引用行）：条目之外还有"删光记忆=红线"这类散句，
+        # 只抓条目会把最要紧的那句漏掉。
+        body54 = _section(dec_txt, "### 5.4 人机边界").split("\n", 1)[-1].strip()
+        body54 = "\n".join(l for l in body54.splitlines() if not l.strip().startswith(">"))
+        if body54:
+            red += ["**5.4 人机边界：**", _clip(body54, 520), ""]
+
+        body56 = _section(dec_txt, "### 5.6 拒绝权").split("\n", 1)[-1].strip()
+        body56 = "\n".join(l for l in body56.splitlines() if not l.strip().startswith(">"))
+        if body56:
+            red += ["**5.6 拒绝权：**", _clip(body56, 480), ""]
+        parts += red
+    # 上一轮收尾：可变段（每次重生成），限 300 字。
+    # "上一轮"必须是**另一个会话**的最后一条助手消息；本会话自己的历史快照不算。
+    cur_id = _session_id(target) if target else ""
+    summary = ""
+    for p in old:
+        sid = _session_id(p)
+        if sid and sid != cur_id:
+            summary = _last_assistant(p)
+            break
+    if summary:
+        parts += ["## 上一轮收尾（自动段，≤300 字）", "", summary, ""]
+
+    # 现状：只留"最近 4 条已落地"，证据列去掉
+    facts = _rows(_section(dec_txt, "## 一、已经落地"), limit=4)
+    if facts:
+        parts += ["## 现状（最近 %d 条，全文见台账）" % len(facts), "", "| # | 决定 |", "|---|---|"]
+        for r in facts:
+            cells = _cells(r)
+            if len(cells) >= 2:
+                parts.append("| %s | %s |" % (cells[0], _clip(cells[1], 58)))
+        parts.append("")
+
+    # L1-2 待办：进行中 + 待办表（B11 子表不带，细节回 BACKLOG）
+    bk_path = os.path.join(ROOT, "BACKLOG.md")
+    if os.path.exists(bk_path):
+        bk = io.open(bk_path, encoding="utf-8").read()
+        doing = _rows(_section(bk, "## 进行中"))
+        todo = _rows(_section(bk, "## 待办（按顺序推进）", stops=("\n## ", "\n**B11")))
+        lines = ["## 待办（下一件 + 待你定）", "", "| # | 事项 | 谁做 |", "|---|---|---|"]
+        for r in doing + todo:
+            cells = _cells(r)
+            if len(cells) >= 3:
+                lines.append("| %s | %s | %s |" % (cells[0], _clip(cells[1], 46), cells[2]))
+        lines += ["", "> 细节（B11a–f 拆分等）见 `BACKLOG.md`；标 **【你】** 的才停下等决定。", ""]
+        parts += lines
+
+    # 一级索引在出包前重建（0.5 秒）：否则交接包里的目录会静默过期，
+    # 新窗口看到的是昨天的清单，还看不出来它过期了。
+    l1_script = os.path.join(ROOT, "index_l1.py")
+    if os.path.exists(l1_script):
+        try:
+            subprocess.run([sys.executable, l1_script, "--quiet"], timeout=120,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    # 一级索引：只在这里读一次；要细节去 zsearch / HANDOFF（二级）。
+    l1 = _l1_rows(5)
+    if l1:
+        parts += ["## 一级索引（每源一行；细节再 zsearch 二次读）", "",
+                  "| 日期 | 来源 | 文件 | 消息 |", "|---|---|---|---|"]
+        for r in l1:
+            parts.append("| %s | %s | %s | %d |"
+                         % (r["day"], r["source"], _clip(os.path.basename(r["file"]), 34), r["msgs"]))
+        parts.append("")
+
+    tail = [
+        "## 指针",
+        "",
+        "- 会话原文：`%s`" % export_line,
+        "- 检索：`python zsearch.py \"关键词\" --k 100`（默认混合，`--no-vector` 退关键词）",
+        "- 水位：`python ctxguard.py`；到 450K 会自动出包，**删记忆仍须人确认**",
+        "",
+    ]
+
+    # 截断只砍正文，指针永远保留——把"原文在哪、怎么检索"砍掉，包就废了。
+    body = "\n".join(parts)
+    if len(body) > PACK_LIMIT - 240:
+        body = body[:PACK_LIMIT - 280].rstrip() + "\n\n…（正文按 %d 字上限截断）\n" % PACK_LIMIT
+    text = body.rstrip() + "\n\n" + "\n".join(tail)
+    io.open(md, "w", encoding="utf-8", newline="\n").write(text)
+
+    print("接续包已生成: %s（%d 字 / %.1f KB）" % (md, len(text), len(text.encode("utf-8")) / 1024.0))
+    print("会话原文: %s" % export_line)
+    if c["ctx"] >= CLEAN:
+        print("提示：水位 %s 已过 450K —— 该清理了（本次只出包，未删除任何记忆）" % human(c["ctx"]))
+
+    if clip:
+        if copy_to_clipboard(text):
+            print("已复制到剪贴板：开新会话 → Ctrl+V → 回车，就能接上")
+        else:
+            print("复制剪贴板失败（可手动打开上面的文件）")
+    else:
+        print("（--no-clip：未写入剪贴板）")
+    return md
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="上下文水位：到 450K 出接续包并提示清理（不删除）")
+    ap.add_argument("--prepare", action="store_true", help="生成接续包 v2（默认并复制到剪贴板）")
+    ap.add_argument("--no-clip", action="store_true", help="出包但不覆盖剪贴板")
+    ap.add_argument("--clip", action="store_true", help="只复制最近生成的包到剪贴板")
+    ap.add_argument("--ctx", type=int, default=0, help="强制指定上下文规模（测试到线行为）")
+    a = ap.parse_args()
+
+    c = report(a.ctx or None)
+    if a.prepare:
+        print()
+        prepare(c, clip=not a.no_clip)
+    elif a.clip:
+        files = sorted(glob.glob(os.path.join(ROOT, "续接", "接续包-*.md")))
+        if not files:
+            print("还没有接续包，先跑 --prepare")
+        else:
+            txt = io.open(files[-1], encoding="utf-8").read()
+            print("已复制 %s" % files[-1] if copy_to_clipboard(txt) else "复制失败")
