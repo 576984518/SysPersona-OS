@@ -24,7 +24,7 @@ import urllib.request
 
 import numpy as np
 
-ROOT = r'Z:\会话检索261107'
+ROOT = r'D:\4590-PC-文件\AI会话检索记录'
 ARCHIVE = os.path.join(ROOT, 'archive')
 IDX = os.path.join(ROOT, 'index')
 MANIFEST = os.path.join(IDX, 'manifest.json')
@@ -167,7 +167,7 @@ def main():
 
     old_vecs = None
     old_metas = []
-    if os.path.exists(os.path.join(IDX, 'vectors.npy')) and not a.dry_run:
+    if os.path.exists(os.path.join(IDX, 'vectors.npy')):
         try:
             old_vecs = np.load(os.path.join(IDX, 'vectors.npy'))
             old_metas = [json.loads(l) for l in io.open(os.path.join(IDX, 'meta.jsonl'), encoding='utf-8') if l.strip()]
