@@ -3,6 +3,11 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
+![version](https://img.shields.io/badge/version-v3.0.0-blue)
+
+> **v3.0.0 — 从设计走到实现。** 此前 0.1–2.3 交付的是规范与推演；这一版首次交付**可运行产物**：
+> `tools/ctxpack/` 下的上下文提取归档、网页会话抓取、增量巡检三条命令。证据与边界见 [CHANGELOG](CHANGELOG.md)。
+
 
 **把 AI 的「人格」与「记忆」从模型里剥离出来，做成可迁移、可版本化、可加密的数据资产——再给它一套能在世界上安全活着的规矩。**
 

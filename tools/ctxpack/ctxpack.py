@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ctxpack.py — 上下文提取与归档（MVP，v2.4.1）
+ctxpack.py — 上下文提取与归档（MVP，v2.5.0）
 
 只处理"变过的文件"：按 mtime + size 记录水位，提取过的自动跳过；
 提取完先归档打包，再记水位，下次不会重复处理。
 
+目录约定（脚本同级放记录目录；记录目录里按 日期/来源 两层分桶，来源互不干扰）：
+  sessions/2026-11-07/电脑会话/xxx.md     ← 输入（另一台电脑的 DSH 会话）
+  sessions/2026-11-08/网页对话/xxx.md     ← 输入（网页版对话）
+  sessions/2026-11-08/网页文章/xxx.md     ← 输入（网页文章正文）
+  archive/2026-11-07/电脑会话/            ← 归档自动跟随输入的 日期/来源
+来源名 = 路径里日期段(YMD)的下一段；日期段不存在则视为无来源。
+
   archive  归档一段对话（可读 .md + .gz + index）
   digest   提取「状态 / 定下的 / 否决的 / 下一步」；可传目录，只处理变更文件
-  search   检索归档片段，可按时间或频次排序
+  search   检索归档片段，可按时间或频次排序，可按来源过滤
   status   看哪些文件还没被处理
 
 用法：
   python ctxpack.py digest ./notes -o HANDOFF.md --dry-run
-  python ctxpack.py digest ./notes -o HANDOFF.md
-  python ctxpack.py search 分身 --sort time
+  python ctxpack.py digest . -o HANDOFF.md
+  python ctxpack.py search 分身 --sort time --source 网页对话
 """
 
 import argparse
@@ -36,6 +43,24 @@ REJECT = ("否决", "不要", "放弃", "不再", "错了", "删掉", "驳回", 
 NEXT = ("下一步", "待办", "TODO", "还要", "接下来", "未做", "计划")
 STATUS = ("版本", "当前", "状态", "已完成", "发布")
 EXTS = (".md", ".txt", ".markdown")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def source_of(rel):
+    """从相对路径取 来源名：找到日期段(YMD)，其下一段即来源；找不到返回空。"""
+    parts = rel.replace("\\", "/").split("/")
+    for i, p in enumerate(parts):
+        if DATE_RE.match(p):
+            return parts[i + 1] if i + 1 < len(parts) else ""
+    return ""
+
+
+def day_of(rel):
+    """从相对路径取 记录日期段(YMD)，用于归档分桶；找不到返回 None。"""
+    for p in rel.replace("\\", "/").split("/"):
+        if DATE_RE.match(p):
+            return p
+    return None
 
 
 def _slug(s):
@@ -87,7 +112,7 @@ def sig(path):
 
 
 def scan(root, st):
-    """返回 (changed, skipped)。跳过归档目录与状态文件。"""
+    """返回 (changed, skipped)。跳过归档目录、状态文件与 HANDOFF 摘要。"""
     changed, skipped = [], []
     files = []
     if os.path.isfile(root):
@@ -96,6 +121,8 @@ def scan(root, st):
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in ("archive", ".git", "__pycache__")]
             for fn in filenames:
+                if fn.lower().startswith("handoff"):
+                    continue
                 if fn.lower().endswith(EXTS):
                     files.append(os.path.join(dirpath, fn))
     for p in sorted(files):
@@ -127,15 +154,71 @@ def digest_text(path, budget=2400):
     return body if len(body) <= budget else body[:budget] + "\n…（截断）\n"
 
 
-def archive(path, title=None, tags=None):
+def _indexed_files():
+    """索引里已记录过的归档路径集合（用于幂等判断）。"""
+    out = set()
+    if not os.path.exists(INDEX):
+        return out
+    try:
+        with open(INDEX, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.add(json.loads(line).get("file", ""))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def _drop_archived(old_rel):
+    """删掉某个来源的旧归档（.md 与 .gz）并移除其索引行，保证一个来源只留最新快照。"""
+    if not old_rel:
+        return
+    full = os.path.join(ROOT, old_rel.replace("/", os.sep))
+    for p in (full, full + ".gz"):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
+    if not os.path.exists(INDEX):
+        return
+    keep = []
+    with open(INDEX, encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                rec = json.loads(s)
+            except ValueError:
+                continue
+            if rec.get("file") == old_rel:
+                continue
+            keep.append(s)
+    with open(INDEX, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(keep) + ("\n" if keep else ""))
+
+
+def archive(path, title=None, tags=None, source=None, day=None):
     os.makedirs(ARCHIVE, exist_ok=True)
     text = _read(path)
-    day = time.strftime("%Y-%m-%d")
+    day = day or time.strftime("%Y-%m-%d")
     d = os.path.join(ARCHIVE, day)
+    if source:
+        d = os.path.join(d, _slug(source))
     os.makedirs(d, exist_ok=True)
     h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
     name = "%s-%s.md" % (_slug(title or os.path.splitext(os.path.basename(path))[0]), h)
     full = os.path.join(d, name)
+    rel_full = os.path.relpath(full, ROOT).replace("\\", "/")
+    # 幂等：同路径同 sha256 已归档过就不再写、不再追加索引
+    if os.path.exists(full) and os.path.exists(full + ".gz") and rel_full in _indexed_files():
+        return full
     with open(full, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     with gzip.open(full + ".gz", "wb") as f:
@@ -144,6 +227,7 @@ def archive(path, title=None, tags=None):
         f.write(json.dumps({
             "file": os.path.relpath(full, ROOT).replace("\\", "/"),
             "day": day,
+            "source": _slug(source) if source else "",
             "title": title or os.path.basename(path),
             "tags": tags or [],
             "chars": len(text),
@@ -153,8 +237,21 @@ def archive(path, title=None, tags=None):
     return full
 
 
-def cmd_digest(root, out_path, dry_run, st):
+def _mtime(p):
+    try:
+        return os.stat(p).st_mtime
+    except OSError:
+        return 0
+
+
+def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False):
     changed, skipped = scan(root, st)
+    if all_files:
+        extra = [(os.path.join(ROOT, rel.replace("/", os.sep)), rel) for rel in skipped]
+        changed = changed + extra
+        # 新会话优先：日期倒序 → 同一天内按修改时间倒序（最近在动的先展开）
+        changed.sort(key=lambda x: (day_of(x[1]) or "0000-00-00", _mtime(x[0])), reverse=True)
+        skipped = []
     print("待处理 %d 个，已跳过 %d 个（未变更）" % (len(changed), len(skipped)))
     if not changed:
         print("没有新内容，不生成摘要。")
@@ -165,23 +262,46 @@ def cmd_digest(root, out_path, dry_run, st):
         return 0
 
     parts = ["# 交接摘要", "", "> 由 `ctxpack.py digest` 生成 · %s" % time.strftime("%Y-%m-%d %H:%M"), ""]
+    used, cut = 0, []
     for p, rel in changed:
+        block = digest_text(p) or "（无可抽取内容）"
+        if max_chars and used + len(block) > max_chars:
+            cut.append(rel)
+            continue
         parts.append("## 来源：`%s`" % rel)
         parts.append("")
-        parts.append(digest_text(p) or "（无可抽取内容）")
+        parts.append(block)
         parts.append("")
+        used += len(block)
+    if cut:
+        parts.append("> 其余 %d 个文件因超出 %d 字上限未展开（归档已完整保留，用 search 查）：" % (len(cut), max_chars))
+        parts += ["- `%s`" % r for r in cut]
 
     text = "\n".join(parts)
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
 
+    archived = 0
     for p, rel in changed:
-        full = archive(p, title=os.path.basename(p))
+        meta = st["processed"].get(rel) or {}
+        cur = sig(p)
+        fresh = not (meta.get("mtime") == cur["mtime"] and meta.get("size") == cur["size"])
+        if not fresh:
+            continue  # --all 重出摘要时，未变的不重复归档
+        old = meta.get("archived_as") or ""
+        new_h = hashlib.sha256(_read(p).encode("utf-8")).hexdigest()[:8]
+        if old.endswith("-%s.md" % new_h) and os.path.exists(os.path.join(ROOT, old.replace("/", os.sep))):
+            st["processed"][rel] = dict(meta, mtime=cur["mtime"], size=cur["size"], at=time.time())
+            continue  # 内容哈希没变（只是 mtime 变了）：视为同一份，不动归档
+        if old:
+            _drop_archived(old)  # 内容变了：旧版本作废，只留最新
+        full = archive(p, title=os.path.basename(p), source=source_of(rel), day=day_of(rel))
         st["processed"][rel] = sig(p)
         st["processed"][rel]["archived_as"] = os.path.relpath(full, ROOT).replace("\\", "/")
         st["processed"][rel]["at"] = time.time()
+        archived += 1
     save_state(st)
-    print("已写 %s（%d 字），并归档 %d 个文件；水位已更新。" % (out_path, len(text), len(changed)))
+    print("已写 %s（%d 字），归档 %d 个文件；水位已更新。" % (out_path, len(text), archived))
     return 0
 
 
@@ -196,18 +316,24 @@ def cmd_status(root, st):
     return 0
 
 
-def search(q, limit=5, ctx=1, sort="freq"):
+def search(q, limit=5, ctx=1, sort="freq", source=None):
     if not os.path.isdir(ARCHIVE):
         return []
     hits = []
-    for day in sorted(os.listdir(ARCHIVE), reverse=True):
-        d = os.path.join(ARCHIVE, day)
-        if not os.path.isdir(d):
+    for dirpath, dirnames, filenames in os.walk(ARCHIVE):
+        dirnames.sort(reverse=True)
+        rel_dir = os.path.relpath(dirpath, ARCHIVE).replace("\\", "/")
+        parts = [] if rel_dir == "." else rel_dir.split("/")
+        day = parts[0] if parts else ""
+        src = parts[1] if len(parts) >= 2 else ""
+        if not DATE_RE.match(day):
             continue
-        for fn in sorted(os.listdir(d)):
+        if source and src != _slug(source) and src != source:
+            continue
+        for fn in sorted(filenames):
             if not fn.endswith(".md"):
                 continue
-            p = os.path.join(d, fn)
+            p = os.path.join(dirpath, fn)
             try:
                 lines = _read(p).splitlines()
             except OSError:
@@ -218,7 +344,7 @@ def search(q, limit=5, ctx=1, sort="freq"):
             i = idxs[0]
             snippet = "\n".join(lines[max(0, i - ctx):i + ctx + 1]).strip()
             hits.append({"file": os.path.relpath(p, ROOT).replace("\\", "/"),
-                         "day": day, "score": len(idxs), "snippet": snippet})
+                         "day": day, "source": src, "score": len(idxs), "snippet": snippet})
     if sort == "time":
         hits.sort(key=lambda x: (x["day"], x["file"]), reverse=True)
     else:
@@ -237,17 +363,22 @@ def main():
     a = sub.add_parser("archive")
     a.add_argument("path")
     a.add_argument("--title", default=None)
+    a.add_argument("--source", default=None)
+    a.add_argument("--day", default=None)
     a.add_argument("--tags", default="")
 
     d = sub.add_parser("digest")
     d.add_argument("path")
     d.add_argument("-o", "--out", default="HANDOFF-session.md")
     d.add_argument("--dry-run", action="store_true")
+    d.add_argument("--max-chars", type=int, default=0, help="摘要总字数上限，0 为不限")
+    d.add_argument("--all", action="store_true", help="忽略水位，把所有文件重新出一份摘要")
 
     s = sub.add_parser("search")
     s.add_argument("query")
     s.add_argument("--limit", type=int, default=5)
     s.add_argument("--sort", choices=["freq", "time"], default="freq")
+    s.add_argument("--source", default=None)
 
     st = sub.add_parser("status")
     st.add_argument("path", default=".")
@@ -257,20 +388,20 @@ def main():
 
     if args.cmd == "archive":
         tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-        full = archive(args.path, args.title, tags)
+        full = archive(args.path, args.title, tags, args.source, args.day)
         print("archived:", full)
         print("gz:      ", full + ".gz")
     elif args.cmd == "digest":
-        return cmd_digest(args.path, args.out, args.dry_run, state)
+        return cmd_digest(args.path, args.out, args.dry_run, state, args.max_chars, args.all)
     elif args.cmd == "status":
         return cmd_status(args.path, state)
     else:
-        hits = search(args.query, args.limit, sort=args.sort)
+        hits = search(args.query, args.limit, sort=args.sort, source=args.source)
         if not hits:
             print("no hits")
             return 1
         for h in hits:
-            print("== %s  (hits=%d, %s)" % (h["file"], h["score"], h["day"]))
+            print("== %s  (hits=%d, %s, source=%s)" % (h["file"], h["score"], h["day"], h["source"] or "-"))
             print(h["snippet"])
             print()
     return 0
