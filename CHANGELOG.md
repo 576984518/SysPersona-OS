@@ -10,6 +10,18 @@
 
 ---
 
+## v4.2.0 — 2026-11-08：能力面与拒绝落库（规范落到代码）
+
+**为什么算一个版本**：新增了可运行的能力（`decide_capability` / `record_refusal` / `episodes.memory_type`），
+按 `RELEASING` §三 属 MINOR；此前 `permissions` 与 `persona_conflict` 只有纸面定义。
+
+- `impl/m1/syspersona.py`：`episodes` 增 `memory_type`（含旧库迁移）；`add_episode` 支持类型；
+  新增 `permissions()`、`decide_capability()`（allow/ask/deny，deny 优先、缺省 deny）、
+  `record_refusal()`（追加 `persona_conflict` 记忆 + `audit_log`，不覆盖旧记忆）。
+- `examples/schema.sql`：`episodes.memory_type` 同步进最小 schema。
+- 新增 `impl/m1/test_policy.py`：4 条能力裁决 + 冲突落库 + 审计 + 普通记忆不受影响的断言。
+- 证据：自测 `ALL OK`；14 天仿真实测 `断言通过：12 条`，与 v4.1.0 一致（无回归）。
+
 ## 2026-11-08 — B25 结论：导出已带分隔线，历史快照不重导（不发版）
 
 - `dsh_export.js` 早已在消息之间写 `---`（第 78 行），导出流水线走 `ctxguard.py` → 该脚本，**新导出的角色正确**；

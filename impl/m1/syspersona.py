@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     content TEXT NOT NULL,
     importance REAL NOT NULL DEFAULT 0.5,
     occurred_at TEXT NOT NULL,
-    consolidated INTEGER NOT NULL DEFAULT 0
+    consolidated INTEGER NOT NULL DEFAULT 0,
+    memory_type TEXT NOT NULL DEFAULT 'episode'
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -313,6 +314,10 @@ class Store:
             self.db.execute("ALTER TABLE episodes ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
         if "last_access" not in ep_cols:
             self.db.execute("ALTER TABLE episodes ADD COLUMN last_access TEXT")
+        if "memory_type" not in ep_cols:
+            self.db.execute(
+                "ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode'"
+            )
         self.db.commit()
 
     # ---------- persona ----------
@@ -360,14 +365,62 @@ class Store:
         )
 
     # ---------- episodes ----------
-    def add_episode(self, session_id: str, role: str, content: str, importance: float = 0.5) -> int:
+    def add_episode(self, session_id: str, role: str, content: str,
+                    importance: float = 0.5, memory_type: str = "episode") -> int:
         cur = self.db.execute(
-            "INSERT INTO episodes (session_id, role, content, importance, occurred_at)"
-            " VALUES (?,?,?,?,?)",
-            (session_id, role, content, importance, now()),
+            "INSERT INTO episodes (session_id, role, content, importance, occurred_at, memory_type)"
+            " VALUES (?,?,?,?,?,?)",
+            (session_id, role, content, importance, now(), memory_type),
         )
         self.db.commit()
         return int(cur.lastrowid)
+
+    # ---------- 能力面与拒绝（PERSONA_SPEC §2.1 / §5）----------
+    def permissions(self) -> dict:
+        k = (self.load_persona().get("kernel") or {})
+        p = k.get("permissions") or {}
+        return {
+            "default": p.get("default", "deny"),
+            "allow": list(p.get("allow") or []),
+            "ask": list(p.get("ask") or []),
+            "deny": list(p.get("deny") or []),
+        }
+
+    def decide_capability(self, capability: str) -> str:
+        """返回 allow / ask / deny。deny 优先，其次 ask，再次 allow，都没有走 default。"""
+        p = self.permissions()
+
+        def hit(items: list) -> bool:
+            for c in items:
+                if c == "*" or capability == c or capability.startswith(c + ":"):
+                    return True
+            return False
+
+        if hit(p["deny"]):
+            return "deny"
+        if hit(p["ask"]):
+            return "ask"
+        if hit(p["allow"]):
+            return "allow"
+        return p["default"] if p["default"] in ("allow", "ask", "deny") else "deny"
+
+    def record_refusal(self, clause: str, instruction: str,
+                       session_id: str = "runtime") -> dict:
+        """拒绝时留痕：追加 persona_conflict 记忆 + audit；绝不覆盖旧记忆。"""
+        at = now()
+        payload = {
+            "refused": True,
+            "clause": clause,
+            "instruction": instruction[:200],
+            "decided": "refused",
+            "at": at,
+            "summary": "因 %s 拒绝了 %s" % (clause, instruction[:40].replace("\n", " ")),
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        eid = self.add_episode(session_id, "system", content, importance=0.9,
+                               memory_type="persona_conflict")
+        self.audit("refuse", content)
+        return dict(payload, episode_id=eid)
 
     def recent_episodes(self, limit: int = 10) -> list[sqlite3.Row]:
         return self.db.execute(

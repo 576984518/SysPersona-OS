@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     importance      REAL    NOT NULL DEFAULT 0.5,   -- 0..1
     occurred_at     TEXT    NOT NULL,
     source_msg_id   TEXT,                  -- 来源消息，便于追溯
+    memory_type     TEXT    NOT NULL DEFAULT 'episode',  -- episode / persona_conflict / action
     deleted_at      TEXT
 );
 
