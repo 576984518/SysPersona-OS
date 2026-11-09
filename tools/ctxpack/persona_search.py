@@ -33,16 +33,7 @@ try:
 except Exception:
     pass
 
-def _find_root():
-    """记忆库根目录：优先环境变量 SYSPERSONA_ROOT，否则向上找含 archive/ 的目录。"""
-    env = os.environ.get('SYSPERSONA_ROOT')
-    if env:
-        return env
-    here = os.path.dirname(os.path.abspath(__file__))
-    for cand in (here, os.path.dirname(here)):
-        if os.path.isdir(os.path.join(cand, 'archive')):
-            return cand
-    return here
+from persona_root import find_root as _find_root  # noqa: E402  唯一实现：persona_root.py
 
 
 import persona_avatar as av
