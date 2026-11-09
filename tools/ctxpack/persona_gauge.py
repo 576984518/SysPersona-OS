@@ -30,7 +30,7 @@ NODE = r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
 
 # 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from persona_limits import OK, CLEAN, WARN, HOT, MIRROR, LIMIT, PACK_LIMIT  # noqa: E402
+from persona_limits import OK, CLEAN, WARN, MIRROR, LIMIT, PACK_LIMIT  # noqa: E402
 
 
 def human(n):
@@ -55,12 +55,11 @@ def current():
 
 
 def level(ctx):
-    if ctx >= HOT:
-        return "HOT", "该开新会话了"
-    if ctx >= WARN:
-        return "WARN", "准备接续包"
+    """一维尺子：只按大小判，不跳档（2026-11-09 修：原来 HOT 先判，会越过 CLEAN）。"""
     if ctx >= CLEAN:
-        return "CLEAN", "该清理了（只出包、只提示；删记忆必须你点头，见 5.4）"
+        return "该交接", "到 %s 了：先镜像、再出包；删记忆仍须你点头" % human(CLEAN)
+    if ctx >= WARN:
+        return "准备", "快到 %s：可以先把接续包备好" % human(CLEAN)
     if ctx >= OK:
         return "注意", "还能撑，但别再加长文档"
     return "OK", "健康"
