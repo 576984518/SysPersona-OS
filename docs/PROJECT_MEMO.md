@@ -73,7 +73,8 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 ## 五、当前状态
 
-- 版本：**v4.3.0**（2026-11-09 网页会话全量抓取：`tools/cdp_capture/`）；`main` 已推送。
+- 版本：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）；`main` 已推送。
+- 同日另有 **v4.3.0**（网页会话全量抓取器 `tools/cdp_capture/`），两版并存、各自成立。
 - 抓取链路：虚拟列表三个坑已定论（隐藏页不重绘 / 底部锚定 / 高度估算），详见 `docs/CAPTURE.md`；
   **未解决**：调试浏览器登录态偶发丢失、网页内部 API 带 PoW。
 - 工具：`ctxguard.py` / `index_l1.py` / `read_watch.py` / `zsearch.py` / `index_inc.py` / `eval.py` 均在 `tools/ctxpack/`。
