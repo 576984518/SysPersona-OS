@@ -244,7 +244,8 @@ def prepare(c=None, clip=True, canonical=False):
         parts += [
             "## 清理提示（只准备，不删除）",
             "",
-            "- 水位 **%s**，已过 450K：**该清理了**；本次只出包 + 导出原文，**没删任何记忆**。" % human(c["ctx"]),
+            "- 水位 **%s**，已过 %s：**该清理了**；本次只出包 + 导出原文，**没删任何记忆**。"
+            % (human(c["ctx"]), human(CLEAN)),
             "- 删记忆须你确认（5.4）；删光记忆是内核红线，单次对话不执行。",
             "",
         ]
@@ -360,7 +361,7 @@ def prepare(c=None, clip=True, canonical=False):
         "",
         "- 会话原文：`%s`" % export_line,
         "- 检索：`python persona_search.py \"关键词\" --k 100`（默认混合，`--no-vector` 退关键词）",
-        "- 水位：`python persona_gauge.py`；到 450K 会自动出包，**删记忆仍须人确认**",
+        "- 水位：`python persona_gauge.py`；到 %s 会自动出包，**删记忆仍须人确认**" % human(CLEAN),
         "",
     ]
 
@@ -387,7 +388,8 @@ def prepare(c=None, clip=True, canonical=False):
                 pass
     print("会话原文: %s" % export_line)
     if c["ctx"] >= CLEAN:
-        print("提示：水位 %s 已过 450K —— 该清理了（本次只出包，未删除任何记忆）" % human(c["ctx"]))
+        print("提示：水位 %s 已过 %s —— 该清理了（本次只出包，未删除任何记忆）"
+              % (human(c["ctx"]), human(CLEAN)))
 
     if clip:
         if copy_to_clipboard(text):
@@ -400,7 +402,7 @@ def prepare(c=None, clip=True, canonical=False):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="上下文水位：到 450K 出接续包并提示清理（不删除）")
+    ap = argparse.ArgumentParser(description="上下文水位：到 %s 出接续包并提示清理（不删除）" % human(CLEAN))
     ap.add_argument("--prepare", action="store_true", help="生成接续包 v2（默认并复制到剪贴板）")
     ap.add_argument("--no-clip", action="store_true", help="出包但不覆盖剪贴板")
     ap.add_argument("--clip", action="store_true", help="只复制最近生成的包到剪贴板")
