@@ -17,7 +17,7 @@
 > 同一份人格宪法挂到不同底座（DeepSeek / Kimi / 本地 Llama）上，显化出不同的分身；
 > 不抹平模型的天性，只约束它的边界。冲突只拦截、只记录，**绝不修改底层权重**。
 > → [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md)
-> → 我们改过哪些主意：[\docs/EVOLUTION.md\](docs/EVOLUTION.md)
+> → 我们改过哪些主意：[`docs/EVOLUTION.md`](docs/EVOLUTION.md)
 
 > **最高交互 · 前台只等会话，其余后台跑**
 > 长任务先回一句「收到，正在…」再丢后台，跑完作为「事件插播」汇报；超过 5 秒的操作不占前台。
@@ -27,7 +27,7 @@
 
 **当前 v4.2.0**（能力面与拒绝落库）· 上一版 v4.1.0 · [变更记录](CHANGELOG.md)
 
-📜 [进化史](EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
+📜 [进化史](docs/EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
 
 ---
 
@@ -913,7 +913,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [安全可行性报告](docs/SECURITY-FEASIBILITY.md)：46 项验证、测量数据、明文残留与「零依赖」结论。
 - [架构哲学](docs/PHILOSOPHY.md)：告别强制洗脑，拥抱分身投影——最高层约定，与任何规范冲突时以它为准。
 - [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引 / **交接包 v2.1 / 一级索引 / 读索引后台重试**（2026-11-08 更新）。
-- [进化史](https://github.com/576984518/SysPersona-OS/blob/main/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
+- [进化史](https://github.com/576984518/SysPersona-OS/blob/main/docs/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
 - [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
 - [人格分身规范](docs/AVATAR_SPEC.md)
