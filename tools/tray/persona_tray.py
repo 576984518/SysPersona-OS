@@ -9,6 +9,7 @@ r"""persona_tray.py — 托盘状态灯（只显示与退出，不代办任何�
 启动：快捷方式或开机项，直接跑：
   D:\ProgramData\SysPersona-Runtime\python\pythonw.exe persona_tray.py
 """
+import io
 import json
 import os
 import subprocess
@@ -19,8 +20,8 @@ import time
 import pystray
 from PIL import Image, ImageDraw
 
-ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OPS = os.environ.get("PERSONA_OPS") or os.path.join(ROOT, "ops")
+ROOT = os.path.dirname(os.path.abspath(__file__))
+OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
 LOG = os.path.join(OPS, "persona.log")
 STALE = 180  # 秒：状态文件超过这个时间没更新，视为守护挂了
@@ -119,6 +120,35 @@ def refresh(icon):
         time.sleep(5)
 
 
+def pool_summary():
+    """任务池只读摘要（v5.5）：只显示，不决策。"""
+    p = os.path.join(OPS, "tasks.jsonl")
+    if not os.path.exists(p):
+        return "任务池：空"
+    st = {}
+    for line in io.open(p, encoding="utf-8", errors="replace"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        st[r.get("id")] = r
+    rows = [r for r in st.values() if r.get("status") in ("pending", "claimed", "running")]
+    if not rows:
+        return "任务池：空"
+    out = ["任务池 %d 条：" % len(rows)]
+    for r in sorted(rows, key=lambda x: x.get("prio", 5))[:5]:
+        out.append("  p%s %s %s" % (r.get("prio", 5), r.get("status", ""), (r.get("title") or "")[:18]))
+    return "\n".join(out)
+
+
+def show_pool(icon=None, item=None):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, pool_summary(), "任务池（只读）", 0x40)
+
+
 def main():
     rgb, text, _ = evaluate(read_status())
     icon = pystray.Icon(
@@ -127,6 +157,7 @@ def main():
         title=text,
         menu=pystray.Menu(
             pystray.MenuItem("查看状态", show_status, default=True),
+            pystray.MenuItem("任务池", show_pool),
             pystray.MenuItem("打开日志", open_log),
             pystray.MenuItem("打开记忆库", open_mem),
             pystray.Menu.SEPARATOR,

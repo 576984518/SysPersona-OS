@@ -80,6 +80,7 @@ DEFAULTS = {
     "todo": 1800,
     "tasks": 300,
     "observe": 21600,
+    "daily": 21600,
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900, "watermark": 120}
@@ -629,6 +630,15 @@ def t_observe():
     return ok, line
 
 
+def t_daily():
+    """日度高光（v5.6）：只写当天定下的事，带来源文件；同一天覆盖重写。"""
+    script = os.path.join(ROOT, "persona_daily.py")
+    if not os.path.exists(script):
+        return False, "缺 persona_daily.py"
+    ok, msg = run([PY, script], 120)
+    return ok, (msg or "").strip()[:80]
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -649,6 +659,7 @@ TASKS = {
     "reap": t_reap,
     "tasks": t_tasks,
     "observe": t_observe,
+    "daily": t_daily,
     "proxy": t_proxy,
     "todo": t_todo,
 }
