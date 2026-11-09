@@ -3,7 +3,7 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v5.3.0-blue)
+![version](https://img.shields.io/badge/version-v5.6.0-blue)
 
 > **本项目是「数字生命记忆架构」的概念验证（PoC）与参考方案，不是开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：`tools/ctxpack/` 与 `impl/` 都是参考实现，
@@ -25,7 +25,7 @@
 > **固定格式**（顺序 / 上限，改需人确认）；交接只读一次一级索引，细节再检索。
 > → [`tools/ctxpack/README.md`](tools/ctxpack/README.md)
 
-**当前 v5.3.0**（保活 + 交互代理）· 上一版 v5.2.0 · [变更记录](CHANGELOG.md)
+**当前 v5.6.0**（记忆网络设计成文）· 上一版 v5.5.0 · [变更记录](CHANGELOG.md)
 
 📜 [进化史](docs/EVOLUTION.md)：这个仓库是怎么在五次断片里长出来的——以及为什么「记忆」不是聊天记录。
 
@@ -914,6 +914,7 @@ MIT，见 [`LICENSE`](LICENSE)。
 - [架构哲学](docs/PHILOSOPHY.md)：告别强制洗脑，拥抱分身投影——最高层约定，与任何规范冲突时以它为准。
 - [上下文提取器](tools/ctxpack/README.md)：归档 / 提取 / 检索 / 混合召回 / 增量索引 / **交接包 v2.1 / 一级索引 / 读索引后台重试**（2026-11-08 更新）。
 - [人格运行时](tools/persona/README.md)：闹钟 / 报到 / 派发回收 / 交互代理 / 保活；**唤醒后先读总索引**，代理协议见 [`docs/INTERACT_SPEC.md`](docs/INTERACT_SPEC.md)（v5.3.0）。
+- 后三版设计：[后台处理](docs/BACKGROUND_SPEC.md)（v5.4）· [任务调度](docs/SCHEDULER_SPEC.md)（v5.5）· [记忆网络](docs/MEMORY_NET_SPEC.md)（v5.6）。
 - [进化史](https://github.com/576984518/SysPersona-OS/blob/main/docs/EVOLUTION.md)：五次断片、一次接上，以及为什么「记忆」不是聊天记录。
 - [人格运行时规范](docs/LAUNCHER_SPEC.md)：加载、组装、路由、**执行**、归档；能力面与在场模型；Profile E/G/H/R。
 - [数据隐私与主权规范](docs/PRIVACY_SPEC.md)：威胁模型、数据分级、七条不变量与控制矩阵（v0.1）。
