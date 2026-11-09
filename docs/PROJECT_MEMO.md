@@ -73,6 +73,7 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 ## 五、当前状态
 
+- 工具版：**v5.1.0**（2026-11-09 托盘状态灯：`tools/tray/persona_tray.py`，只读状态、不代办）
 - 落地版：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）——v5 线只讲壳接入。
 - 设计版：**v4.4.0**（2026-11-09 画像 / 全局索引 / 技能**设计成文**，未落地：`docs/PROFILE.md`、`docs/GLOBAL_INDEX.md`、`docs/SKILLS.md`；脚本统一 `persona_` 前缀），属 v4 记忆工具线的延续。
 - 同日另有 **v4.3.0**（网页会话全量抓取器 `tools/cdp_capture/`），两版并存、各自成立。
