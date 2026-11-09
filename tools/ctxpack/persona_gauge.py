@@ -26,14 +26,11 @@ import time
 HOME = os.path.expanduser("~")
 LEDGER = os.path.join(HOME, ".dsh", "storages", "cost-meter", "ledger.json")
 ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
-NODE = r"C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+NODE = r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
 
-# OK/WARN/HOT 是"上下文水位"；CLEAN 是"该清理了"的线。
-# 450K 与计划任务里的 ctxguard.ps1 对齐——两处阈值不一致时，脚本说"该清理了"、
-# CLI 却说"健康"，等于没有提醒（2026-11-08 修）。
-OK, CLEAN, WARN, HOT = 300_000, 450_000, 500_000, 700_000
-LIMIT = 1_000_000
-PACK_LIMIT = 3600          # 接续包硬上限（字符，约 10 KB UTF-8）
+# 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from persona_limits import OK, CLEAN, WARN, HOT, MIRROR, LIMIT, PACK_LIMIT  # noqa: E402
 
 
 def human(n):
@@ -163,18 +160,29 @@ def _session_id(path):
 
 
 def _last_assistant(path, cap=300):
-    """上一轮收尾：取上一份会话原文里最后一条助手消息，压成一段。"""
+    """上一轮收尾：取会话原文里最后两条消息（你一句、我一句），压成一段。
+
+    2026-11-09 改：原来取「另一个会话」的最后一条，DSH 会话不导出时会拿到很旧的段；
+    现在优先取本次会话的导出（target），两条并排，读的人一眼知道刚才聊到哪。
+    """
     try:
         text = io.open(path, encoding="utf-8", errors="replace").read()
     except OSError:
         return ""
-    i = text.rfind("\n## 助手")
-    if i < 0:
+    blocks = re.split(r"\n## ", text)
+    msgs = [b for b in blocks[1:] if b.startswith(("用户", "助手"))]
+    if not msgs:
         return ""
-    body = text[i:].split("\n", 1)[-1].strip()
-    body = "\n".join(l for l in body.splitlines()
-                     if not l.strip().startswith(("|", "#", "```")))
-    return _clip(re.sub(r"\s*\n\s*", " ", body), cap)
+    pick = msgs[-2:] if len(msgs) >= 2 else msgs[-1:]
+    out = []
+    for b in pick:
+        role, _, body = b.partition("\n")
+        body = "\n".join(l for l in body.strip().splitlines()
+                         if not l.strip().startswith(("|", "#", "```")))
+        body = re.sub(r"\s*\n\s*", " ", body).strip()
+        body = body.split("🔧")[0].strip(" -—")   # 工具调用不入收尾段
+        out.append("%s：%s" % ("你" if role.startswith("用户") else "我", _clip(body, cap // len(pick))))
+    return " / ".join(out)
 
 
 def _l1_rows(limit=6):
@@ -274,13 +282,16 @@ def prepare(c=None, clip=True, canonical=False):
         parts += red
     # 上一轮收尾：可变段（每次重生成），限 300 字。
     # "上一轮"必须是**另一个会话**的最后一条助手消息；本会话自己的历史快照不算。
-    cur_id = _session_id(target) if target else ""
     summary = ""
-    for p in old:
-        sid = _session_id(p)
-        if sid and sid != cur_id:
-            summary = _last_assistant(p)
-            break
+    if target and os.path.exists(target):
+        summary = _last_assistant(target)      # 本次会话的最后两条
+    if not summary:
+        cur_id = _session_id(target) if target else ""
+        for p in old:
+            sid = _session_id(p)
+            if sid and sid != cur_id:
+                summary = _last_assistant(p)
+                break
     if summary:
         parts += ["## 上一轮收尾（自动段，≤300 字）", "", summary, ""]
 

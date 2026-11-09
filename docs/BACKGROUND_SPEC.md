@@ -29,6 +29,10 @@
 | Hermes 库 | `state.db` 的 `turn_stats.tokens_input` | `persona_daemon.t_hctx`（120 s 一次） | 现行；`MAX 1M / LIMIT 450K / MIRROR 800K` |
 
 **合成一条**：两个数都在时取**较大者**（保守，宁可行李早打好）；只有一个时有谁用谁；都没有就报 `unknown`，**不按字数估**。
+
+**代码侧唯一出处**：`persona_limits.py`（`OK/CLEAN/WARN/HOT/MIRROR/LIMIT/PACK_LIMIT`）。
+`persona_gauge.py` 与 `persona_daemon.py` 都 import 它，**不许各写一份数字**——
+两处阈值不一致时，脚本说"该清理了"、CLI 却说"健康"，等于没有提醒（2026-11-08 踩过）。
 `t_hctx` 落 `ops/hctx.json`：`{at, session, model, ctx, max, pct, level}`——这是托盘与判据的唯一读数口，别处不许再算第二份。
 
 ## 三、四个动作

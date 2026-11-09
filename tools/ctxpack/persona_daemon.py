@@ -26,7 +26,7 @@ r"""persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 
     watermark  900s  算上下文水位，过线写提醒
     capture    on-demand  抓网页会话（request 文件触发）
 """
-import argparse, json, os, re, subprocess, sys, threading, time, traceback
+import argparse, io, json, os, re, subprocess, sys, threading, time, traceback
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
@@ -36,10 +36,11 @@ CONF = os.path.join(OPS, "persona.conf.json")
 LOG = os.path.join(OPS, "persona.log")
 CAPTURE_REQ = os.path.join(OPS, "persona-capture.request")
 EXPORT_LOCK = os.path.join(OPS, "export.lock")
+INDEX_LOCK = os.path.join(OPS, "index.lock")
 BACKUP2 = os.environ.get("PERSONA_BACKUP2") or r"C:\SysPersona-Backup"
 
 PY = sys.executable
-NODE = os.environ.get("PERSONA_NODE") or r"C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
 CAPTURE_JS = os.environ.get("PERSONA_CAPTURE") or r"D:\文档\deepseek-harness\default-workspace\cdp\collect7.js"
 
 # Hermes 的会话库：变了就立刻导出，不等 30 分钟的周期（2026-11-09）。
@@ -51,9 +52,12 @@ DB_QUIET = 3.0   # 连续这么久没写入，才认为这一轮答完了
 # 迁移后的上下文水位：Hermes 的 UI 账本里有每轮输入 token，state.db 的 context_used 是空的
 HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
     r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\desktop-ui.sqlite"
-HERMES_CTX_MAX = 1_000_000
-HERMES_CTX_LIMIT = 450_000   # 与旧 ctxguard 的清理线同一把尺子
-HERMES_MIRROR_LIMIT = 800_000  # 到这条线先把会话全文镜像落盘，再让它压
+# 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import persona_limits as _LIM  # noqa: E402
+HERMES_CTX_MAX = _LIM.LIMIT
+HERMES_CTX_LIMIT = _LIM.CLEAN        # 与 gauge 的"该清理了"同一把尺子
+HERMES_MIRROR_LIMIT = _LIM.MIRROR    # 到这条线先把会话全文镜像落盘，再让它压
 
 DEFAULTS = {
     "heartbeat": 60,
@@ -66,6 +70,14 @@ DEFAULTS = {
     "navwatch": 120,
     "hctx": 120,
     "backup2": 300,
+    "handoff": 600,
+    "reload": 600,
+    "uiskin": 120,
+    "wake": 30,
+    "agent": 60,
+    "reap": 60,
+    "proxy": 60,
+    "todo": 1800,
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900, "watermark": 120}
@@ -154,9 +166,31 @@ def t_export():
 
 
 def t_index():
-    ok1, s1 = run([PY, os.path.join(ROOT, "persona_index.py")], TASK_TIMEOUT["index"])
-    ok2, s2 = run([PY, os.path.join(ROOT, "persona_index_l1.py")], 120)
-    return ok1 and ok2, "%s | %s" % (s1, s2)
+    """增量索引。带锁 + 失败重试一次：导出正在写文件时哈希会撞上锁，
+    那一轮必然失败，但下一轮就好了——重试比让人盯着强。"""
+    if os.path.exists(INDEX_LOCK):
+        try:
+            if time.time() - os.stat(INDEX_LOCK).st_mtime < 1800:
+                return True, "上一次索引还在跑，跳过"
+        except OSError:
+            pass
+    try:
+        with open(INDEX_LOCK, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+    try:
+        ok1, s1 = run([PY, os.path.join(ROOT, "persona_index.py")], TASK_TIMEOUT["index"])
+        if not ok1:
+            time.sleep(5)
+            ok1, s1 = run([PY, os.path.join(ROOT, "persona_index.py")], TASK_TIMEOUT["index"])
+        ok2, s2 = run([PY, os.path.join(ROOT, "persona_index_l1.py")], 120)
+        return ok1 and ok2, "%s | %s" % (s1, s2)
+    finally:
+        try:
+            os.remove(INDEX_LOCK)
+        except OSError:
+            pass
 
 
 def t_ctx():
@@ -289,6 +323,113 @@ def t_backup2():
     return True, "新增 %d / 未变 %d（%.1f KB）" % (n, skipped, size / 1024.0)
 
 
+HANDFOFF_FILE = os.path.join(ROOT, "memory", "HANDOFFS.md")
+HANDOFF_STATE = os.path.join(OPS, "handoff-state.json")
+
+
+def t_handoff():
+    """新会话 = 一次交接，写进 memory\\HANDOFFS.md。
+
+    只记"开始时间晚于上次记录"的会话，避免把历史一次性灌进来。
+    触发原因没法自动判断（满 / 手动 / 迁移），先写"待补"，人再补一句。
+    """
+    import sqlite3
+    try:
+        seen = json.load(io.open(HANDOFF_STATE, encoding="utf-8"))
+    except Exception:
+        seen = {"last": time.time(), "ids": []}
+    last, ids = seen.get("last", 0), set(seen.get("ids", []))
+
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % HERMES_DB.replace("\\", "/"), uri=True)
+        rows = list(con.execute(
+            "select id, started_at, message_count, input_tokens from sessions "
+            "where started_at > ? order by started_at", (last,)))
+        con.close()
+    except Exception as e:
+        return False, "读 state.db 失败: %s" % str(e)[:60]
+
+    if not rows:
+        return True, "无新会话"
+    if not os.path.exists(HANDFOFF_FILE):
+        return True, "缺 HANDOFFS.md"
+
+    body = io.open(HANDFOFF_FILE, encoding="utf-8").read()
+    add = []
+    for sid, started, nmsg, tin in rows:
+        if sid in ids:
+            continue
+        ids.add(sid)
+        when = time.strftime("%m-%d %H:%M", time.localtime(started or time.time()))
+        add.append("| %s | → 新会话 `%s` | 自动记录 | 无 | 待补（消息 %d / 输入 %d token） |"
+                   % (when, sid, nmsg or 0, tin or 0))
+    if not add:
+        return True, "无新会话"
+
+    anchor = "\n\n## 四、规则"
+    if anchor in body:
+        body = body.replace(anchor, "\n".join(add) + anchor, 1)
+    else:
+        body = body.rstrip() + "\n" + "\n".join(add) + "\n"
+    io.open(HANDFOFF_FILE, "w", encoding="utf-8", newline="").write(body)
+
+    json.dump({"last": time.time(), "ids": sorted(ids)[-200:]},
+              io.open(HANDOFF_STATE, "w", encoding="utf-8"), ensure_ascii=False)
+    return True, "记 %d 次交接" % len(add)
+
+
+RELOAD_STATE = os.path.join(OPS, "reload-state.json")
+NAVWATCH_LOG = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "navwatch.log")
+
+
+def t_reload():
+    """每一次页面重载 / 抓取，都是一次"缓存失效、文件续命"的现场。
+
+    这些行不是运维日志，是**证据**：证明"窗口里的只是缓存，写下来的才是记忆"。
+    数据源是 watch_nav.js 自己写的 navwatch.log，成对取"触发抓取 → 抓取结束"。
+    """
+    try:
+        st = json.load(io.open(RELOAD_STATE, encoding="utf-8"))
+    except Exception:
+        st = {"seen": 0}
+    seen = int(st.get("seen", 0))
+
+    try:
+        lines = io.open(NAVWATCH_LOG, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        return True, "无 navwatch.log"
+
+    trig = None
+    rows = []
+    for i, line in enumerate(lines):
+        if i < seen:
+            continue
+        if "触发抓取" in line:
+            trig = line
+        elif "抓取结束" in line and trig:
+            t1 = trig.split("  ")[0]          # 11-09 12:44:10
+            code = line.split("code=")[-1].strip()
+            rows.append("| %s | %s | 抓取 code=%s |" % (t1[6:], trig.split("（")[-1].rstrip("）"), code))
+            trig = None
+
+    if not rows:
+        return True, "无新重载"
+    if not os.path.exists(HANDFOFF_FILE):
+        return True, "缺 HANDOFFS.md"
+
+    body = io.open(HANDFOFF_FILE, encoding="utf-8").read()
+    if "## 六、重载记录" not in body:
+        body = body.rstrip() + (
+            "\n\n## 六、重载记录（自动，充当证据）\n\n"
+            "> 这里每一行都是「缓存失效、文件续命」的现场。窗口会重载，文件不会。\n\n"
+            "| 时间 | 触发 | 结果 |\n|---|---|---|\n")
+    body = body.rstrip() + "\n" + "\n".join(rows) + "\n"
+    io.open(HANDFOFF_FILE, "w", encoding="utf-8", newline="").write(body)
+
+    json.dump({"seen": len(lines)}, io.open(RELOAD_STATE, "w", encoding="utf-8"))
+    return True, "记 %d 次重载" % len(rows)
+
+
 def t_navwatch():
     """F5 监听器（watch_nav.js）必须常驻。以前只靠开机启动项，掉了没人管；
     这里用心跳文件的时效判断它是否还活着，掉了就按原样拉起来。"""
@@ -305,6 +446,30 @@ def t_navwatch():
     subprocess.Popen(["wscript.exe", vbs],
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return True, "心跳断了 %.0fs，已重拉" % age
+
+
+def _with_lock(path, fn):
+    """跨进程互斥：多个分身（DSH / Hermes / 手机）可能同时写同一份记忆。
+
+    做法是最土的 O_CREAT|O_EXCL 锁文件 + 50 次重试（5 秒）。
+    拿不到锁也照写——宁可冒一次覆盖风险，也不丢这条观察。"""
+    lock = path + ".lock"
+    fd = None
+    for _ in range(50):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    try:
+        return fn()
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+                os.unlink(lock)
+            except OSError:
+                pass
 
 
 def t_merge():
@@ -327,11 +492,102 @@ def t_merge():
         body = body.replace(marker, marker + "\n" + "\n".join(add), 1)
     else:
         body = body.rstrip() + "\n\n" + "\n".join(add) + "\n"
-    open(dst, "w", encoding="utf-8", newline="").write(body)
+    _with_lock(dst, lambda: open(dst, "w", encoding="utf-8", newline="").write(body))
     # 归档 shell 文件内容，避免重复合并
     bak = os.path.join(shell, "USER.%s.bak" % time.strftime("%Y%m%d-%H%M%S"))
     os.replace(src, bak)
     return True, "并入 %d 条" % len(add)
+
+
+def t_uiskin():
+    """壳的界面注入器必须常驻：壳重启/页面重载后靠它补样式。
+    心跳文件 ops/uiskin.heartbeat，超过 30 秒没更新就重新拉起。"""
+    beat = os.path.join(OPS, "uiskin.heartbeat")
+    try:
+        age = time.time() - os.stat(beat).st_mtime
+    except OSError:
+        age = 1e9
+    if age < 30:
+        return True, "心跳 %.0fs 前" % age
+    script = os.path.join(ROOT, "persona_uiskin.js")
+    if not os.path.exists(script):
+        return False, "缺 persona_uiskin.js"
+    subprocess.Popen([NODE, script], cwd=ROOT,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True, "注入器未在跑，已拉起"
+
+
+def t_wake():
+    """闹钟（v5.3 第一块）：到点就记一条触发记录。
+    真正的「唤醒某个智能体并让它先读总索引」由调用方按 purpose 执行；
+    这里只负责守时和留痕，不做模型调用。"""
+    try:
+        import persona_wake
+    except Exception as e:
+        return False, "导入 persona_wake 失败：%s" % str(e)[:60]
+    n = persona_wake.fire_due()
+    return True, ("触发 %d 个闹钟" % n) if n else "无到点闹钟"
+
+
+def t_agent():
+    """保活（v5.3）：不再认死某个壳——目标写在 ops/keepalive.json。
+    查不了就不动手：受限令牌下「看不见」和「没在跑」长得一样，照着重启会开出第二份。"""
+    return t_keepalive()
+
+
+def t_reap():
+    """派发超时回收（v5.3）：超过 ttl 还挂着的 pending 标过期，有人醒着就改派。"""
+    try:
+        import persona_dispatch
+    except Exception as e:
+        return False, "导入 persona_dispatch 失败：%s" % str(e)[:60]
+    r = persona_dispatch.reap(ttl=600)
+    if not r["expired"]:
+        return True, "无超时派发"
+    return True, "过期 %d，改派 %d" % (len(r["expired"]), len(r["redispatched"]))
+
+
+def t_proxy():
+    """交互代理（v5.3）：8787 不在听就拉起来；只拉进程，不接请求。"""
+    try:
+        import persona_proxy
+    except Exception as e:
+        return False, "导入 persona_proxy 失败：%s" % str(e)[:60]
+    if persona_proxy.is_up():
+        return True, "代理在跑"
+    script = os.path.join(ROOT, "persona_proxy.py")
+    if not os.path.exists(script):
+        return False, "缺 persona_proxy.py"
+    subprocess.Popen([PY, script, "serve"], cwd=ROOT,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True, "代理没在跑，已拉起"
+
+
+def t_keepalive():
+    """保活（v5.3）：目标写在 ops/keepalive.json；查不了就跳过，不重复拉起。"""
+    try:
+        import persona_keepalive as K
+    except Exception as e:
+        return False, "导入 persona_keepalive 失败：%s" % str(e)[:60]
+    res = K.check()
+    if not res:
+        return True, "未登记保活目标"
+    if len(res) == 1:
+        return bool(res[0].get("ok")), res[0]["msg"]
+    bad = [r for r in res if not r.get("ok")]
+    return (not bad), "%d 个目标，%d 个异常" % (len(res), len(bad))
+
+
+
+def t_todo():
+    """待办备忘（v5.3）：把 BACKLOG 摊成一份完整的，交接包截断也不丢。"""
+    script = os.path.join(ROOT, "persona_todo.py")
+    if not os.path.exists(script):
+        return False, "缺 persona_todo.py"
+    ok, msg = run([PY, script], 60)
+    return ok, msg
 
 
 TASKS = {
@@ -345,7 +601,15 @@ TASKS = {
     "navwatch": t_navwatch,
     "hctx": t_hctx,
     "backup2": t_backup2,
+    "handoff": t_handoff,
+    "reload": t_reload,
     "capture": t_capture,
+    "uiskin": t_uiskin,
+    "wake": t_wake,
+    "agent": t_agent,
+    "reap": t_reap,
+    "proxy": t_proxy,
+    "todo": t_todo,
 }
 
 
@@ -464,6 +728,8 @@ class PersonaDaemon:
 
             for name in TASKS:
                 st = self.state[name]
+                if float(self.cfg.get(name, 1) or 0) <= 0:
+                    continue            # 间隔 0 = 停用这个任务（配置里写 0 就关掉）
                 if st["busy"] or t < self.next_due[name]:
                     continue
                 if name == "capture":
