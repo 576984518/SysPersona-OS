@@ -78,6 +78,7 @@ DEFAULTS = {
     "reap": 60,
     "proxy": 60,
     "todo": 1800,
+    "tasks": 300,
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900, "watermark": 120}
@@ -273,6 +274,9 @@ def t_hctx():
                 dst, state = mir.mirror(src, "hctx=%d" % int(ctx))
                 good, note = mir.verify(dst) if state != "skipped" else (True, "幂等跳过")
                 msg += " | 镜像%s：%s（%s）" % (state, os.path.basename(dst), note)
+                # 镜像进了 archive，L1 立刻重建一次——不然要等下一轮 index（1 小时）才检索得到。
+                ok2, m2 = run([PY, os.path.join(ROOT, "persona_index_l1.py")], 120)
+                msg += " | L1 %s" % (m2.strip().splitlines()[0][:60] if m2 else ("ok" if ok2 else "失败"))
             else:
                 msg += " | 镜像：找不到会话文件"
         except Exception as e:                      # 镜像失败不许静默，也不许继续压缩
@@ -602,6 +606,18 @@ def t_todo():
     return ok, msg
 
 
+def t_tasks():
+    """任务池（v5.5）：outbox 补交 + 同义合并。池子不属于记忆，只进 ops/。"""
+    try:
+        import persona_tasks as T
+    except Exception as e:
+        return False, "persona_tasks 不可用：%s" % e
+    sent = T.flush()
+    merged = T.merge_pool()
+    size = T.pool_size()
+    return True, "补交 %d / 合并 %d / 池中 %d" % (sent, merged, size)
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -620,6 +636,7 @@ TASKS = {
     "wake": t_wake,
     "agent": t_agent,
     "reap": t_reap,
+    "tasks": t_tasks,
     "proxy": t_proxy,
     "todo": t_todo,
 }

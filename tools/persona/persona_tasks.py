@@ -320,6 +320,30 @@ def serve(port=8787):
 
 
 # ── CLI ─────────────────────────────────────────────────────────────
+def merge_pool():
+    """把同一件事的多种说法并成一条（保留全部 source_ids）。返回合并条数。"""
+    st = latest()
+    hits, seen = 0, []
+    for r in sorted(st.values(), key=lambda x: x.get("created_at", "")):
+        if r.get("status") in ("done", "rejected"):
+            continue
+        for o in seen:
+            if _jaccard(o.get("title"), r.get("title")) >= JACCARD:
+                upd = dict(o)
+                upd["source_ids"] = sorted(set(o.get("source_ids", [])) | set(r.get("source_ids", [])))
+                upd["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                _append(upd)
+                hits += 1
+                break
+        else:
+            seen.append(r)
+    return hits
+
+
+def pool_size():
+    return len(pool())
+
+
 def _caps(s):
     return [c.strip() for c in re.split(r"[,，;；\s]+", s or "") if c.strip()]
 
