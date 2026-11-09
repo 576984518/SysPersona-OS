@@ -3,7 +3,7 @@
 中文 · [English](README.en.md)
 
 [![simulate](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml/badge.svg)](https://github.com/576984518/SysPersona-OS/actions/workflows/simulate.yml)
-![version](https://img.shields.io/badge/version-v5.0.0-blue)
+![version](https://img.shields.io/badge/version-v4.6.0-blue)
 
 > **本项目是「数字生命记忆架构」的概念验证（PoC）与参考方案，不是开箱即用的软件产品。**
 > 核心价值在**设计思想**与**可行性验证**：`tools/ctxpack/` 与 `impl/` 都是参考实现，

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""index_inc.py — 增量向量索引（与实时抓取共存）
+"""persona_index.py — 增量向量索引（与实时抓取共存）
 
 和 vs.py build 的差别：
   1. 按文件 sha256 记账，只重嵌新增/变过的文件，其余行原样保留 → 抓取一分钟写一次也不怕；
@@ -8,8 +8,8 @@
   4. 先写 .tmp 再原子替换，重建期间旧索引始终可用。
 
 用法：
-  python index_inc.py            # 增量（第一次等于全量）
-  python index_inc.py --dry-run  # 只报要嵌多少块
+  python persona_index.py            # 增量（第一次等于全量）
+  python persona_index.py --dry-run  # 只报要嵌多少块
 """
 import argparse
 import hashlib
@@ -59,6 +59,16 @@ def sha(path):
     return h.hexdigest()
 
 
+def sha_or_none(path):
+    """列目录和算哈希之间，文件可能已经被归档去重删掉了（B52）。
+    以前这会让整个索引任务 FileNotFoundError 退出，第二天还是同一批文件——
+    那就永远卡在同一个地方。拿不到就当它不存在，下一轮再算。"""
+    try:
+        return sha(path)
+    except OSError:
+        return None
+
+
 def split_win(text):
     if len(text) <= WIN + OVERLAP:
         return [text]
@@ -80,7 +90,7 @@ def chunks_of(path):
         body = text
     out, got = [], 0
     for blk in SEP_BLOCK.split(body):
-        # 同 zsearch：分隔线后的空行会让块以 "\n## 用户" 开头，直接 match 会漏掉第一句。
+        # 同 persona_search：分隔线后的空行会让块以 "\n## 用户" 开头，直接 match 会漏掉第一句。
         m = MSG_HEAD.match(blk.lstrip('\n'))
         if not m:
             continue
@@ -398,7 +408,8 @@ def main():
     os.replace(tmp_m, os.path.join(IDX, 'meta.jsonl'))
 
     man = {rel: h for rel, h, _ in todo}
-    man.update({os.path.relpath(p, ROOT).replace('\\', '/'): sha(p) for p in files})
+    man.update({os.path.relpath(p, ROOT).replace('\\', '/'): h
+                for p in files for h in (sha_or_none(p),) if h})
     json.dump(man, io.open(MANIFEST, 'w', encoding='utf-8'), ensure_ascii=False)
     print('DONE 索引 %d 块 / %d 文件｜用时 %.1f 分钟'
           % (len(metas), len(rows_by_file) + len(todo), (time.time() - t0) / 60), flush=True)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ctxpack.py — 上下文提取与归档（MVP，v2.5.0）
+persona_pack.py — 上下文提取与归档（MVP，v2.5.0）
 
 只处理"变过的文件"：按 mtime + size 记录水位，提取过的自动跳过；
 提取完先归档打包，再记水位，下次不会重复处理。
@@ -19,9 +19,9 @@ ctxpack.py — 上下文提取与归档（MVP，v2.5.0）
   status   看哪些文件还没被处理
 
 用法：
-  python ctxpack.py digest ./notes -o HANDOFF.md --dry-run
-  python ctxpack.py digest . -o HANDOFF.md
-  python ctxpack.py search 分身 --sort time --source 网页对话
+  python persona_pack.py digest ./notes -o HANDOFF.md --dry-run
+  python persona_pack.py digest . -o HANDOFF.md
+  python persona_pack.py search 分身 --sort time --source 网页对话
 """
 
 import argparse
@@ -261,7 +261,7 @@ def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False, includ
     if dry_run:
         return 0
 
-    parts = ["# 交接摘要", "", "> 由 `ctxpack.py digest` 生成 · %s" % time.strftime("%Y-%m-%d %H:%M"), ""]
+    parts = ["# 交接摘要", "", "> 由 `persona_pack.py digest` 生成 · %s" % time.strftime("%Y-%m-%d %H:%M"), ""]
     for inc in (includes or []):
         try:
             body = _read(inc)
@@ -472,11 +472,11 @@ def main():
             # 模型没起、索引缺失、依赖没装——一律静默退回关键词，绝不返回"没找到"了事。
             try:
                 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                import zsearch
-                zsearch.ROOT = ROOT
-                zsearch.ARCHIVE = ARCHIVE
-                zsearch.INDEX = os.path.join(ROOT, 'index')
-                rows = zsearch.merged(args.query, k=args.limit)
+                import persona_search
+                persona_search.ROOT = ROOT
+                persona_search.ARCHIVE = ARCHIVE
+                persona_search.INDEX = os.path.join(ROOT, 'index')
+                rows = persona_search.merged(args.query, k=args.limit)
                 if rows:
                     for r in rows:
                         print("== %s  (rrf=%.4f, %s, source=%s)  [%s]"

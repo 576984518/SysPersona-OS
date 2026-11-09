@@ -10,6 +10,25 @@
 
 ---
 
+## v4.6.0 — 2026-11-09：技能总结**成文**（未落地）
+
+**范围**：`docs/SKILLS.md`——七项技能的触发词与判据，以及「什么经验才配变成技能」：
+一次性的迁移不配，能写成就/否判据的才配，踩过的坑必须写进去。
+
+**配套**：9 个脚本统一 `persona_` 前缀（`keeper → persona_daemon`、`ctxguard → persona_gauge`、
+`ctxslim → persona_slim`、`ctxpack → persona_pack`、`hermes_export → persona_bridge`、
+`zsearch → persona_search`、`index_inc → persona_index`、`index_l1 → persona_index_l1`），
+运行期产物同步改名。**改名是真实改动，但不属于新能力。**
+
+**修订记录**：索引遇归档删除会整任务退出且每轮卡同一处（已改跳过）；
+`read_watch.py`/`handoff_rotate.py` 带 BOM 无法解析（已去 BOM）；导出无锁并发 `PermissionError`（已加锁）；
+弃用会话靠删文件挡不住（改用 `ops/skip-sessions.txt` 名单）。
+
+**版本线归属**：v5 那条线只讲记忆层接入开源壳；本版讲记忆内部怎么运转，属 v4 工具线。
+
+- 撤并留痕：同日曾按 v5.1.0 发过一版（三份文档打在一起），因归属与颗粒度都不对，已撤销，拆成 4.4.0/4.5.0/4.6.0。
+
+
 ## v4.5.0 — 2026-11-09：全局索引**设计成文**（未落地）
 
 **范围**：`docs/GLOBAL_INDEX.md`——L0 正文 / L1 目录 / 块索引 / 归档四层。

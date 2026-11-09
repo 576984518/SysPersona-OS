@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""index_l1.py — 一级索引（每个来源一行，给"交接时只读一次"用）
+"""persona_index_l1.py — 一级索引（每个来源一行，给"交接时只读一次"用）
 
 为什么要它：交接包如果每次都从 150 个文件里现抽摘要，要么慢、要么越抽越长。
 一级索引把"有哪些记忆、各多大、第一句说什么"压成一张几十行的表；
-交接只读这张表，要看细节再去二级索引（`zsearch.py` / `HANDOFF.md`）。
+交接只读这张表，要看细节再去二级索引（`persona_search.py` / `HANDOFF.md`）。
 
 用法：
-  python index_l1.py            # 全量重建 index/L1.jsonl 与 index/L1.md
-  python index_l1.py --quiet    # 只写文件，不打印
+  python persona_index_l1.py            # 全量重建 index/L1.jsonl 与 index/L1.md
+  python persona_index_l1.py --quiet    # 只写文件，不打印
 """
 import argparse
 import io

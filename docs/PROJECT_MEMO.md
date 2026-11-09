@@ -73,11 +73,12 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 ## 五、当前状态
 
-- 版本：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）；`main` 已推送。
+- 落地版：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）——v5 线只讲壳接入。
+- 设计版：**v4.4.0**（2026-11-09 画像 / 全局索引 / 技能**设计成文**，未落地：`docs/PROFILE.md`、`docs/GLOBAL_INDEX.md`、`docs/SKILLS.md`；脚本统一 `persona_` 前缀），属 v4 记忆工具线的延续。
 - 同日另有 **v4.3.0**（网页会话全量抓取器 `tools/cdp_capture/`），两版并存、各自成立。
 - 抓取链路：虚拟列表三个坑已定论（隐藏页不重绘 / 底部锚定 / 高度估算），详见 `docs/CAPTURE.md`；
   **未解决**：调试浏览器登录态偶发丢失、网页内部 API 带 PoW。
-- 工具：`ctxguard.py` / `index_l1.py` / `read_watch.py` / `zsearch.py` / `index_inc.py` / `eval.py` 均在 `tools/ctxpack/`。
+- 工具：`persona_gauge.py` / `persona_index_l1.py` / `persona_search.py` / `persona_index.py` / `persona_daemon.py` / `persona_bridge.py` / `eval.py` / `read_watch.py` 均在 `tools/ctxpack/`。
 - 待办：无阻塞项；B8–B11f 已关账，B24「满 100」定为每跨 100K 提醒一次。
 - 交接文件：v2.1（分锁定段 / 自动段 / 固定格式），规格见记忆库 `续接\交接文件规范-v2.md`。
 - **已知偏差**：记忆库台账 / 检索最新只到 **v3.1.3**；实际已发到 **v3.1.9**（v3.1.4 修 dry-run 假信号、

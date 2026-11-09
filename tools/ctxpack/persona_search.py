@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""zsearch.py — Zero-Miss 混合检索原型
+"""persona_search.py — Zero-Miss 混合检索原型
 
 两条路并行，谁也别想漏：
   A) 关键词路：IDF 加权的字面命中（专有名词、代号、数字靠它）
@@ -8,8 +8,8 @@
 兜底：两路都空时，按时间倒序拉当天最近 N 块原文
 
 用法：
-  python zsearch.py "防止舔狗化的惩罚规则" --k 30
-  python zsearch.py "960 显卡" --k 10 --no-vector
+  python persona_search.py "防止舔狗化的惩罚规则" --k 30
+  python persona_search.py "960 显卡" --k 10 --no-vector
 """
 import argparse
 import datetime
@@ -324,7 +324,7 @@ def _dedupe(rows):
 
 def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=False,
            keep_tools=False, recent_days=0, device=None, model=None):
-    """两路合并后的结果，给 ctxpack.py --hybrid 等调用方用。
+    """两路合并后的结果，给 persona_pack.py --hybrid 等调用方用。
 
     返回 [{file, day, source, role, text, device, model, score, why}, ...]
     device / model：按分身字段过滤（B11e），None = 不过滤。

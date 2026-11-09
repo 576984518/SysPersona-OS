@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-ctxguard.py — 上下文守卫：测当前上下文、到线就准备"接续包"
+persona_gauge.py — 上下文守卫：测当前上下文、到线就准备"接续包"
 
-  python ctxguard.py                 # 报当前上下文规模与水位
-  python ctxguard.py --prepare       # 生成接续包 v2（导出本会话 + 汇总状态）
+  python persona_gauge.py                 # 报当前上下文规模与水位
+  python persona_gauge.py --prepare       # 生成接续包 v2（导出本会话 + 汇总状态）
 
 原理：cost-meter 账本里 cacheRead/calls 就是"每次调用携带的上下文规模"。
      这是唯一不用猜的实测口径。
@@ -284,14 +284,19 @@ def prepare(c=None, clip=True, canonical=False):
     if summary:
         parts += ["## 上一轮收尾（自动段，≤300 字）", "", summary, ""]
 
-    # 现状：只留"最近 4 条已落地"，证据列去掉
-    facts = _rows(_section(dec_txt, "## 一、已经落地"), limit=4)
-    if facts:
-        parts += ["## 现状（最近 %d 条，全文见台账）" % len(facts), "", "| # | 决定 |", "|---|---|"]
-        for r in facts:
-            cells = _cells(r)
-            if len(cells) >= 2:
-                parts.append("| %s | %s |" % (cells[0], _clip(cells[1], 58)))
+    # 现状 = 台账最新 2 个二级小节标题 +「一、已经落地」最后 2 条（B48）。
+    # 旧版只读「一、已经落地」，而新决策都写在「八/九/十/十一」这些节里，
+    # 于是接续包里的"现状"永远停在几天前——不是数据旧，是来源固定。
+    heads = re.findall(r"^## ([一二三四五六七八九十]+、[^\n]+)$", dec_txt, flags=re.M)
+    facts = _rows(_section(dec_txt, "## 一、已经落地"))
+    def _pick(c):
+        # 「一、已经落地」里两种行混排：编号行 | 1 | 决定 | 证据 |，非编号行 | 决定 | 说明 | 日期 |
+        return c[1] if c[0].isdigit() and len(c) >= 3 else c[0]
+    picks = heads[-2:] + [_pick(c) for c in (_cells(r) for r in facts[-2:]) if len(c) >= 2]
+    if picks:
+        parts += ["## 现状（最近 %d 条，全文见台账）" % len(picks), "", "| # | 决定 |", "|---|---|"]
+        for i, p in enumerate(picks, 1):
+            parts.append("| %d | %s |" % (i, _clip(p, 58)))
         parts.append("")
 
     # L1-2 待办：进行中 + 待办表（B11 子表不带，细节回 BACKLOG）
@@ -304,13 +309,17 @@ def prepare(c=None, clip=True, canonical=False):
         for r in doing + todo:
             cells = _cells(r)
             if len(cells) >= 3:
+                # 已完成的不进接续包：BACKLOG 里打勾的行还留在原表，不过滤就会
+                # 把 B38/B39 这种早就做完的当成"待办"带进新窗口（B48）。
+                if any("✅" in c for c in cells):
+                    continue
                 lines.append("| %s | %s | %s |" % (cells[0], _clip(cells[1], 46), cells[2]))
         lines += ["", "> 细节（B11a–f 拆分等）见 `BACKLOG.md`；标 **【你】** 的才停下等决定。", ""]
         parts += lines
 
     # 一级索引在出包前重建（0.5 秒）：否则交接包里的目录会静默过期，
     # 新窗口看到的是昨天的清单，还看不出来它过期了。
-    l1_script = os.path.join(ROOT, "index_l1.py")
+    l1_script = os.path.join(ROOT, "persona_index_l1.py")
     if os.path.exists(l1_script):
         try:
             subprocess.run([sys.executable, l1_script, "--quiet"], timeout=120,
@@ -318,10 +327,10 @@ def prepare(c=None, clip=True, canonical=False):
         except Exception:
             pass
 
-    # 一级索引：只在这里读一次；要细节去 zsearch / HANDOFF（二级）。
+    # 一级索引：只在这里读一次；要细节去 persona_search / HANDOFF（二级）。
     l1 = _l1_rows(5)
     if l1:
-        parts += ["## 一级索引（每源一行；细节再 zsearch 二次读）", "",
+        parts += ["## 一级索引（每源一行；细节再 persona_search 二次读）", "",
                   "| 日期 | 来源 | 文件 | 消息 |", "|---|---|---|---|"]
         for r in l1:
             parts.append("| %s | %s | %s | %d |"
@@ -332,8 +341,8 @@ def prepare(c=None, clip=True, canonical=False):
         "## 指针",
         "",
         "- 会话原文：`%s`" % export_line,
-        "- 检索：`python zsearch.py \"关键词\" --k 100`（默认混合，`--no-vector` 退关键词）",
-        "- 水位：`python ctxguard.py`；到 450K 会自动出包，**删记忆仍须人确认**",
+        "- 检索：`python persona_search.py \"关键词\" --k 100`（默认混合，`--no-vector` 退关键词）",
+        "- 水位：`python persona_gauge.py`；到 450K 会自动出包，**删记忆仍须人确认**",
         "",
     ]
 
