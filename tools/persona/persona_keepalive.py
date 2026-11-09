@@ -159,6 +159,12 @@ def check(do_start=True):
             continue
         last = (st.get(name) or {}).get("last", 0)
         cool = int(t.get("cooldown") or 120)
+        # 默认「只报不拉」：进程该不该活，归它自己的启动项/运行时管；
+        # 保活只在明确写了 autostart=true 的目标上动手，否则只记录状态。
+        if not bool(t.get("autostart", False)):
+            out.append({"name": name, "ok": False,
+                        "msg": "没在跑（配置为只报不拉；要拉请设 autostart=true）"})
+            continue
         if do_start and now - last < cool:
             out.append({"name": name, "ok": False,
                         "msg": "没在跑，%ds 前刚试过拉起（冷却 %ds）" % (int(now - last), cool)})
@@ -190,9 +196,10 @@ def cmd_add(a):
     targets = [t for t in load_conf() if t.get("name") != a.name]
     targets.append({"name": a.name, "match": a.match, "exe": a.exe,
                     "args": a.args or [], "cwd": a.cwd or "",
-                    "cooldown": a.cooldown})
+                    "cooldown": a.cooldown, "autostart": bool(a.autostart)})
     save_conf(targets)
-    print("已登记保活目标 %s：%s → %s" % (a.name, a.match, a.exe))
+    print("已登记保活目标 %s：%s → %s（%s）" % (a.name, a.match, a.exe,
+                                            "会拉起" if a.autostart else "只报不拉"))
     return 0
 
 
@@ -202,7 +209,9 @@ def cmd_list(_a):
         print("（未登记保活目标）")
         return 0
     for t in targets:
-        print("%-14s %-30s %s" % (t.get("name"), t.get("match"), t.get("exe")))
+        print("%-14s %-30s %-10s %s" % (t.get("name"), t.get("match"),
+                                       "会拉起" if t.get("autostart") else "只报不拉",
+                                       t.get("exe")))
     return 0
 
 
@@ -232,6 +241,8 @@ def main():
     c.add_argument("--args", nargs="*", default=[])
     c.add_argument("--cwd", default="")
     c.add_argument("--cooldown", type=int, default=120)
+    c.add_argument("--autostart", action="store_true",
+                   help="没在跑就拉起（默认关：只报不拉，进程归它自己的启动项管）")
     sub.add_parser("list")
     c = sub.add_parser("rm"); c.add_argument("--name", required=True)
     c = sub.add_parser("check")

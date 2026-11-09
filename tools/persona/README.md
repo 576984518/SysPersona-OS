@@ -12,7 +12,7 @@
 | `persona_dispatch.py` | 派发台账（append-only，按 id 取最后状态） | 过期不改旧行，只追加 expired + 改派；换人 3 次仍无人接 → failed + 告警 |
 | `persona_master.py` | 总索引速览（人读 / `--json` / `--pending`） | 来源按时间倒序，末尾列「派发中的任务」 |
 | `persona_proxy.py` | 交互代理：**AI 调本机的唯一通道** | 越界 403、未知动词 404、错 token 401、未授权命令 403 |
-| `persona_keepalive.py` | 保活：盯进程、没在跑就拉起 | 查不了（`None`）时**不动手**，不重复拉起 |
+| `persona_keepalive.py` | 保活：盯进程、报状态；**默认只报不拉** | 没写 `autostart: true` 就绝不动手 |
 | `selftest.py` | 不碰真库的自检（临时库 + 真跑） | `PASS 32 / FAIL 0` |
 
 七个脚本放在**同一个目录**，互相 `import`；`PERSONA_ROOT` 可覆盖库根（默认脚本所在目录），
@@ -52,7 +52,8 @@ def t_proxy():
 TASKS = {..., "wake": t_wake, "agent": t_agent, "reap": t_reap, "proxy": t_proxy}
 ```
 
-保活目标写在 `ops/keepalive.json`（`name` / `match` / `exe` / `cooldown`），换壳只改配置。
+保活目标写在 `ops/keepalive.json`（`name` / `match` / `exe` / `cooldown` / `autostart`），换壳只改配置。
+**`autostart` 默认 false**：进程归它自己的启动项管，保活只负责「在不在、什么时候不在」。
 节奏都在 `ops/persona.conf.json` 里，可单独关掉一个任务而不影响其它。
 
 ## 三、一次完整的心跳
