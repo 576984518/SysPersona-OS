@@ -50,8 +50,48 @@ def current():
         "input": rec.get("input", 0),
         "output": rec.get("output", 0),
         "cost": rec.get("costCny", 0),
-        "ctx": rec.get("cacheRead", 0) / calls,     # 每次调用的上下文规模
+        # 上下文只认"最近一轮输入"；账本里的 cacheRead 是**累计**，除以调用数只是估算。
+        "ctx": _estimate(rec, calls),
+        "estimated": True,
     }
+
+
+def _estimate(rec, calls):
+    """账本估算：累计缓存 / 调用次数。只在拿不到实测时用，输出带 `~`。"""
+    try:
+        return int(rec.get("cacheRead", 0) / max(1, calls))
+    except Exception:
+        return 0
+
+
+HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
+    r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\desktop-ui.sqlite"
+
+
+def hermes_ctx():
+    """上下文 = 最近 20 轮里**最大**的 `tokens_input`（含其模型与时间）。
+
+    为什么取最大：同一会话里会夹着本地小模型（Qwen3:0.6B）的轮次，它的输入很小；
+    只看"最后一轮"会把大水位误判成安全。宁可按保守值提醒，也不让人撞线。
+    取不到返回 (0, "", "")。
+    """
+    if not os.path.exists(HERMES_UI_DB):
+        return 0, "", ""
+    try:
+        import sqlite3
+        con = sqlite3.connect("file:%s?mode=ro" % HERMES_UI_DB.replace("\\", "/"), uri=True)
+        try:
+            row = con.execute(
+                "select tokens_input, model, id from turn_stats where tokens_input is not null "
+                "order by id desc limit 20").fetchall()
+        finally:
+            con.close()
+    except Exception:
+        return 0, "", ""
+    if not row:
+        return 0, "", ""
+    best = max(row, key=lambda r: int(r[0] or 0))
+    return int(best[0] or 0), (best[1] or ""), (best[2] or "")
 
 
 def level(ctx):
@@ -66,13 +106,32 @@ def level(ctx):
 
 
 def report(ctx=None):
+    """上下文口径：**每轮真正带进去的 token**，不是累计缓存。
+
+    两个读数都摆出来，取大者判定：
+      - 账本均值：`cacheRead / calls`（估算，历史全量，标 `~`）；
+      - 实测最大：`turn_stats.tokens_input` 最近 20 轮的最大值（Hermes 侧）。
+    取大不取小：低估水位会让人撞线，高估最多早出一次包。
+    """
     c = current()
+    real, model, tid = hermes_ctx()
+    est = c["ctx"]
+    use = max(est, real)
+    if real and real > est:
+        c["estimated"] = False
     if ctx:
-        c["ctx"] = ctx          # 测试/复算用：不依赖账本也能验证到线行为
-    lv, tip = level(c["ctx"])
-    pct = 100.0 * c["ctx"] / LIMIT
-    print("[上下文] %s · %s（%.1f%% / 上限 %s）· 调用 %d 次 · ￥%.3f"
-          % (human(c["ctx"]), lv, pct, human(LIMIT), c["calls"], c["cost"]))
+        use = ctx               # 测试/复算用：不依赖账本也能验证到线行为
+        c["estimated"] = False
+    c["ctx"] = use
+    lv, tip = level(use)
+    pct = 100.0 * use / LIMIT
+    print("[上下文] %s%s · %s（%.1f%% / 上限 %s）· 调用 %d 次 · ￥%.3f"
+          % ("~" if c.get("estimated") else "", human(use), lv, pct,
+             human(LIMIT), c["calls"], c["cost"]))
+    if not ctx:
+        print("         读数：账本均值 ~%s（累计缓存÷调用 %d 次）· 实测最大 %s%s"
+              % (human(est), c["calls"], human(real) if real else "（取不到）",
+                 ("（%s）" % model) if model else ""))
     print("         建议：%s" % tip)
     return c
 
