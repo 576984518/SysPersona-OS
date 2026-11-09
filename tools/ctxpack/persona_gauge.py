@@ -338,6 +338,12 @@ def prepare(c=None, clip=True, canonical=False):
         parts.append("")
 
     tail = [
+        "## 开工三步（先跑，再动手；回话也算动作）",
+        "",
+        "1. 读设定：`memory\\MEMORY.md` + `先读我.md`",
+        "2. 读总索引：`python persona_master.py --k 10`",
+        "3. 认领检查：`python persona_claim.py check \"关键词\" --has text`（0 可做 / 1 已被认领 / 2 能力不足）",
+        "",
         "## 指针",
         "",
         "- 会话原文：`%s`" % export_line,
@@ -348,8 +354,10 @@ def prepare(c=None, clip=True, canonical=False):
 
     # 截断只砍正文，指针永远保留——把"原文在哪、怎么检索"砍掉，包就废了。
     body = "\n".join(parts)
-    if len(body) > PACK_LIMIT - 240:
-        body = body[:PACK_LIMIT - 280].rstrip() + "\n\n…（正文按 %d 字上限截断）\n" % PACK_LIMIT
+    if len(body) > PACK_LIMIT - 380:
+        cut = body[:PACK_LIMIT - 420]
+        cut = cut[:cut.rfind("\n")]          # 切在行边界，别把表格切半行
+        body = cut.rstrip() + "\n\n…（正文按 %d 字上限截断）\n" % PACK_LIMIT
     text = body.rstrip() + "\n\n" + "\n".join(tail)
     io.open(md, "w", encoding="utf-8", newline="\n").write(text)
 

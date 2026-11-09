@@ -51,8 +51,11 @@ def rows():
 
 
 def render(items):
-    mine = [x for x in items if "【你】" not in x["who"]]
-    yours = [x for x in items if "【你】" in x["who"]]
+    yours = [x for x in items if "【你】" in x["who"] or "待你定" in x["title"]]
+    mine = [x for x in items if x not in yours]
+    key = lambda x: int(x["id"][1:]) if x["id"][1:].isdigit() else 9999
+    yours.sort(key=key)
+    mine.sort(key=key)
     ts = time.strftime("%Y-%m-%d %H:%M")
     L = []
     L.append("# 待办备忘（自动生成）")
