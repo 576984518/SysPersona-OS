@@ -10,6 +10,28 @@
 
 ---
 
+## v5.3.0 — 2026-11-09：保活 + 交互代理（唤醒之后到底发生什么）
+
+**范围**：新增 `tools/persona/`——闹钟（`persona_wake.py`）、报到与派发（`persona_report.py`）、
+派发台账（`persona_dispatch.py`）、总索引速览（`persona_master.py`）、交互代理（`persona_proxy.py`）、
+保活（`persona_keepalive.py`）与自检（`selftest.py`）；新增 `docs/INTERACT_SPEC.md`。
+守护进程接三个定时任务（`wake` / `reap` / `proxy`），保活并入 `agent` 任务（改用 `persona_keepalive`）；一条心跳成立：
+**闹钟 → 摘总索引简讯 → 执行 purpose → 报到（已读索引）→ 派发（两道门）→ 超时回收/改派**。
+
+**证据**：`python tools/persona/selftest.py` 实测 **PASS 32 / FAIL 0**（临时库，不碰真数据）：
+总索引 3 条来源倒序；无 purpose 登记 exit 2；到点触发写 `index_total=3` 的简讯并注入 `PERSONA_PURPOSE`；
+派发两道门分别 exit 3 / exit 2，都过了才落 pending；过期记录标 `expired` 并改派给醒着的分身，原行不被覆盖；
+代理 11 项：越界 403 / 未知动词 404 / 未授权 `sys.run` 403 / 加白名单后 200 / 错 token 401，
+审计 9 行且不含 token。实机守护进程 `TASK agent OK 壳在跑`（保活判定链路）。
+
+**边界**：不含界面注入、字体替换、本地 OCR 兜底（属本地私有适配，按 `DECISIONS` 二十只提方法）；
+代理只绑 `127.0.0.1`，不做跨设备/公网，`sys.run` 默认全拒；
+进程查询三态（`true`/`false`/`null`），查不了不动手——受限令牌下看不见 ≠ 没在跑；
+`tools/ctxpack/persona_daemon.py` 仍是本机私有部署件，接线写在本版 README 的三行里，未整份入库。
+
+**修订记录**：2026-11-09 首版。顺手修：`persona_master` 读 `L1.jsonl` 遇 BOM 整行丢失（改 `utf-8-sig`），
+与 v4.6.0 的 `read_watch`/`handoff_rotate` BOM 问题同源；`persona_wake` 的 `--run` 补 `cwd=ROOT` 与 `PERSONA_BRIEF` 环境变量。
+
 ## 文档修订（不占号）— 2026-11-09：补进化史、清重复条目
 
 按 `RELEASING` §三「文档修订不发版」，本次只记录、不打号：
