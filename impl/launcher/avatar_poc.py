@@ -3,18 +3,20 @@
 """
 avatar_poc.py — 人格分身记忆合并的最小可行性实验
 
-验证 docs/AVATAR_SPEC.md 的 TC-AV1..AV6：
+验证 docs/AVATAR_SPEC.md 的 TC-AV1..AV7：
   AV1 分身独立记录
   AV2 跨分支不去重（同一事件两个视角，合并后两条都在）
   AV3 分支内幂等（重复提交不产生第二条）
   AV4 发言权按会话加锁（同会话互斥，不同会话并行）
   AV5 device + concurrent 组合被拒绝
   AV6 对账不覆盖：双方库不变，主库只追加
+  AV7 性格隔离：性格面各一份；检索不碰性格；peer 来源不进漂移
 
 运行：python impl/launcher/avatar_poc.py
 """
 
 import hashlib
+import json
 import os
 import sqlite3
 import sys
@@ -164,6 +166,39 @@ def main():
 
     check("TC-AV5", "device + concurrent 被拒绝",
           valid_combo("concurrent", "device") is False and valid_combo("concurrent", "managed") is True)
+
+    # ── 性格隔离（TC-AV7）：性格面各一份，检索不碰，peer 不进漂移 ──────────
+    pdir = os.path.join(root, "memory", "分身")
+
+    def _ppath(avatar):
+        return os.path.join(pdir, avatar, "persona.json")
+
+    def save_persona(avatar, data):
+        d = os.path.dirname(_ppath(avatar))
+        os.makedirs(d, exist_ok=True)
+        with open(_ppath(avatar), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def drift_inputs(episodes, avatar):
+        """只有本人的真实记忆能参与漂移；peer（听说的）与无名来源一律排除。"""
+        return [e for e in episodes
+                if e.get("source") == "self" and e.get("avatar") == avatar]
+
+    save_persona("pc-01", {"avatar": "pc-01", "tone": "简洁"})
+    save_persona("ph-01", {"avatar": "ph-01", "tone": "啰嗦"})
+    b_before = open(_ppath("ph-01"), "rb").read()
+    save_persona("pc-01", {"avatar": "pc-01", "tone": "更简洁"})   # A 的性格漂移
+    b_same = open(_ppath("ph-01"), "rb").read() == b_before
+
+    leak = query(B, "简洁 啰嗦 语气 tone")          # 检索碰不到性格面
+    eps = [{"avatar": "pc-01", "source": "self", "text": "自己的经历"},
+           {"avatar": "pc-01", "source": "peer:ph-01", "text": "听说的事"},
+           {"avatar": "ph-01", "source": "self", "text": "别人的经历"}]
+    mine = drift_inputs(eps, "pc-01")
+
+    check("TC-AV7", "性格隔离：A 变 B 不变 / 检索不碰性格 / peer 不进漂移",
+          b_same and len(leak) == 0 and len(mine) == 1,
+          "B未变=%s 检索命中=%d 漂移输入=%d" % (b_same, len(leak), len(mine)))
 
     print("\n合并后的主库：")
     for bname, text, ts in M.execute(
