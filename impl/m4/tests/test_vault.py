@@ -306,6 +306,10 @@ class ContainerTest(unittest.TestCase):
     def test_no_plaintext_leak(self):
         raw = self.vault.read_bytes()
         for marker in (b"NAS", "阿岚".encode(), PASSPHRASE.encode(), b"episodes"):
+            # 短标记会随机出现在 base64 密文里：3 字节 ≈ 每 26 万字符一次，
+            # 一份容器几千字符，跑几十次必中——那是巧合，不是泄漏。只对够长的标记断言。
+            if len(marker) < 6:
+                continue
             self.assertNotIn(marker, raw)
 
     # 助记词恢复（删掉口令 wrap 后仍可用）

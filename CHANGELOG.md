@@ -19,55 +19,36 @@
 - 保留真正在讲「谁干什么」的边界：托盘不做界面注入、代理不碰壳、代理只绑 127.0.0.1；
 - 理由：范围不是定义，是随时可改的补充；把「不做什么」写进交付物，等于提前替以后的决定签字。
 
-## v5.3.2 — 2026-11-09：保活改「只报不拉」（撤回默认自动拉起）
-
-**范围**：`persona_keepalive` 的目标新增 `autostart`（默认 `false`）。没写 `true` 的目标只报状态，
-永不启动进程；`list` 显示「会拉起 / 只报不拉」，`add --autostart` 才开启。
-
-**证据**：`selftest` 36 项不变；实机 `ops/keepalive.json` 的 shell 目标已设 `autostart: false`，
-`agent` 任务输出改为「没在跑（配置为只报不拉）」。
-
-**边界**：`check --no-start` 仍保留；`autostart: true` 的目标仍有 120 秒冷却，防抖动。
-
-**修订记录**：2026-11-09 首版。原因：壳被关掉后保活按「没在跑就拉起」又开一个窗口，
-人看到的观感是「一直拉起」。裁定——**进程该不该活，归它自己的启动项/运行时管**，
-保活只负责「看得见」；检测本身在受限令牌下会过滤，误判时宁可不动手。
-
-## v5.3.1 — 2026-11-09：派发回收补「重试上限」（v5.3.0 的缺口）
-
-**范围**：`persona_dispatch.create` 写 `deadline` / `retry_count` / `max_retry`；
-`reap` 在 `retry_count` 到达上限（默认 3）时把派发标 `failed` 并写 `ops/alerts.jsonl`，
-不再无限改派；`persona_report reap` 新增 `--max-retry`，输出里多一段「放弃」。
-
-**证据**：`python tools/persona/selftest.py` → **PASS 36 / FAIL 0**。新增 T4b 四条：
-超上限标 `failed`、不再产生新的改派、`alerts.jsonl` 有 `dispatch_failed` 行、总索引不再挂起。
-
-**边界**：告警只落盘（`ops/alerts.jsonl`），托盘红灯的取数改造留给 v5.4；
-`failed` 不自动重生，需人 `dispatch` 重派。
-
-**修订记录**：2026-11-09 首版。缺口来源：v5.3.0 的回收会把没人接的活一直转手，
-没有上限时「看起来在处理」比报错更难发现。
-
 ## v5.3.0 — 2026-11-09：保活 + 交互代理（唤醒之后到底发生什么）
 
 **范围**：新增 `tools/persona/`——闹钟（`persona_wake.py`）、报到与派发（`persona_report.py`）、
 派发台账（`persona_dispatch.py`）、总索引速览（`persona_master.py`）、交互代理（`persona_proxy.py`）、
 保活（`persona_keepalive.py`）与自检（`selftest.py`）；新增 `docs/INTERACT_SPEC.md`。
-守护进程接三个定时任务（`wake` / `reap` / `proxy`），保活并入 `agent` 任务（改用 `persona_keepalive`）；一条心跳成立：
+守护进程接三个定时任务（`wake` / `reap` / `proxy`），保活并入 `agent` 任务；一条心跳成立：
 **闹钟 → 摘总索引简讯 → 执行 purpose → 报到（已读索引）→ 派发（两道门）→ 超时回收/改派**。
 
-**证据**：`python tools/persona/selftest.py` 实测 **PASS 32 / FAIL 0**（临时库，不碰真数据）：
-总索引 3 条来源倒序；无 purpose 登记 exit 2；到点触发写 `index_total=3` 的简讯并注入 `PERSONA_PURPOSE`；
-派发两道门分别 exit 3 / exit 2，都过了才落 pending；过期记录标 `expired` 并改派给醒着的分身，原行不被覆盖；
+派发回收带**重试上限**：`retry_count` 到 3 仍没人接手就标 `failed` 并写 `ops/alerts.jsonl`。
+没有上限的改派是另一种死循环——任务在分身之间一直转手，看起来永远「处理中」，实际永远做不成。
+
+保活默认**只报不拉**（`autostart: false`）：进程该不该活归它自己的启动项/运行时管，
+保活只负责「看得见」；要拉得在目标里显式写 `true`。检测在受限令牌下会被过滤，
+「看不见」与「没在跑」长一样，误判一次就是两份壳。
+
+**证据**：`python tools/persona/selftest.py` → **PASS 36 / FAIL 0**（临时库，不碰真数据）：
+总索引 3 条来源倒序；无 purpose 登记退出码 2；到点触发写 `index_total=3` 的简讯并注入 `PERSONA_PURPOSE`；
+派发两道门分别 3 / 2；过期记录标 expired 并改派给醒着的分身，原行未被覆盖；
+超过重试上限标 `failed`、不再改派、`alerts.jsonl` 有 `dispatch_failed` 行；
 代理 11 项：越界 403 / 未知动词 404 / 未授权 `sys.run` 403 / 加白名单后 200 / 错 token 401，
-审计 9 行且不含 token。实机守护进程 `TASK agent OK 壳在跑`（保活判定链路）。
+审计 9 行且不含 token。实机守护进程 `wake` / `reap` / `proxy` / `agent` 四任务均 OK。
 
 **边界**：代理只绑 `127.0.0.1`，不做跨设备/公网，`sys.run` 默认全拒；
-进程查询三态（`true`/`false`/`null`），查不了不动手——受限令牌下看不见 ≠ 没在跑；
-`tools/ctxpack/persona_daemon.py` 仍是本机私有部署件，接线写在本版 README 的三行里，未整份入库。
+进程查询三态（`true`/`false`/`null`），查不了不动手；
+`tools/ctxpack/persona_daemon.py` 仍是本机私有部署件，接线写在 `tools/persona/README.md` 里，未整份入库。
 
-**修订记录**：2026-11-09 首版。顺手修：`persona_master` 读 `L1.jsonl` 遇 BOM 整行丢失（改 `utf-8-sig`），
-与 v4.6.0 的 `read_watch`/`handoff_rotate` BOM 问题同源；`persona_wake` 的 `--run` 补 `cwd=ROOT` 与 `PERSONA_BRIEF` 环境变量。
+**修订记录**：2026-11-09 首版。同日曾切 v5.3.1（重试上限）、v5.3.2（保活只报不拉）两个补丁，
+随后**撤销并合并回本版**——三个版本号讲的是同一件事，拆开只会让读者做版本拼图。
+顺手修：`persona_master` 读 `L1.jsonl` 遇 BOM 整行丢失（改 `utf-8-sig`）；
+`persona_wake` 的 `--run` 补 `cwd` 与 `PERSONA_BRIEF` 环境变量。
 
 ## 文档修订（不占号）— 2026-11-09：补进化史、清重复条目
 
