@@ -349,8 +349,9 @@ def prepare(c=None, clip=True, canonical=False):
         parts.append("")
 
     tail = [
-        "## 开工三步（先跑，再动手；回话也算动作）",
+        "## 开工四步（先跑，再动手；回话也算动作）",
         "",
+        "0. 读会话：`python persona_readnew.py`（0 有新 / 2 没有 / 3 刷新失败；时间不符会自动抓取重试）",
         "1. 读设定：`memory\\设定\\00-索引.md`（按序读完 10/20/30/40）",
         "2. 读总索引：`python persona_master.py --k 10`",
         "3. 认领检查：`python persona_claim.py check \"关键词\" --has text`（0 可做 / 1 已被认领 / 2 能力不足）",
@@ -364,9 +365,11 @@ def prepare(c=None, clip=True, canonical=False):
     ]
 
     # 截断只砍正文，指针永远保留——把"原文在哪、怎么检索"砍掉，包就废了。
+    # 尾部预留按实际长度算（2026-11-09：写死 380，加了第 0 步就撑破 3600 上限）。
     body = "\n".join(parts)
-    if len(body) > PACK_LIMIT - 380:
-        cut = body[:PACK_LIMIT - 420]
+    tail_len = len("\n".join(tail)) + 8
+    if len(body) > PACK_LIMIT - tail_len:
+        cut = body[:PACK_LIMIT - tail_len - 40]
         cut = cut[:cut.rfind("\n")]          # 切在行边界，别把表格切半行
         body = cut.rstrip() + "\n\n…（正文按 %d 字上限截断）\n" % PACK_LIMIT
     text = body.rstrip() + "\n\n" + "\n".join(tail)
