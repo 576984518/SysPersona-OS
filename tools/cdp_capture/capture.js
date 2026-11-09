@@ -47,7 +47,7 @@ const ROWS_JS = `(() => {
     });
   }
   const v = [...document.querySelectorAll('.ds-virtual-list')].sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
-  const r = v.getBoundingClientRect();
+  const r = (v || document.body).getBoundingClientRect();
   return {
     rows,
     st: v.scrollTop,
