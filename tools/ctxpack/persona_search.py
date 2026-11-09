@@ -45,6 +45,8 @@ def _find_root():
     return here
 
 
+import persona_avatar as av
+
 ROOT = _find_root()
 ARCHIVE = os.path.join(ROOT, 'archive')
 INDEX = os.path.join(ROOT, 'index')
@@ -67,7 +69,7 @@ def tokens(q):
     return [t for t in dict.fromkeys(out) if t not in STOP]
 
 
-_CACHE_VER = 4
+_CACHE_VER = 5
 
 
 def _cache_path():
@@ -150,8 +152,13 @@ def blocks():
                 # 电脑会话不兜底——旧记忆可能来自另一台机器，写死本机名就是编造。
                 if not dev and not mod and src == '网页对话':
                     dev, mod = '网页', 'deepseek-web'
+                # 老导出写 设备/底座，Hermes 导出写 来源/模型——两样都认，缺了留空。
+                a_agent, a_model, _ = av.from_head(head, src)
+                dev = dev or a_agent
+                mod = mod or a_model
             else:
                 body = text
+            avatar = av.of(dev, mod, src)
             got = 0
             for blk in SEP_BLOCK.split(body):
                 # 元信息分隔线后通常留着一个空行，块会以 "\n## 用户" 开头；
@@ -163,7 +170,7 @@ def blocks():
                 clean = re.sub(r'(?m)^>\s?.*\n?', '', m.group(2)).strip()
                 if len(clean) < 8:
                     continue
-                out.append([rel, day, src, role, clean, dev, mod])
+                out.append([rel, day, src, role, clean, dev, mod, avatar])
                 got += 1
             # 非对话型文件（README/SKILL/DECISIONS/报告）：没有"## 用户/助手"结构，
             # 早先会被整份丢掉。这里按段落切成文档块并入语料。
@@ -172,11 +179,11 @@ def blocks():
                 buf = ''
                 for p in para:
                     if len(buf) + len(p) > 900 and buf:
-                        out.append([rel, day, src, '文档', buf, dev, mod])
+                        out.append([rel, day, src, '文档', buf, dev, mod, avatar])
                         buf = ''
                     buf += ('\n\n' if buf else '') + p
                 if buf:
-                    out.append([rel, day, src, '文档', buf, dev, mod])
+                    out.append([rel, day, src, '文档', buf, dev, mod, avatar])
     json.dump({'sig': sig, 'blocks': out}, io.open(key, 'w', encoding='utf-8'), ensure_ascii=False)
     return out
 
@@ -197,7 +204,7 @@ def norm(s):
     return re.sub(r'[^\u4e00-\u9fffA-Za-z0-9]', '', s)
 
 
-def keyword_rank(q, bl, df, topn=60):
+def keyword_rank(q, bl, df, topn=60, allow=None):
     # 只保留语料里真实出现过的词元：中文滑窗会切出"份保""留几"这类永远匹配不上的碎片，
     # 留着它们只会稀释覆盖率、把正确块压下去。
     ts = [t for t in tokens(q) if t in df]
@@ -206,6 +213,8 @@ def keyword_rank(q, bl, df, topn=60):
     qn = norm(q)
     scored = []
     for i, b in enumerate(bl):
+        if allow is not None and i not in allow:
+            continue
         low = b[4].lower()
         hit = [t for t in ts if t in low]
         if not hit:
@@ -246,7 +255,7 @@ def rerank_all(q, cands, topn=40):
             return None            # 云端没配重排：直接保持 RRF 顺序
         docs = [c['text'][:1200] for c in cands[:topn]]
         res = vs.rerank(q, docs)          # 云端没有 /rerank 就返回 None
-        if not res:
+        if not res or not isinstance(res, dict) or not res.get('results'):
             return None
         sc = {}
         for r in res['results']:
@@ -332,7 +341,7 @@ def _dedupe(rows):
 
 
 def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=False,
-           keep_tools=False, recent_days=0, device=None, model=None):
+           keep_tools=False, recent_days=0, device=None, model=None, avatar=None):
     """两路合并后的结果，给 persona_pack.py --hybrid 等调用方用。
 
     返回 [{file, day, source, role, text, device, model, score, why}, ...]
@@ -341,8 +350,22 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
     """
     bl = blocks()
     df = idf(bl)
-    kr = keyword_rank(q, bl, df)
+
+    # 分身/设备/底座过滤必须在**取候选之前**做：先在 60 名里挑再过滤，
+    # 会出现“206 条 dsh 命中，却因为前 60 名全是网页而报 0 条”。实测踩过。
+    allow = None
+    if device or model or avatar:
+        allow = set(i for i, b in enumerate(bl)
+                    if (not device or b[5] == device)
+                    and (not model or b[6] == model)
+                    and (not avatar or b[7] == avatar))
+        if not allow:
+            return []
+    kr = keyword_rank(q, bl, df, allow=allow)
     vr = vector_rank(q) if use_vector else []
+    if allow is not None and vr:
+        ok_files = set(bl[i][0] for i in allow)
+        vr = [t for t in vr if t[0] in ok_files]
 
     fused, why = {}, {}
     for rank, (i, s) in enumerate(kr):
@@ -359,15 +382,15 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
     # 明明有 50 条网页命中，却因为前 3 名都是电脑会话而显得"网页里没有"。
     for key, sc in sorted(fused.items(), key=lambda x: -x[1]):
         if key[0] == 'b':
-            f, day, src, role, text, dev, mod = bl[key[1]]
+            f, day, src, role, text, dev, mod, row_avatar = bl[key[1]]
         else:
             _, f, r, t = key
             base = next((b for b in bl if b[0] == f and b[3] == r and b[4][:40] == t), None)
             if base is None:
                 continue
-            f, day, src, role, text, dev, mod = base
+            f, day, src, role, text, dev, mod, row_avatar = base
         out.append({'file': f, 'day': day, 'source': src, 'role': role,
-                    'text': text, 'device': dev, 'model': mod,
+                    'text': text, 'device': dev, 'model': mod, 'avatar': row_avatar,
                     'score': sc, 'why': ','.join(why[key])})
 
     # 先剔噪声与重复，再重排：省算力，也别让副本把 Top-K 稀释。
@@ -376,10 +399,11 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
     out = _dedupe(out)
 
     # 分身字段过滤：放在重排之前，省得为一个注定被滤掉的块去调 cross-encoder。
-    if device or model:
+    if device or model or avatar:
         out = [it for it in out
                if (not device or it.get('device') == device)
-               and (not model or it.get('model') == model)]
+               and (not model or it.get('model') == model)
+               and (not avatar or it.get('avatar') == avatar)]
 
     if weighted:
         for it in out:
@@ -395,6 +419,31 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
 
     out = recent_boost(out, bl, recent_days)
     return out[:k]
+
+_LOC = {}
+
+
+def _locate(rel, snippet, cache=None):
+    """命中块在原文里的行号与全文行（溯源用）。找不到返回 (0, lines)。"""
+    cache = cache if cache is not None else _LOC
+    if rel not in cache:
+        p = os.path.join(ROOT, rel.replace('/', os.sep))
+        try:
+            cache[rel] = io.open(p, encoding='utf-8', errors='replace').read().splitlines()
+        except OSError:
+            cache[rel] = []
+    lines = cache[rel]
+    probe = ''
+    for ln in (snippet or '').splitlines():
+        if ln.strip():
+            probe = ln.strip()[:40]
+            break
+    if probe:
+        for i, ln in enumerate(lines):
+            if probe in ln:
+                return i + 1, lines
+    return 0, lines
+
 
 JOBS = os.path.join(ROOT, 'index', 'jobs')
 
@@ -447,13 +496,21 @@ def main():
                     help='最近 N 天优先：只加分、不减分，默认 0=关')
     ap.add_argument('--device', default=None, help='只保留该设备来源的块（如 网页 / 主机名）')
     ap.add_argument('--model', default=None, help='只保留该底座来源的块（如 deepseek-web）')
+    ap.add_argument('--avatar', default=None,
+                    help='只保留该分身的块（如 hermes-deepseek-v4-flash / 网页-deepseek-web）')
+    ap.add_argument('--show-source', action='store_true', dest='show_source',
+                    help='每条命中带 文件:行号（三层溯源第二层）')
+    ap.add_argument('--context', type=int, default=0, metavar='N',
+                    help='连原文前后 N 行一起打（隐含 --show-source）')
     ap.add_argument('--async', dest='async_', action='store_true',
                     help='立刻打印 job id，检索在 detached 子进程里跑')
     ap.add_argument('--run-job', default=None, help=argparse.SUPPRESS)
     ap.add_argument('--result', default=None, help='取某个 async 任务的结果（没跑完则打印 RUNNING）')
     a = ap.parse_args()
 
-    kw = dict(recent_days=a.recent, device=a.device, model=a.model)
+    if a.context:
+        a.show_source = True
+    kw = dict(recent_days=a.recent, device=a.device, model=a.model, avatar=a.avatar)
 
     if a.run_job:
         run_job(a.run_job, a.query, a.k, a.deep, **kw)
@@ -487,15 +544,29 @@ def main():
     out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank,
                  rerank_top=(100 if a.deep else 40), weighted=a.weighted,
                  keep_tools=a.keep_tools, **kw)
-    if not out and not (a.device or a.model):
+    if not out and not (a.device or a.model or a.avatar):
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
-        out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback'} for b in recent]
+        out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback',
+                'avatar': b[7] if len(b) > 7 else ''} for b in recent]
     elif not out:
-        print('（该 设备/底座 下没有命中；去掉 --device/--model 再试）', file=sys.stderr)
+        print('（该 设备/底座/分身 下没有命中；去掉 --device/--model/--avatar 再试）', file=sys.stderr)
 
+    cache = {}
     for it in out:
-        print('--- %.4f  [%s] %s  %s' % (it['score'], it['role'], os.path.basename(it['file'])[:46], it['why']))
+        print('--- %.4f  [%s] %-28s %s  %s' % (it['score'], it['role'],
+              (it.get('avatar') or 'unknown')[:28],
+              os.path.basename(it['file'])[:40], it['why']))
         print(it['text'][:260].replace('\n', ' '))
+        if a.show_source:
+            ln, lines = _locate(it['file'], it['text'], cache)
+            print('    来源：%s:%d  （%s / %s）' % (it['file'], ln,
+                  it.get('avatar') or 'unknown', it.get('source') or ''))
+            if a.context and ln:
+                lo = max(0, ln - 1 - a.context)
+                hi = min(len(lines), ln + a.context)
+                for k in range(lo, hi):
+                    mark = '>>' if k == ln - 1 else '  '
+                    print('%s %5d | %s' % (mark, k + 1, lines[k].rstrip()[:220]))
     print('\n[%d 条 / %.2fs]' % (len(out), time.time() - t0))
 
 

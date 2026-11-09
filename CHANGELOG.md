@@ -10,6 +10,23 @@
 
 ---
 
+## 2026-11-09 — B82 落地：分身 ID（avatar）与三层溯源（**未发版**）
+
+**范围**：新增 `tools/ctxpack/persona_avatar.py`；改 `persona_index_l1.py`、`persona_search.py`、`tools/persona/persona_master.py`。
+
+- `avatar = <agent>-<model>[-<version>]`：头里两种方言都认（老导出 `设备/底座`、Hermes 导出 `来源/模型`）；
+  缺段写 `unknown`——`dsh-unknown` 比一个孤零零的 `dsh` 诚实；UUID 一律不当作分身名。
+- `index/L1.jsonl` 每行加 `agent/model/avatar`，`L1.md` 加分身列；`persona_master` 出「分身分布」。
+- 检索结果带分身列；新增 `--avatar` 过滤——**先过滤再取候选**，修掉"206 条 dsh 命中，却因前 60 名全是网页而报 0 条"。
+- 新增 `--show-source`（每条命中打 `文件:行号`）与 `--context N`（连原文前后 N 行），即网页端定的"一键回捞"。
+- 顺带修：`--device/--model` 对电脑会话一直是空的——导出写 `来源/模型`，检索只认 `设备/底座`。
+
+**证据**：`_t_b82.py`——10/10 命中能在 3 步内读到原文行；删 `index/L1.jsonl` 重建 146→146 行；
+`persona_avatar` 只提供 `load_persona`、没有 save（检索写不了性格）。
+
+**边界**：性格隔离按 `AVATAR_SPEC` §1.2——检索只回客观事实，不读也不写性格面；
+`memory\分身\<avatar>\` 需人点头才建（建性格 = 改身份，5.4 红线）。
+
 ## v5.6.0 — 2026-11-09：记忆网络**设计成文**
 
 **范围**：新增 `docs/MEMORY_NET_SPEC.md`——分身 ID 约定、三层溯源（命中片段 → 分索引 → 原文）、

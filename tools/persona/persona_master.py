@@ -50,6 +50,15 @@ def rows(day="", source=""):
     return out
 
 
+def _avatars(rs):
+    """分身分布：谁记了多少来源。只统计，不判断谁更重要。"""
+    out = {}
+    for r in rs:
+        k = r.get("avatar") or "unknown"
+        out[k] = out.get(k, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 def _pending():
     """派发中的任务。没有 persona_dispatch 就退回读 dispatch.jsonl 的旧口径。"""
     try:
@@ -84,8 +93,10 @@ def snapshot(k=10, day="", source=""):
                      "mtime": r.get("mtime") or 0,
                      "day": r.get("day", ""),
                      "source": r.get("source", ""),
+                     "avatar": r.get("avatar", ""),
                      "msgs": r.get("msgs") or 0,
                      "head": (r.get("head") or "").replace("\n", " ")[:80]} for r in rs[:k]],
+        "avatars": _avatars(rs),
         "pending": _pending(),
     }
 
@@ -93,8 +104,13 @@ def snapshot(k=10, day="", source=""):
 def render(snap):
     lines = []
     for s in snap["sources"]:
-        lines.append("%s  %-6s %4d条  %s" % (s["time"], s["source"], s["msgs"], s["head"]))
+        lines.append("%s  %-6s %-26s %4d条  %s" % (s["time"], s["source"],
+                                                   (s.get("avatar") or "unknown")[:26],
+                                                   s["msgs"], s["head"]))
     lines.append("—— 共 %d 条来源（按时间倒序取前 %d）" % (snap["total"], snap["k"]))
+    if snap.get("avatars"):
+        lines.append("分身： " + " · ".join("%s %d" % (k, v) for k, v in
+                                          list(snap["avatars"].items())[:6]))
     if snap["pending"]:
         lines.append("")
         lines.append("== 派发中的任务 ==")

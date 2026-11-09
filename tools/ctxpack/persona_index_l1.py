@@ -17,6 +17,8 @@ import re
 import sys
 import time
 
+import persona_avatar as av
+
 ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
 ARCHIVE = os.path.join(ROOT, "archive")
 INDEX = os.path.join(ROOT, "index")
@@ -55,6 +57,7 @@ def scan():
             except OSError:
                 continue
             n = len(MSG.findall(text))
+            agent, model, avatar = av.from_head(text[:4096], src)
             rows.append({
                 "day": day,
                 "source": src,
@@ -62,6 +65,9 @@ def scan():
                 "msgs": n,
                 "chars": len(text),
                 "head": first_line(text),
+                "agent": agent,
+                "model": model,
+                "avatar": avatar,
                 "mtime": int(st),
             })
     rows.sort(key=lambda r: (r["day"], r["mtime"]), reverse=True)
@@ -82,10 +88,11 @@ def main():
 
     md = os.path.join(INDEX, "L1.md")
     lines = ["# 一级索引（每个来源一行）", "",
-             "| 日期 | 来源 | 文件 | 消息 | 首句 |", "|---|---|---|---|---|"]
+             "| 日期 | 来源 | 分身 | 文件 | 消息 | 首句 |", "|---|---|---|---|---|---|"]
     for r in rows:
-        lines.append("| %s | %s | %s | %d | %s |"
-                     % (r["day"], r["source"], os.path.basename(r["file"]), r["msgs"], r["head"]))
+        lines.append("| %s | %s | %s | %s | %d | %s |"
+                     % (r["day"], r["source"], r["avatar"], os.path.basename(r["file"]),
+                        r["msgs"], r["head"]))
     io.open(md, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
 
     if not a.quiet:
