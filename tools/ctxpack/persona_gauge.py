@@ -68,11 +68,20 @@ HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
     r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\desktop-ui.sqlite"
 
 
-def hermes_ctx():
-    """上下文 = 最近 20 轮里**最大**的 `tokens_input`（含其模型与时间）。
+# 本地小模型（免费/兜底档）：它们的输入很小，混进来会把"上下文"算小、把该交接的会话判成安全。
+_LOCAL_HINT = ("qwen3:0.6b", "qwen3-8b", "qwen3.5-4b", "qwen-7b", "distill")
 
-    为什么取最大：同一会话里会夹着本地小模型（Qwen3:0.6B）的轮次，它的输入很小；
-    只看"最后一轮"会把大水位误判成安全。宁可按保守值提醒，也不让人撞线。
+
+def _is_local(model):
+    m = (model or "").lower()
+    return any(k in m for k in _LOCAL_HINT)
+
+
+def hermes_ctx():
+    """上下文 = **最近 20 轮里主模型最大的 `tokens_input`**（这就是"每轮输入"）。
+
+    取最大而不是看最后一轮：同一会话里会夹着本地小模型的轮次（它的输入小），
+    只看最后一轮会把大水位误判成安全。**低估会让人撞线，高估最多早出一次包。**
     取不到返回 (0, "", "")。
     """
     if not os.path.exists(HERMES_UI_DB):
@@ -81,16 +90,17 @@ def hermes_ctx():
         import sqlite3
         con = sqlite3.connect("file:%s?mode=ro" % HERMES_UI_DB.replace("\\", "/"), uri=True)
         try:
-            row = con.execute(
+            rows = con.execute(
                 "select tokens_input, model, id from turn_stats where tokens_input is not null "
-                "order by id desc limit 20").fetchall()
+                "order by id desc limit 40").fetchall()
         finally:
             con.close()
     except Exception:
         return 0, "", ""
-    if not row:
+    main = [r for r in rows if not _is_local(r[1])][:20]
+    if not main:
         return 0, "", ""
-    best = max(row, key=lambda r: int(r[0] or 0))
+    best = max(main, key=lambda r: int(r[0] or 0))
     return int(best[0] or 0), (best[1] or ""), (best[2] or "")
 
 
@@ -116,9 +126,9 @@ def report(ctx=None):
     c = current()
     real, model, tid = hermes_ctx()
     est = c["ctx"]
-    use = max(est, real)
-    if real and real > est:
-        c["estimated"] = False
+    # 按他的口径：**输入优先**。实测拿不到才退回账本估算（并标 ~）。
+    use = real or est
+    c["estimated"] = not bool(real)
     if ctx:
         use = ctx               # 测试/复算用：不依赖账本也能验证到线行为
         c["estimated"] = False
@@ -129,9 +139,10 @@ def report(ctx=None):
           % ("~" if c.get("estimated") else "", human(use), lv, pct,
              human(LIMIT), c["calls"], c["cost"]))
     if not ctx:
-        print("         读数：账本均值 ~%s（累计缓存÷调用 %d 次）· 实测最大 %s%s"
-              % (human(est), c["calls"], human(real) if real else "（取不到）",
-                 ("（%s）" % model) if model else ""))
+        print("         口径：输入（每轮带进去的 token），不是累计缓存"
+              "｜实测 %s%s · 账本兜底 ~%s"
+              % (human(real) if real else "（取不到）",
+                 ("（%s）" % model) if model else "", human(est)))
     print("         建议：%s" % tip)
     return c
 
