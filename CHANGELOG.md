@@ -34,6 +34,9 @@
 **范围**：新增 `tools/persona/`——闹钟（`persona_wake.py`）、报到与派发（`persona_report.py`）、
 派发台账（`persona_dispatch.py`）、总索引速览（`persona_master.py`）、交互代理（`persona_proxy.py`）、
 保活（`persona_keepalive.py`）与自检（`selftest.py`）；新增 `docs/INTERACT_SPEC.md`。
+交接包在「指针」之前固定输出**开工三步**（读设定 / 读总索引 / 认领检查）——
+规矩写在没被打开的文件里等于没有，所以钉在看到的地方。
+
 守护进程接三个定时任务（`wake` / `reap` / `proxy`），保活并入 `agent` 任务；一条心跳成立：
 **闹钟 → 摘总索引简讯 → 执行 purpose → 报到（已读索引）→ 派发（两道门）→ 超时回收/改派**。
 
@@ -61,7 +64,7 @@
 **修订记录**：2026-11-09 首版。同日曾切 v5.3.1（重试上限）、v5.3.2（保活只报不拉）两个补丁，
 随后**撤销并合并回本版**——三个版本号讲的是同一件事，拆开只会让读者做版本拼图。
 顺手修：`persona_master` 读 `L1.jsonl` 遇 BOM 整行丢失（改 `utf-8-sig`）；
-`persona_wake` 的 `--run` 补 `cwd` 与 `PERSONA_BRIEF` 环境变量；新增 `persona_todo.py`（待办备忘）。
+`persona_wake` 的 `--run` 补 `cwd` 与 `PERSONA_BRIEF` 环境变量；新增 `persona_todo.py`（待办备忘）；接续包加「开工三步」；正文截断改在行边界。
 
 ## 文档修订（不占号）— 2026-11-09：补进化史、清重复条目
 
