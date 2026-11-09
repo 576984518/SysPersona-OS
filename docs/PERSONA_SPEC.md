@@ -58,7 +58,7 @@
 | `traits.reflexes[]` | `id` / `trigger` / `reaction` / `strength` | 反射式反应 |
 | `memory.retention` | `hot_days` / `warm_days` / `prune_days` | 记忆分层保留 |
 | `memory.context_budget` / `low_watermark` | 上下文预算、低水位比 | 检索与压缩阈值 |
-| `evolution.*` | `min_evidence` / `max_step` / `weekly_cap` | 漂移单步与周额度 |
+| `evolution.*` | `min_evidence` / `max_step` / `weekly_cap` | 漂移单步与周额度（**历史口径**：现行见 `PHILOSOPHY` §10.1——重载即回弹，不锁性格） |
 | `evolution.polarity_flip` | `dead_zone` / `min_reverse_evidence` / `requires_human` | 极性翻转闸门 |
 | `evolution.anti_rigidity` | 6 个参数 | 抗僵化 |
 | `evolution.kernel_locked` / `audit` | 内核锁定、审计开关 | 人改 |
