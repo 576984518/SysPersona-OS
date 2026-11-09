@@ -123,17 +123,20 @@ def cmd_reap(a):
     except Exception as e:
         print("persona_dispatch 不可用：%s" % str(e)[:80])
         return 1
-    res = D.reap(ttl=a.ttl)
+    res = D.reap(ttl=a.ttl, max_retry=a.max_retry)
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
         return 0
-    if not res["expired"]:
+    if not (res["expired"] or res.get("failed")):
         print("没有超时的派发（ttl=%ds）" % a.ttl)
         return 0
     for r in res["expired"]:
         tail = ("改派给 %s（新 id %s）" % (r["to"], r["next"])) if r["to"] else "无人可改派"
         print("过期 %s → %-12s %s（挂了 %ds，%s）" % (r["id"], r["agent"], r["task"],
                                                   r["age_s"], tail))
+    for r in res.get("failed") or []:
+        print("放弃 %s → %-12s %s（已换过 %d 次，写 alerts.jsonl 叫人）"
+              % (r["id"], r["agent"], r["task"], r["retry_count"]))
     return 0
 
 
@@ -159,6 +162,8 @@ def main():
     c.add_argument("--note", default="")
     c = sub.add_parser("reap")
     c.add_argument("--ttl", type=int, default=600)
+    c.add_argument("--max-retry", dest="max_retry", type=int, default=None,
+                   help="最多换几个分身（默认 3）；超过标 failed 并写 alerts.jsonl")
     c.add_argument("--json", action="store_true")
     a = ap.parse_args()
     fn = {"report": cmd_report, "who": cmd_who, "dispatch": cmd_dispatch,

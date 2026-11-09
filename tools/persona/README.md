@@ -9,7 +9,7 @@
 |---|---|---|
 | `persona_wake.py` | 闹钟登记与触发；到点先摘一份**总索引简讯** | 没有 purpose 的闹钟登记被拒（exit 2） |
 | `persona_report.py` | 报到 / 谁在 / 派发 / `ack` / `reap` | 没报到不派（exit 2），报到但没读索引不派（exit 3） |
-| `persona_dispatch.py` | 派发台账（append-only，按 id 取最后状态） | 过期不改旧行，只追加 expired + 改派两条 |
+| `persona_dispatch.py` | 派发台账（append-only，按 id 取最后状态） | 过期不改旧行，只追加 expired + 改派；换人 3 次仍无人接 → failed + 告警 |
 | `persona_master.py` | 总索引速览（人读 / `--json` / `--pending`） | 来源按时间倒序，末尾列「派发中的任务」 |
 | `persona_proxy.py` | 交互代理：**AI 调本机的唯一通道** | 越界 403、未知动词 404、错 token 401、未授权命令 403 |
 | `persona_keepalive.py` | 保活：盯进程、没在跑就拉起 | 查不了（`None`）时**不动手**，不重复拉起 |
@@ -68,6 +68,7 @@ TASKS = {..., "wake": t_wake, "agent": t_agent, "reap": t_reap, "proxy": t_proxy
   → 落 pending                                       → ops/dispatch.jsonl
 超时（reap，默认 ttl 600 秒）
   → 追加一条 expired；有醒着的人就再追加一条改派的新 pending
+  → 换人次数（retry_count）到 3 仍无人接 → 标 failed 并写 ops/alerts.jsonl 叫人
   → 原记录不覆盖：查出「谁在什么时候把什么交给了谁」
 ```
 

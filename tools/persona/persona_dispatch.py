@@ -28,9 +28,11 @@ import time
 ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
 STORE = os.path.join(OPS, "dispatch.jsonl")
+ALERTS = os.path.join(OPS, "alerts.jsonl")
 
 TTL = 600        # 一条 pending 超过这么久没人接手，就算过期
 WINDOW = 600     # 改派只考虑这个窗口内报到过的分身
+MAX_RETRY = 3    # 最多换 3 个分身；再超时就 failed + 告警，交人处理（防无限改派的死循环）
 ALIVE = ("pending", "running")
 
 
@@ -76,7 +78,10 @@ def state(path=None):
             st[rid] = {"id": rid, "at": r.get("at", ""), "agent": r.get("agent", ""),
                        "task": r.get("task", ""), "status": r.get("status") or "pending",
                        "updated": r.get("at", ""), "note": r.get("note", ""),
-                       "redispatch_of": r.get("redispatch_of", "")}
+                       "redispatch_of": r.get("redispatch_of", ""),
+                       "deadline": r.get("deadline", ""),
+                       "retry_count": int(r.get("retry_count") or 0),
+                       "max_retry": int(r.get("max_retry") or MAX_RETRY)}
             continue
         # 更新记录：只覆盖状态类字段，不覆盖原始内容
         for k in ("status", "note", "updated", "agent", "task"):
@@ -101,11 +106,14 @@ def append(rec, path=None):
     return rec
 
 
-def create(agent, task, redispatch_of="", path=None):
+def create(agent, task, redispatch_of="", retry_count=0, ttl=TTL, path=None):
+    """写一条 pending。deadline 只是给人看的说法，判定仍按 at + ttl 算，防时钟漂移。"""
     now = time.time()
     rec = {"id": "d%d" % (int(now * 1000) % 100000000),
            "at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
-           "agent": agent, "task": task, "status": "pending"}
+           "deadline": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + ttl)),
+           "agent": agent, "task": task, "status": "pending",
+           "retry_count": int(retry_count or 0), "max_retry": MAX_RETRY}
     if redispatch_of:
         rec["redispatch_of"] = redispatch_of
     append(rec, path)
@@ -148,33 +156,63 @@ def _alive_agents(window, exclude, busy, now):
     return out
 
 
-def reap(ttl=TTL, window=WINDOW, now=None, path=None):
-    """把超时的 pending 标过期；有醒着的分身就改派一条新的。
+def alert(level, kind, rec, note):
+    """告警台账（托盘红灯的取数处之一）：只追加，不覆盖。"""
+    row = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "level": level, "kind": kind,
+           "id": rec.get("id", ""), "agent": rec.get("agent", ""),
+           "task": rec.get("task", ""), "note": note}
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(ALERTS, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return row
 
-    返回 {"expired": [...], "redispatched": [...]}，每条都带 id / agent / task / 说明。
+
+def reap(ttl=TTL, window=WINDOW, now=None, path=None, max_retry=None):
+    """超时回收：过期标 expired；有人醒着就改派；换人次数用完就 failed + 告警。
+
+    重试上限是必须的：没有它，一条没人接的活会在分身之间无限转手，
+    看起来一直在「处理中」，实际永远做不成——比直接报错更难发现。
+
+    返回 {"expired": [...], "redispatched": [...], "failed": [...]}。
     """
     now = time.time() if now is None else now
     st = state(path)
     live = [r for r in st.values() if (r.get("status") or "") in ALIVE]
     busy = {r["agent"] for r in live}
-    expired, redispatched = [], []
+    expired, redispatched, failed = [], [], []
     for r in sorted(live, key=lambda x: x.get("at", "")):
         age = _age(r, now)
         if age <= ttl:
             continue
         rid = r["id"]
+        tries = int(r.get("retry_count") or 0)
+        cap = int(r.get("max_retry") or max_retry or MAX_RETRY)
+        base = {"id": rid, "agent": r.get("agent", ""), "task": r.get("task", ""),
+                "age_s": int(age), "retry_count": tries}
+        if tries >= cap:
+            note = "第 %d 次超时仍未接手（上限 %d），放弃并告警" % (tries + 1, cap)
+            update(rid, "failed", note, path)
+            alert("error", "dispatch_failed", r, note)
+            failed.append(dict(base, next="", to=""))
+            continue
         cands = _alive_agents(window, r.get("agent", ""), busy, now)
         if cands:
             nxt = cands[0]["agent"]
-            update(rid, "expired", "超时 %ds 未接手，改派给 %s" % (int(age), nxt), path)
-            new = create(nxt, r.get("task", ""), redispatch_of=rid, path=path)
+            update(rid, "expired",
+                   "超时 %ds 未接手，改派给 %s（第 %d/%d 次）" % (int(age), nxt, tries + 1, cap),
+                   path)
+            new = create(nxt, r.get("task", ""), redispatch_of=rid,
+                         retry_count=tries + 1, ttl=ttl, path=path)
             busy.add(nxt)
-            expired.append({"id": rid, "agent": r.get("agent", ""), "task": r.get("task", ""),
-                            "age_s": int(age), "next": new["id"], "to": nxt})
+            expired.append(dict(base, next=new["id"], to=nxt))
             redispatched.append({"id": new["id"], "agent": nxt, "task": r.get("task", ""),
-                                 "from": rid})
+                                 "from": rid, "retry_count": new["retry_count"]})
         else:
-            update(rid, "expired", "超时 %ds 未接手，无人可改派" % int(age), path)
-            expired.append({"id": rid, "agent": r.get("agent", ""), "task": r.get("task", ""),
-                            "age_s": int(age), "next": "", "to": ""})
-    return {"expired": expired, "redispatched": redispatched}
+            note = "超时 %ds 未接手，无人可改派" % int(age)
+            update(rid, "expired", note, path)
+            alert("warn", "dispatch_expired", r, note)
+            expired.append(dict(base, next="", to=""))
+    return {"expired": expired, "redispatched": redispatched, "failed": failed}

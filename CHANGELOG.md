@@ -10,6 +10,21 @@
 
 ---
 
+## v5.3.1 — 2026-11-09：派发回收补「重试上限」（v5.3.0 的缺口）
+
+**范围**：`persona_dispatch.create` 写 `deadline` / `retry_count` / `max_retry`；
+`reap` 在 `retry_count` 到达上限（默认 3）时把派发标 `failed` 并写 `ops/alerts.jsonl`，
+不再无限改派；`persona_report reap` 新增 `--max-retry`，输出里多一段「放弃」。
+
+**证据**：`python tools/persona/selftest.py` → **PASS 36 / FAIL 0**。新增 T4b 四条：
+超上限标 `failed`、不再产生新的改派、`alerts.jsonl` 有 `dispatch_failed` 行、总索引不再挂起。
+
+**边界**：告警只落盘（`ops/alerts.jsonl`），托盘红灯的取数改造留给 v5.4；
+`failed` 不自动重生，需人 `dispatch` 重派。
+
+**修订记录**：2026-11-09 首版。缺口来源：v5.3.0 的回收会把没人接的活一直转手，
+没有上限时「看起来在处理」比报错更难发现。
+
 ## v5.3.0 — 2026-11-09：保活 + 交互代理（唤醒之后到底发生什么）
 
 **范围**：新增 `tools/persona/`——闹钟（`persona_wake.py`）、报到与派发（`persona_report.py`）、

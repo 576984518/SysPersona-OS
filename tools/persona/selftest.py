@@ -195,6 +195,28 @@ def t4(r):
     r.check("T4 ack 后不再挂起", rc == 0 and "rg2" not in out2, out.strip()[:40])
 
 
+def t4b(r):
+    """改派次数用完 → failed + 告警，不再继续转手。"""
+    dead = {"at": "2026-11-09 09:00:00", "agent": "dead-end", "task": "转手三次没人接的活",
+            "status": "pending", "retry_count": 3, "max_retry": 3}
+    with io.open(r.path("ops", "dispatch.jsonl"), "a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(dead, ensure_ascii=False) + "\n")
+    rc, out = r.run("persona_report.py", "reap", "--ttl", "600", "--json")
+    try:
+        res = json.loads(out)
+    except ValueError:
+        return r.check("T4b 回收输出", False, out[:120])
+    failed = res.get("failed") or []
+    r.check("T4b 超上限标 failed", len(failed) == 1 and failed[0]["agent"] == "dead-end",
+            "failed=%d" % len(failed))
+    r.check("T4b 不再无限改派", not res.get("redispatched"), "redispatched=%d" % len(res.get("redispatched") or []))
+    alerts = r.jsonl("ops", "alerts.jsonl")
+    r.check("T4b 写告警", any(a.get("kind") == "dispatch_failed" for a in alerts),
+            "alerts=%d 行" % len(alerts))
+    rc, out = r.run("persona_master.py", "--pending")
+    r.check("T4b 不再挂起", "dead-end" not in out, "")
+
+
 # ── T5 交互代理 ───────────────────────────────────────────────────────
 
 def t5(r):
@@ -282,7 +304,7 @@ def main():
     r = Runner(root)
     print("== v5.3 自检（临时库 %s）==" % root)
     try:
-        for fn in (t1, t2, t3, t4, t5):
+        for fn in (t1, t2, t3, t4, t4b, t5):
             try:
                 fn(r)
             except Exception as e:

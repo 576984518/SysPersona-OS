@@ -42,7 +42,7 @@ token 不进 URL（会落进日志），不进审计行。
 | `report.report` | `agent` 必填，`status`/`note`/`read_index` | `agent/status/read_index` | 报到即心跳 |
 | `report.who` | `within` | `agents[]` | 最近报到的分身 |
 | `dispatch.add` | `agent`、`task` | `id/agent/task` | **两道门**：未报到 → 409；未读索引 → 409 |
-| `dispatch.reap` | `ttl` | `expired[]/redispatched[]` | 超时回收 + 改派 |
+| `dispatch.reap` | `ttl`、`max_retry ≤ 3` | `expired[]/redispatched[]/failed[]` | 超时回收 + 改派；换人上限用完 → `failed` 并写告警 |
 | `sys.proc` | `name`（只允许进程名） | `running/query_ok/note` | `running` 三态：`true`/`false`/`null` |
 | `sys.run` | `cmd`、`timeout ≤ 120` | `rc/out/err` | **默认拒绝**；只放行 `ops/proxy-allow.json` 里逐条写的前缀 |
 
