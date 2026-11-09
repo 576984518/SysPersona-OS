@@ -242,9 +242,18 @@ def rerank_all(q, cands, topn=40):
     try:
         sys.path.insert(0, ROOT)
         import vs
+        if not getattr(vs, 'RERANK_MODEL', ''):
+            return None            # 云端没配重排：直接保持 RRF 顺序
         docs = [c['text'][:1200] for c in cands[:topn]]
-        res = vs.post('/rerank', {'model': 'bge-reranker-v2-m3', 'query': q, 'documents': docs}, timeout=180)
-        sc = {r['index']: r['relevance_score'] for r in res['results']}
+        res = vs.rerank(q, docs)          # 云端没有 /rerank 就返回 None
+        if not res:
+            return None
+        sc = {}
+        for r in res['results']:
+            if isinstance(r, dict) and 'index' in r and 'relevance_score' in r:
+                sc[r['index']] = r['relevance_score']
+        if not sc:
+            return None            # 格式对不上（别家 rerank）就当没有
         order = sorted(range(len(docs)), key=lambda i: -sc.get(i, -1e9))
         return [cands[i] for i in order] + list(cands[topn:])
     except Exception as e:

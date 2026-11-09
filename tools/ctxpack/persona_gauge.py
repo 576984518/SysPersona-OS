@@ -340,7 +340,7 @@ def prepare(c=None, clip=True, canonical=False):
     tail = [
         "## 开工三步（先跑，再动手；回话也算动作）",
         "",
-        "1. 读设定：`memory\\MEMORY.md` + `先读我.md`",
+        "1. 读设定：`memory\\设定\\00-索引.md`（按序读完 10/20/30/40）",
         "2. 读总索引：`python persona_master.py --k 10`",
         "3. 认领检查：`python persona_claim.py check \"关键词\" --has text`（0 可做 / 1 已被认领 / 2 能力不足）",
         "",
