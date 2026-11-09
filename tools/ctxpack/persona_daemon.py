@@ -264,7 +264,19 @@ def t_hctx():
     # 压缩丢的是运行时上下文，正文必须已经在库里——这是"压缩不丢记忆"的唯一保证。
     if ctx >= HERMES_MIRROR_LIMIT:
         ok, emsg = t_export()
-        msg += " | 已镜像：%s" % emsg
+        msg += " | 已导出：%s" % emsg
+        # 规范 §四：先镜像落盘（含 sha256 + 幂等），再谈压缩。导出只是让文件变新。
+        try:
+            import persona_mirror as mir
+            src = mir.newest_session()
+            if src:
+                dst, state = mir.mirror(src, "hctx=%d" % int(ctx))
+                good, note = mir.verify(dst) if state != "skipped" else (True, "幂等跳过")
+                msg += " | 镜像%s：%s（%s）" % (state, os.path.basename(dst), note)
+            else:
+                msg += " | 镜像：找不到会话文件"
+        except Exception as e:                      # 镜像失败不许静默，也不许继续压缩
+            msg += " | 镜像失败：%s" % e
     return True, msg
 
 
