@@ -1,6 +1,7 @@
 # 任务调度（SCHEDULER SPEC）— v5.5
 
-> 状态：**设计成文（v1.1 补全版，2026-11-09）· 未落地**。v5.3 已交付其中"派发 + 超时回收"那一半。
+> 状态：**设计成文（v1.1）· 已落地 B81（2026-11-09）**——`persona_tasks.py` 已实现
+> outbox / 合并器 / 三接口 / 带锁认领；自检 `_t_b81.py`（四条判据）与 `_t_b81_http.py`（三接口语义）全过。v5.3 已交付其中"派发 + 超时回收"那一半。
 > 一句话：**活儿先交服务端，再从服务端认领；本地不留私有任务池。**
 >
 > v1.1 补的是什么：任务记录与 HTTP 契约（可照着写）、合并规则的具体阈值、幂等键与并发语义、
@@ -32,9 +33,9 @@
 | 认领 / 冲突 | `persona_claim.py`：`ops/task-claims.jsonl` **只追加**，同 id 以最后一条为准；`check` 退出码 0 可做 / 1 已被认领 / 2 能力不足 | ✅ 已落地 |
 | 派发 / 超时 / 改派 | `persona_dispatch.py`：`ops/dispatch.jsonl` 只追加，`TTL 600 s`、`WINDOW 600 s`、`MAX_RETRY 3`，超限写 `ops/alerts.jsonl` | ✅ 已落地 |
 | 报到 | `persona_report.py`（`report` / `who` / `dispatch`），`persona_master.py --pending` 看池子 | ✅ 已落地 |
-| 上交（outbox → 服务端） | —— | ⬜ 本版设计 |
-| 合并 / 排序（服务端） | —— | ⬜ 本版设计 |
-| HTTP 服务端 | 端口 8080 实测不通 | ⬜ 本版设计 |
+| 上交（outbox → 服务端） | `persona_tasks.py submit --offline` → `ops/outbox.jsonl` → `flush` 补交 | ✅ 已落地 |
+| 合并 / 排序（服务端） | `persona_tasks.py`：标题归一 + 2-gram Jaccard ≥0.6 合并；prio 1–10 + deps 排序 | ✅ 已落地 |
+| HTTP 服务端 | `serve`：`POST /tasks` / `GET /tasks?agent=` / `POST /tasks/<id>/ack`（默认 8787，只绑 127.0.0.1） | ✅ 已落地 |
 
 ## 三、服务端要做的三件事（其余都不做）
 
