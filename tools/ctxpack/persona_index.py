@@ -114,18 +114,18 @@ def chunks_of(path):
 
 
 def header_fields(path):
-    """从元信息头取分身字段 设备 / 底座（B11e）。只读前 4 KB——两行元数据不值得读整份。
+    """从元信息头取分身字段（B11e）。解析只在 persona_avatar.from_head 一处实现。
 
-    没有这两行的老文件返回空串；宁可为空，也不要瞎猜成"网页"或"电脑"。
+    这里只保留"读文件头 + 求 (设备, 底座)"的壳，避免第三份正则各记各的：
+    老导出写 设备/底座，Hermes 导出写 来源/模型，两边必须得到同一结果。
     """
     try:
         head = io.open(path, encoding='utf-8', errors='replace').read(4096)
     except OSError:
         return '', ''
-    head = head.partition('\n---\n')[0]
-    dev = re.search(r'(?m)^-\s*设备：\s*(.+?)\s*$', head)
-    mod = re.search(r'(?m)^-\s*底座：\s*(.+?)\s*$', head)
-    return (dev.group(1) if dev else ''), (mod.group(1) if mod else '')
+    import persona_avatar as av
+    agent, model, _ = av.from_head(head, '')
+    return agent, model
 
 
 def bucket_defaults(rel):
