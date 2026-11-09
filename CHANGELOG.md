@@ -69,39 +69,6 @@
   `AI 会话检索记录`（多一个空格）导致 `File not found`——已用 `C:\hermes-mem` 联结规避。
 - 边界：数据出本地须先过 `mask_secrets.py`；免费档有 429 限流；壳升级后补丁需重放；登录态问题未解。
 
-## v4.4.0 — 2026-11-09：画像 / 全局索引 / 技能**设计成文**（未落地）
-
-**为什么是 4.x 而不是 5.x**：v5 那条线只讲一件事——**记忆层接入开源壳**（身份语义变了，所以是 MAJOR）。
-本版三份文档讲的是**记忆内部怎么运转**（画像、索引、技能），属于 v4 工具线的延续，故记 4.4.0。
-**性质**：这是设计成文，不是能力落地；三份规范写的是「应该怎么运转、怎么验收」，不等于已经验收通过。
-
-未落地的三条（验收入口：记忆库 `BACKLOG.md` B51）：
-
-- 上下文压缩：自动路径未到线（阈值 800K），手动入口在 DeepSeek 系模型上不可用；
-- 画像写回：`merge` 至今只报「无新增」，未真正并入过一条观察；
-- 本地兜底：断网回退从未触发过。
-
-- 命名统一：`keeper.py → persona_daemon.py`、`ctxguard → persona_gauge`、`ctxslim → persona_slim`、
-  `ctxpack → persona_pack`、`hermes_export → persona_bridge`、`zsearch → persona_search`、
-  `index_inc → persona_index`、`index_l1 → persona_index_l1`；运行期产物同步改名
-  （`ops/persona.log`、`persona-status.json`）。历史归档与旧会话**不改名**——那是记录，不是配置。
-- `docs/PROFILE.md`：画像 = 可追溯的观察链（`记一条观察：…` → harvest → `USER.md` → 免费 8B 归纳），
-  **设计**：只追加、幂等、带日期与证据；实现已有，验收未做。
-- `docs/GLOBAL_INDEX.md`：L0 正文 / L1 目录 / 块索引 / 归档四层，sha256 增量、原子替换、
-  RRF 混合检索与断网降级——**设计**；其中索引与检索已可运行，L1 五级（B35）仍是纸面。
-- 实测：索引 19170 块 / 121 文件 / 1.7 分钟（增量 0 块）；L1 目录随出包自动重建。
-- 修缺陷：
-  - 索引任务在「列目录 → 算哈希」之间遇归档删除会 `FileNotFoundError` 整任务退出，且**每轮卡同一处**；
-    现改为跳过并下轮再算。
-  - `read_watch.py` / `handoff_rotate.py` 带 UTF-8 BOM，**根本无法解析**（长期静默失效），已去 BOM。
-  - 导出无锁并发会 `PermissionError`；已加 `ops/export.lock`。
-  - 弃用会话靠「从 sessions 删文件」挡不住——导出每轮都会写回，现改为 `ops/skip-sessions.txt` 名单（注意 BOM）。
-- 边界：压缩的手动入口（`compact` 工具）在 DeepSeek 系模型上因「延迟工具 + 空对象参数」无法调用，
-  自动压缩走代码路径、阈值 80% 才触发；本地 0.6B 兜底仅在断网/429 时生效，尚未实测。
-
-**版本撤并留痕**：同日先按 5.1.0 发过一版，因归属判断有误（把记忆内部设计算进了 5.x 线），
-已按 `RELEASING` §五 撤销 tag 与 Release，改记 4.4.0；同日两版并存、各自成立。
-
 ## v4.3.0 — 2026-11-09：网页会话全量抓取（虚拟列表）
 
 **为什么算一个版本**：新增可运行产物（`tools/cdp_capture/capture.js`），有独立可复现的实测数字，
