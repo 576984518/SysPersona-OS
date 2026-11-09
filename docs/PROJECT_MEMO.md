@@ -64,7 +64,7 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 | 任务 | 周期 | 干什么 |
 |---|---|---|
-| `SysPersona-CtxGuard` | 10 分钟 | 测水位；≥450K 出包；≥80%/95% 告警 |
+| `SysPersona-CtxGuard` | 10 分钟 | 测水位；≥800K 交接（先镜像再出包）；到线由 `persona_limits.py` 一处定义 |
 | `SysPersona-Handoff-Refresh` | 30 分钟 | **覆盖** `续接\接续包-最新.md`（防丢） |
 | `SysPersona-DeepSeek-LiveWatch` | 每天 03:30 | 整页重载一次，防积压 |
 | `SysPersona-DeepSeek-FullSweep` | 每周日 21:00 | 全量巡检 |
@@ -201,7 +201,7 @@ $gh = 'D:\ProgramData\GitHub CLI\gh.exe'
 | 技能 | 域 | 管什么 |
 |---|---|---|
 | `session-recall` | 运行 | 唤醒顺序、一级索引、zsearch 检索 |
-| `ctxguard-ops` | 运行 | 水位、450K 出包、剪贴板、定时任务核对 |
+| `ctxguard-ops` | 运行 | 水位、800K 交接、剪贴板、定时任务核对 |
 | `capture-pipeline` | 运行 | F5 抓取、read_watch、导出、残缺快照防护 |
 | `release-ops` | 代码 | 发版判定、CHANGELOG、tag、Release、台账回写 |
 | `ctxpack-tools` | 代码 | 索引、检索、eval 回归、排障 |
