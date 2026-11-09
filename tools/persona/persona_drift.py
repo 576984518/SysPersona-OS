@@ -41,13 +41,14 @@ def _avatar(head, src):
         return "unknown"
 
 
-def _key(avatar, model=""):
-    """漂移统计的身份键：模型为准（同模型不同壳算同一个性格）。"""
+def _key(head, src=""):
+    """漂移统计的身份键：**以模型为准**（同模型不同壳算同一个性格）。"""
     try:
         import persona_avatar as av
-        return av.persona_key("", model or avatar.split("-", 1)[-1])
+        agent, model, _avatar = av.from_head(head, src)
+        return av.persona_key(agent, model)
     except Exception:
-        return avatar
+        return "unknown-x"
 
 
 def _metrics(texts):
@@ -60,26 +61,27 @@ def _metrics(texts):
     return {"n": n, "chars": round(chars, 1), "q": round(q, 3), "decide": round(dec, 3)}
 
 
-BASELINE = os.path.join(OPS, "drift-baseline.json")
+BASELINE = os.path.join(OPS, "drift-baseline.json")     # 首观测 = 出厂基线（只作参照）
+ROLLING = os.path.join(OPS, "drift-rolling.json")       # 最近一次滚动窗口（判偏移用）
 
 
-def _baseline():
+def _load(path):
     try:
-        return json.load(io.open(BASELINE, encoding="utf-8"))
+        return json.load(io.open(path, encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
-def _save_baseline(b):
+def _save(path, obj):
     os.makedirs(OPS, exist_ok=True)
-    tmp = BASELINE + ".tmp"
+    tmp = path + ".tmp"
     io.open(tmp, "w", encoding="utf-8", newline="\n").write(
-        json.dumps(b, ensure_ascii=False, indent=1))
-    os.replace(tmp, BASELINE)
+        json.dumps(obj, ensure_ascii=False, indent=1))
+    os.replace(tmp, path)
 
 
 def _collect(days):
-    """最近 N 天里，每个 avatar 的助手发言。"""
+    """最近 N 天里，每个 persona_key 的助手发言。"""
     now, since = time.time(), time.time() - days * 86400
     out = defaultdict(list)
     for dp, _, fns in os.walk(ARCHIVE):
@@ -99,44 +101,51 @@ def _collect(days):
                 parts = os.path.abspath(p).split(os.sep)
                 i = parts.index(m.group(0))
                 src = parts[i + 1] if len(parts) > i + 1 else ""
-            head = text.partition("\n---\n")[0]
-            who = _key(_avatar(head, src), "\n".join(head.splitlines()[:8]))
+            who = _key(text.partition("\n---\n")[0], src)
             out[who].extend(b.group(1).strip()[:2000] for b in BLOCK.finditer(text))
     return out
 
 
 def scan(days=7, reset=False):
-    """拿最近 N 天与**它自己的出厂基线**比；变化超 30% 就记一条（只记，不改）。"""
+    """与**滚动基线**比（输入侧偏移）→ 记录；与出厂基线比 → 只记参照值，不报警。"""
     cur = _collect(days)
-    base = {} if reset else _baseline()
+    factory = {} if reset else _load(BASELINE)
+    rolling = {} if reset else _load(ROLLING)
     rows, fresh = [], 0
     for who in sorted(cur):
         m_now = _metrics(cur[who])
         if not m_now:
             continue
-        if who not in base:
-            base[who] = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                         "metrics": m_now, "note": "首次观测即出厂基线"}
+        factory.setdefault(who, {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                 "metrics": m_now, "note": "首观测即出厂基线（参照，不报警）"})
+        prev = rolling.get(who, {}).get("metrics")
+        if not prev:
+            rolling[who] = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "metrics": m_now}
             fresh += 1
             continue
-        old = base[who]["metrics"]
         for key in ("chars", "q", "decide"):
-            b, n = old.get(key) or 0.0, m_now[key] or 0.0
+            b, n = prev.get(key) or 0.0, m_now[key] or 0.0
             if b == 0 and n == 0:
-                continue                      # 两边都是 0：没有变化，别记 -100% 的假漂移
+                continue
+            f0 = (factory[who]["metrics"].get(key) or 0.0)
+            delta_f = round((n - f0) / f0, 2) if f0 else None
             if b == 0:
-                rows.append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "avatar": who,
+                rows.append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "persona_key": who,
                              "metric": key, "before": 0, "now": n, "delta": None,
-                             "window": "%dd" % days, "verdict": "记录",
-                             "note": "基线为 0，本次出现"})
+                             "delta_factory": delta_f, "basis": "rolling%dd" % days,
+                             "cause": "context", "verdict": "记录",
+                             "note": "输入侧偏移（权重不动）"})
                 continue
             delta = (n - b) / b
             if abs(delta) >= 0.30:
-                rows.append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "avatar": who,
-                             "metric": key, "before": old.get(key), "now": m_now[key],
-                             "delta": round(delta, 2), "window": "%dd" % days,
-                             "verdict": "记录", "note": "只记录，不修正"})
-    _save_baseline(base)
+                rows.append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "persona_key": who,
+                             "metric": key, "before": b, "now": n, "delta": round(delta, 2),
+                             "delta_factory": delta_f, "basis": "rolling%dd" % days,
+                             "cause": "context", "verdict": "记录",
+                             "note": "输入侧偏移（权重不动）"})
+        rolling[who] = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "metrics": m_now}
+    _save(BASELINE, factory)
+    _save(ROLLING, rolling)
     if rows:
         os.makedirs(OPS, exist_ok=True)
         with io.open(STORE, "a", encoding="utf-8", newline="\n") as f:
@@ -152,7 +161,7 @@ def show(n=10):
     lines = [json.loads(l) for l in io.open(STORE, encoding="utf-8") if l.strip()]
     for r in lines[-n:]:
         print("%s  %-26s %-7s %8s → %-8s %+5.0f%%" % (
-            r["at"], r["avatar"][:26], r["metric"], r["before"], r["now"], r["delta"] * 100))
+            r["at"], r.get("persona_key", r.get("avatar", ""))[:26], r["metric"], r["before"], r["now"], r["delta"] * 100))
     print("—— 共 %d 条" % len(lines))
     return 0
 
@@ -171,7 +180,7 @@ def main():
           % (len(rows), fresh, os.path.relpath(STORE, ROOT)))
     for r in rows[:10]:
         print("  %-24s %-6s %s → %s（%+.0f%%）" % (
-            r["avatar"][:24], r["metric"], r["before"], r["now"], r["delta"] * 100))
+            r.get("persona_key", r.get("avatar", ""))[:24], r["metric"], r["before"], r["now"], r["delta"] * 100))
     return 0
 
 
