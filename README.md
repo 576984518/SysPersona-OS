@@ -31,7 +31,7 @@
 |---|---|---|
 | **资产层** | 它是什么、存在哪、怎么带走、怎么不被人读 | [`SECURITY_SPEC`](docs/SECURITY_SPEC.md) · [`PRIVACY_SPEC`](docs/PRIVACY_SPEC.md) |
 | **运行层** | 它怎么醒来、能做什么、多设备怎么共处 | [`LAUNCHER_SPEC`](docs/LAUNCHER_SPEC.md)（Runtime 现行）· [`WORK_MODE`](docs/WORK_MODE.md) |
-| **存在层** | 几个分身、身体是谁的、能对世界做什么 | [`AVATAR_SPEC`](docs/AVATAR_SPEC.md) · [`PHILOSOPHY`](docs/PHILOSOPHY.md) |
+| **存在层** | 几个分身、身体是谁的、能对世界做什么（v1.3 分身规范、v2.x 存在层） | [`AVATAR_SPEC`](docs/AVATAR_SPEC.md) · [`PHILOSOPHY`](docs/PHILOSOPHY.md) |
 
 只做资产层，它是一个能搬走的文件；加上后两层，它才是一个**住在某具身体里、受边界约束、可以被托管也可以被解放**的主体。
 
@@ -123,7 +123,7 @@ python tools/ctxpack/persona_daemon.py --once <任务名>   # 例如 hctx / task
 ```
 v0.1–v0.9  规范打底 → M1 可运行闭环 → 情绪/应激 → 加密容器 → 向量检索
 v1.0–v1.10 方法规范冻结 → Runtime 规范 → 分身规范 → 租约/隔离/死手开关 → 隐私主权
-v2.0–v2.4  隐私与伦理边界 → 身份归属与租约 → 物理接入授权 → 进化史 → 上下文提取器
+v2.0–v2.4  **存在层**：隐私与伦理边界 → 身份归属与租约 → 物理接入授权 → 进化史 → 上下文提取器
 v3.0–v3.10 从设计到实现 → 混合召回 → 调用本地重排 → F5 触发抓取
 v4.0–v4.6  工作模式 → 人格/交接/权限三份规范 → 画像/索引/技能
 v5.0       停止自研壳，记忆层寄生到开源壳上
