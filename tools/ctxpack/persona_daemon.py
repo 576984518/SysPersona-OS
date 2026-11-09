@@ -79,7 +79,7 @@ DEFAULTS = {
     "proxy": 60,
     "todo": 1800,
     "tasks": 300,
-    "drift": 21600,
+    "observe": 21600,
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900, "watermark": 120}
@@ -619,13 +619,14 @@ def t_tasks():
     return True, "补交 %d / 合并 %d / 池中 %d" % (sent, merged, size)
 
 
-def t_drift():
-    """漂移记录（v5.6）：只记录，不修正。性格面不建，人格用底座原生的。"""
-    script = os.path.join(ROOT, "persona_drift.py")
+def t_observe():
+    """表达观察（v5.6）：只留痕，不判定。底座自带性格，没有零点。"""
+    script = os.path.join(ROOT, "persona_observe.py")
     if not os.path.exists(script):
-        return False, "缺 persona_drift.py"
-    ok, msg = run([PY, script, "scan", "--days", "3"], 120)
-    return ok, (msg or "").strip().splitlines()[-1][:80] if msg else ("ok" if ok else "失败")
+        return False, "缺 persona_observe.py"
+    ok, msg = run([PY, script, "snapshot", "--days", "3"], 120)
+    line = (msg or "").strip().splitlines()[0][:70] if msg else ("ok" if ok else "失败")
+    return ok, line
 
 
 TASKS = {
@@ -647,7 +648,7 @@ TASKS = {
     "agent": t_agent,
     "reap": t_reap,
     "tasks": t_tasks,
-    "drift": t_drift,
+    "observe": t_observe,
     "proxy": t_proxy,
     "todo": t_todo,
 }
