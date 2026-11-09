@@ -41,6 +41,15 @@ def _avatar(head, src):
         return "unknown"
 
 
+def _key(avatar, model=""):
+    """漂移统计的身份键：模型为准（同模型不同壳算同一个性格）。"""
+    try:
+        import persona_avatar as av
+        return av.persona_key("", model or avatar.split("-", 1)[-1])
+    except Exception:
+        return avatar
+
+
 def _metrics(texts):
     if not texts:
         return None
@@ -90,7 +99,8 @@ def _collect(days):
                 parts = os.path.abspath(p).split(os.sep)
                 i = parts.index(m.group(0))
                 src = parts[i + 1] if len(parts) > i + 1 else ""
-            who = _avatar(text.partition("\n---\n")[0], src)
+            head = text.partition("\n---\n")[0]
+            who = _key(_avatar(head, src), "\n".join(head.splitlines()[:8]))
             out[who].extend(b.group(1).strip()[:2000] for b in BLOCK.finditer(text))
     return out
 

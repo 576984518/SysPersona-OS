@@ -147,3 +147,35 @@ def list_personas():
         if p is not None:
             out[name] = p
     return out
+
+# ── 身份键：以模型为准，带版本；agent 只作来源标签 ─────────────────────
+_VER = re.compile(r"(?<![0-9])(v?[0-9]+(?:\.[0-9]+)?)(?![0-9])")
+
+
+def family(model):
+    """模型家族：`deepseek-v4-flash` → `deepseek`；`qwen3.5-4b` → `qwen`；`unknown` 原样。"""
+    m = norm(model)
+    if not m or m == "unknown":
+        return m or "unknown"
+    head = re.split(r"[-_.]", m)[0]
+    head = re.sub(r"[0-9.]+$", "", head)
+    return head or m
+
+
+def version_of(model):
+    """从模型名里取版本：`deepseek-v4-flash` → `4`；`qwen3.5-4b` → `3.5`；取不到 → `x`。"""
+    m = norm(model)
+    for tok in re.split(r"[-_.]", m):
+        mm = re.fullmatch(r"v?([0-9]+(?:\.[0-9]+)?)", tok)
+        if mm:
+            return mm.group(1)
+    return "x"
+
+
+def persona_key(agent, model):
+    """性格身份 = 模型家族 + 版本（**不含 agent**）：同模型不同壳算同一个性格。
+
+    agent 只用于溯源（谁的库、哪台机器），不参与"是不是同一个性格"的判定——
+    2026-11-09 他的判断：壳能改行为，改不了性格。
+    """
+    return "%s-%s" % (family(model), version_of(model))

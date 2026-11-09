@@ -58,6 +58,8 @@ def scan():
                 continue
             n = len(MSG.findall(text))
             agent, model, avatar = av.from_head(text[:4096], src)
+            fam, ver = av.family(model), av.version_of(model)
+            pkey = av.persona_key(agent, model)
             rows.append({
                 "day": day,
                 "source": src,
@@ -68,6 +70,9 @@ def scan():
                 "agent": agent,
                 "model": model,
                 "avatar": avatar,
+                "family": fam,
+                "model_version": ver,
+                "persona_key": pkey,
                 "mtime": int(st),
             })
     rows.sort(key=lambda r: (r["day"], r["mtime"]), reverse=True)

@@ -61,6 +61,10 @@ function main() {
   const meta = JSON.parse(lines[0]);
   outLines.push('# 会话导出', '');
   outLines.push('- 来源：`' + file.replace(/\\/g, '/') + '`');
+  // 分身字段：壳是 dsh；模型取会话里第一条带 model 的事件（取不到写 unknown，不猜）。
+  const modelHit = text.match(/"model"\s*:\s*"([^"]+)"/);
+  outLines.push('- 设备：dsh');
+  outLines.push('- 模型：' + (modelHit ? modelHit[1] : 'unknown'));
   outLines.push('- 会话：`' + (meta.id || '?') + '`');
   outLines.push('- 创建：' + new Date(meta.createdAt || 0).toISOString());
   outLines.push('- 事件：' + lines.length);
@@ -70,16 +74,14 @@ function main() {
     let o;
     try { o = JSON.parse(line); } catch (_) { continue; }
     const d = o.data || {};
-    if (o.type === 'user/message') {
-      const t = textOf(d.content);
+    if (o.type === 'user/message' || o.type === 'assistant/message') {
+      const t = o.type === 'user/message' ? textOf(d.content) : textOf((d.message || {}).content);
       if (!t) continue;
-      outLines.push('## 用户', '', t, '');
-      users++;
-    } else if (o.type === 'assistant/message') {
-      const t = textOf((d.message || {}).content);
-      if (!t) continue;
-      outLines.push('## 助手', '', t, '');
-      assistants++;
+      // 消息之间必须有分隔线：索引与检索都靠 "\n\n---\n\n" 切块。
+      // 缺了它，整份会话会被当成一篇"文档"按段落切，用户/助手角色全丢。
+      if (users + assistants > 0) outLines.push('---', '');
+      outLines.push(o.type === 'user/message' ? '## 用户' : '## 助手', '', t, '');
+      if (o.type === 'user/message') users++; else assistants++;
     } else if (o.type === 'tool/call') {
       outLines.push('- 🔧 `' + (d.name || '?') + '` ' + clip(d.arguments, 160));
       tools++;
