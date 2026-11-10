@@ -15,7 +15,12 @@ r"""persona_tray.py — 托盘状态灯：多客户端并列显示 + 实时水�
   <runtime>\python\pythonw.exe persona_tray.py      # 或 $env:PERSONA_PY
 自检：
   同上 --probe（或 --status）只打印一帧状态、菜单项和当前图标颜色，然后退出（不进托盘）；
-  --probe-compress 自检「立即压缩一次」：跳过确认框、子进程加 --dry-run（不注入）。
+  --probe-compress 自检「立即压缩一次」：跳过确认框、子进程加 --dry-run（不注入）；
+  --probe-cost 自检今日成本：只打印一行读数就退出（读 ops 账本，不启动托盘）。
+
+成本尺子（2026-11-10 加）：tooltip 追加「今日 ¥x.xx」；单价没配（per_mtok 有 null）时
+改报「今日 838K in / 796K out / 265M cache」，**不猜价、不变色**。日金额超 daily_warn
+是独立于水位的一条线：图标整块变黄（与注入告警同色）、tooltip 标「成本超线」。
 
 环境变量：SYSPERSONA_ROOT（旧名 PERSONA_ROOT / MEM / SYSPERSONA_MEM 也认）指记忆库根；
 不设就按脚本自身目录向上找含 ops\ 与 sessions\ 的目录，再找不到直接报错——不再写死盘符。
@@ -112,6 +117,7 @@ if INJ is not None and not hasattr(INJ, "evaluate_state"):
 
 STALE = 180          # 秒：状态文件多久没更新算守护挂了
 GAUGE_EVERY = 60     # 秒：DSH 水位多久读一次（直接读壳的缓存文件，很轻；60 秒够用）
+COST_EVERY = 60      # 秒：今日成本多久读一次（读记忆库 ops 账本，不碰壳的目录）
 PROC_EVERY = 20      # 秒：进程表缓存
 TICK = 5             # 秒：托盘刷新间隔
 
@@ -223,6 +229,8 @@ def icon_color_name(s=None):
         return "红（注入告警）"
     if inj.get("level") == "warn":
         return "黄（注入告警）"
+    if s.get("cost_over"):
+        return "黄（成本超线）"
     if not s["bars"]:
         return "灰（没有客户端）"
     colors = [b[0] for b in s["bars"]]
@@ -363,6 +371,83 @@ def _parse_k(s):
         return None
 
 
+# ── 今日成本（只读记忆库 ops 账本；壳的目录一个字节都不写）─────────────
+def _load_cost():
+    """从记忆库加载 persona_cost，用它的 `report_data()` 取今日读数。
+
+    与 _load_gauge 同理：不能 `import persona_cost`（仓库 tools\\ctxpack 下那份会抢先命中），
+    按文件路径加载记忆库里的活版本；加载失败只是不显示成本，不影响托盘启动。
+    """
+    path = os.path.join(ROOT, "persona_cost.py")
+    if not os.path.exists(path):
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("persona_cost_live", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod if hasattr(mod, "report_data") else None
+    except Exception:
+        return None
+
+
+COST_MOD = _load_cost()
+_COST = {"at": 0.0, "data": None}
+
+
+def _cost_tokens(n):
+    """token 显示：优先借 persona_cost 的紧凑格式（838K / 265M）。"""
+    if COST_MOD is not None and hasattr(COST_MOD, "_human"):
+        try:
+            return COST_MOD._human(n)
+        except Exception:
+            pass
+    return human(n)
+
+
+def _cost_money(v, currency="CNY"):
+    if COST_MOD is not None and hasattr(COST_MOD, "_money"):
+        try:
+            return COST_MOD._money(v, currency)
+        except Exception:
+            pass
+    return "¥—" if v is None else "¥%.2f" % float(v)
+
+
+def cost_state(force=False):
+    """今日成本读数（缓存 COST_EVERY 秒）。读不到返回 None。"""
+    now = time.time()
+    with _LOCK:
+        if not force and _COST["at"] and now - _COST["at"] < COST_EVERY:
+            return _COST["data"]
+    data = None
+    if COST_MOD is not None:
+        try:
+            data = COST_MOD.report_data()
+        except Exception:
+            data = None
+    with _LOCK:
+        _COST.update({"at": now, "data": data})
+    return data
+
+
+def cost_over(data):
+    """日金额超 daily_warn —— 独立于水位的一条线；单价没配就只看 token、不变色。"""
+    return bool(data and data.get("over_daily"))
+
+
+def cost_tip(data):
+    """tooltip 里那一小段：有单价报 ¥，没单价只报 token。"""
+    if not data:
+        return ""
+    if data.get("priced"):
+        return "今日 " + _cost_money(data.get("money"), data.get("currency"))
+    t = data.get("totals") or {}
+    return "今日 %s in / %s out / %s cache" % (
+        _cost_tokens(t.get("uncached")), _cost_tokens(t.get("output")),
+        _cost_tokens(t.get("cache_read")))
+
+
 def hermes_watermark():
     d = read_json(HCTX)
     if not d or file_age(HCTX) > 600:
@@ -440,18 +525,24 @@ def snapshot():
     rows = client_rows()
     ok, msg, tasks = daemon_health()
     inj = INJ.evaluate_state() if INJ else None
+    cost = cost_state()
 
     # 竖条顺序 = 客户端顺序（位置固定，便于辨认：左=DSH，右=下一个）
     bars = [(color_of(r["pct"]), r["pct"], r["ctx"] is not None) for r in rows]
 
     parts = [wm_part(r) for r in rows]
     title = "SysPersona · " + (" · ".join(parts) if parts else "没有客户端在跑")
+    ctip = cost_tip(cost)
+    if ctip:
+        title += " ｜ " + ctip
+    if cost_over(cost):
+        title += " · 成本超线"
     if not ok:
         title += " · 守护异常"
     if inj and inj["level"] != "ok":
         title += " · " + inj["text"]
     return {"bars": bars, "title": title, "rows": rows, "daemon": (ok, msg, tasks),
-            "inject": inj}
+            "inject": inj, "cost": cost, "cost_over": cost_over(cost)}
 
 
 # ── 画图标：一个客户端一个正方形，几个就并排几个 ─────────────────────
@@ -511,6 +602,26 @@ def detail_text(s):
     if inj:
         out.append("【注入】%s" % inj.get("text", ""))
         out.append("")
+    cost = s.get("cost")
+    if cost:
+        t = cost.get("totals") or {}
+        out.append("【成本】今日 in %s · out %s · cache_read %s · cache_write %s"
+                   % (_cost_tokens(t.get("uncached")), _cost_tokens(t.get("output")),
+                      _cost_tokens(t.get("cache_read")), _cost_tokens(t.get("cache_write"))))
+        if cost.get("priced"):
+            line = "  %s（日线 %s%s）" % (
+                _cost_money(cost.get("money"), cost.get("currency")),
+                _cost_money(cost.get("daily_warn"), cost.get("currency")),
+                "，已超线" if cost.get("over_daily") else "")
+            hour = cost.get("hour") or {}
+            line += " · 近 1 小时 %s%s" % (
+                _cost_money(hour.get("money"), cost.get("currency")),
+                "，已超小时线" if cost.get("over_hourly") else "")
+        else:
+            line = "  单价未配置（%s）→ 只报 token、不判金额" % (
+                cost.get("price_error") or "per_mtok 四个单价有 null")
+        out.append(line)
+        out.append("")
     out.append("【客户端】")
     if s["rows"]:
         for r in s["rows"]:
@@ -529,7 +640,7 @@ def detail_text(s):
     ok, msg, tasks = s["daemon"]
     out.append("")
     out.append("【守护】%s" % msg)
-    for name in ("hctx", "export", "index", "backup2", "todo", "proxy"):
+    for name in ("hctx", "export", "index", "backup2", "todo", "proxy", "cost"):
         t = tasks.get(name)
         if not t:
             continue
@@ -583,6 +694,14 @@ def quit_app(icon, item=None):
 
 
 # ── 主循环 ───────────────────────────────────────────────────────────
+def alarm_level(s):
+    """图标告警档：注入优先；没有注入告警时，日成本超线单独把图标变黄。"""
+    level = (s.get("inject") or {}).get("level", "ok")
+    if level == "ok" and s.get("cost_over"):
+        return "warn"
+    return level
+
+
 def refresh(icon):
     while True:
         try:
@@ -593,7 +712,7 @@ def refresh(icon):
                 icon.title = BUSY_TITLE[:120]
             else:
                 s = snapshot()
-                icon.icon = make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok"))
+                icon.icon = make_icon(s["bars"], alarm_level(s))
                 icon.title = (s["title"] if not note else "SysPersona · " + note)[:120]
                 if INJ and not note:
                     INJ.check_alert()  # 上升沿才响；marker 落盘，不会每轮都响
@@ -817,6 +936,25 @@ def _print_menu():
         print("  %s %s" % ("*" if default else " ", label or "—— 分隔线 ——"))
 
 
+def _probe_cost():
+    """自检今日成本：只打印一行读数就退出（不启动托盘、不写任何东西）。"""
+    d = cost_state(force=True)
+    if not d:
+        print("[成本] 读不到 persona_cost.py 或 ops 账本")
+        return
+    t = d.get("totals") or {}
+    if d.get("priced"):
+        line = "[成本] %s 今日 %s（日线 %s%s）" % (
+            d.get("day"), _cost_money(d.get("money"), d.get("currency")),
+            _cost_money(d.get("daily_warn"), d.get("currency")),
+            "，已超线" if d.get("over_daily") else "")
+    else:
+        line = ("[成本] %s 今日 %s in / %s out / %s cache · 单价未配置（只报 token）· 日线 未设"
+                % (d.get("day"), _cost_tokens(t.get("uncached")),
+                   _cost_tokens(t.get("output")), _cost_tokens(t.get("cache_read"))))
+    print(line)
+
+
 def _probe_compress():
     """自检「立即压缩一次」：跳过确认框，子进程加 --dry-run，只验证走位与着色。"""
     s = snapshot()
@@ -869,10 +1007,13 @@ def main():
     if "--probe-compress" in sys.argv:
         _probe_compress()
         return
+    if "--probe-cost" in sys.argv:
+        _probe_cost()
+        return
     s = snapshot()
     icon = pystray.Icon(
         "SysPersona",
-        icon=make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok")),
+        icon=make_icon(s["bars"], alarm_level(s)),
         title=s["title"][:120],
         menu=build_menu(),
     )

@@ -91,6 +91,7 @@ DEFAULTS = {
     "index": 3600,
     "ctx": 600,
     "watermark": 900,
+    "cost": 300,
     "merge": 1800,
     "navwatch": 120,
     "hctx": 120,
@@ -108,7 +109,8 @@ DEFAULTS = {
     "daily": 21600,
 }
 
-TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900, "watermark": 120}
+TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900,
+                "watermark": 120, "cost": 120}
 
 
 def now():
@@ -234,6 +236,15 @@ def t_ctx():
 def t_watermark():
     ok, s = run([PY, os.path.join(ROOT, "persona_gauge.py")], TASK_TIMEOUT["watermark"])
     return ok, s
+
+
+def t_cost():
+    """成本尺子：扫壳的会话缓存记日账（只读壳的目录），超线追加 alerts。
+
+    只跑 `persona_cost.py sample --warn`；超时 120 秒，正常 < 1 秒，绝不拖住心跳。
+    """
+    return run([PY, os.path.join(ROOT, "persona_cost.py"), "sample", "--warn"],
+               TASK_TIMEOUT["cost"])
 
 
 def t_capture():
@@ -718,6 +729,7 @@ TASKS = {
     "index": t_index,
     "ctx": t_ctx,
     "watermark": t_watermark,
+    "cost": t_cost,
     "merge": t_merge,
     "scan": t_scan,
     "navwatch": t_navwatch,
