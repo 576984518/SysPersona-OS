@@ -57,10 +57,10 @@ DEFAULT_CFG = {
                  "note": "收费：默认只给最小次数（1/时·3/日），要放宽自己改"},
     },
     "patterns": {
-        "free": ["local/*", "*free*", "siliconflow*", "ollama*", "lmstudio*",
-                 "deepseek-web*"],
+        "free": ["local/*", "*free*", "ollama*", "lmstudio*", "deepseek-web*",
+                 "herdsman*", "127.0.0.1*"],
         "paid": ["deepseek-account:*", "deepseek-official:*", "openai*",
-                 "anthropic*"],
+                 "anthropic*", "siliconflow*", "sf:*"],
     },
     "current_model": "",
     # 默认最小：自动识别到免费/本地模型也不放宽，要放宽必须显式打开
@@ -250,6 +250,29 @@ def _idle(root=None):
         return False, "空闲判定不可用（按最小档）"
 
 
+def _pick_chat_model(data):
+    """从 /v1/models 里挑一个**正在跑的对话模型**。
+
+    Herdsman 的模型列表里混着 TTS / OCR / ASR / 向量 / 重排 / 生图，
+    只探到端口就按"本地大模型在线"算会把 `edge-tts` 也算进来——所以按名字剔除。
+    """
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return ""
+    NOT_CHAT = ("tts", "ocr", "asr", "sensevoice", "voxcpm", "zimage", "mineru",
+                "bge-", "rerank", "embed", "speech", "whisper")
+    for rec in rows:
+        if not isinstance(rec, dict):
+            continue
+        mid = str(rec.get("id") or "")
+        if not mid or str(rec.get("status") or "").lower() != "running":
+            continue
+        if any(bad in mid.lower() for bad in NOT_CHAT):
+            continue
+        return mid
+    return ""
+
+
 def _local_model_up(cfg):
     """本机有没有本地模型服务在听：只连**回环地址**，不出网，连不上就当没有。
 
@@ -266,18 +289,17 @@ def _local_model_up(cfg):
                 pass
         except (OSError, ValueError):
             continue
+        ep = "%s:%s" % (host, port)
         name = ""
-        try:                                  # 只读本机 /v1/models，拿模型名（失败不影响判定）
+        try:                                  # 只读本机 /v1/models，挑「正在跑的对话模型」
             import urllib.request
-            with urllib.request.urlopen("http://%s:%s/v1/models" % (host, port),
-                                        timeout=0.8) as r:
+            with urllib.request.urlopen("http://%s/v1/models" % ep,
+                                        timeout=1.2) as r:
                 data = json.loads(r.read(65536).decode("utf-8", "replace"))
-            rows = data.get("data") if isinstance(data, dict) else None
-            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-                name = str(rows[0].get("id") or "")
+            name = _pick_chat_model(data)
         except Exception:                      # noqa: BLE001（探针失败不挡事）
             name = ""
-        return ("%s:%s" % (host, port), name)
+        return (ep, name)
     return ("", "")
 
 
@@ -360,9 +382,12 @@ def profile(root=None, now=None):
     fb_on, fb_why = _fallback_on(root)
     if fb_on:
         tier, why = "free", "保底模式（%s）——只做本机活" % (fb_why or "已降级")
+    elif local_ep and local_name:
+        tier, why = "free", "本机本地模型在跑（%s · %s）——断网也能跑，最保底" % (
+            local_ep, local_name)
     elif local_ep:
-        tier, why = "free", "本机本地模型在线（%s%s）——断网也能跑，最保底" % (
-            local_ep, (" · " + local_name) if local_name else "")
+        tier = "paid"
+        why = "本机 %s 在听，但没有在跑的对话模型（只有 TTS/OCR 之类），按最小档" % local_ep
     elif tier_detected == "free" and auto_free:
         tier, why = "free", "识别到免费/本地模型，且 auto_free=on"
     elif free_when_idle and idle_now:
