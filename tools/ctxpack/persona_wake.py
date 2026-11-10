@@ -407,8 +407,8 @@ def _autonomy_line():
         sys.path.insert(0, ROOT)
         import persona_autonomy as AU
         p = AU.profile(root=ROOT)
-        return "⑨·5 自主档位：%s（%s）· 本小时 %d/%d 次 · 今日 %d/%d 次" % (
-            p.get("tier"), p.get("tier_label"),
+        return "⑨·5 自主档位：%s（%s｜%s）· 本小时 %d/%d 次 · 今日 %d/%d 次" % (
+            p.get("tier"), p.get("tier_label"), p.get("tier_reason") or "—",
             p.get("used_hour", 0), p.get("runs_per_hour", 0),
             p.get("used_day", 0), p.get("runs_per_day", 0))
     except Exception as e:

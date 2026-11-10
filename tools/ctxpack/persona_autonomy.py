@@ -20,7 +20,8 @@ git push —— 在 `persona_autoloop.py` 的 GUARDS 里逐条写死，与档位
 配置：`ops\autonomy.json`（首次自动生成；仓库交 `ops/autonomy.example.json`）：
   {"cur_by_model": {"free": {"runs_per_hour": 12, "runs_per_day": 120, "note": "…"},
                      "paid": {"runs_per_hour": 1,  "runs_per_day": 3,   "note": "…"},
- "auto_free": false   ← 默认关：识别到免费档也不放宽，要放宽得显式开},
+ "auto_free": false,        ← 识别到免费档时是否**全天**放宽（默认关 = 最小）
+ "free_when_idle": true     ← 空闲时自动切到免费档（队列空 + 无到点闹钟 + 无未完成任务）},
    "patterns": {"free": ["local/*", "*free*", …], "paid": ["deepseek-account:*", …]},
    "current_model": ""}
 `current_model` 非空 = 人工钉住；空 = 从成本账本
@@ -40,6 +41,7 @@ import fnmatch
 import io
 import json
 import os
+import socket
 import time
 
 TIERS = ("free", "paid")            # 先 free 后 paid：同时命中时按「免费」算
@@ -63,6 +65,12 @@ DEFAULT_CFG = {
     "current_model": "",
     # 默认最小：自动识别到免费/本地模型也不放宽，要放宽必须显式打开
     "auto_free": False,
+    # 空闲期例外：队列空、没有到点闹钟、没有未完成任务时，自动切到免费档
+    # （自由度高一点没关系——空闲期本来就该它自己安排；人在用时立刻收回最小档）
+    "free_when_idle": True,
+    # 最保底：本机有本地模型服务（ollama / LM Studio …）在线就当免费档。
+    # 只探**本机回环**，不出网；断网时它照样是保底那条路。
+    "local_models": ["127.0.0.1:11434"],
 }
 
 RED_LINES = (
@@ -175,6 +183,10 @@ def load(root=None):
             cfg["patterns"][tier] = list(DEFAULT_CFG["patterns"][tier])
     if not isinstance(cfg.get("current_model"), str):
         cfg["current_model"] = ""
+    if not isinstance(cfg.get("auto_free"), bool):
+        cfg["auto_free"] = bool(DEFAULT_CFG["auto_free"])
+    if not isinstance(cfg.get("free_when_idle"), bool):
+        cfg["free_when_idle"] = bool(DEFAULT_CFG["free_when_idle"])
     return cfg
 
 
@@ -222,6 +234,37 @@ def _ledger_current():
         if (calls, cost) > best_key:
             best, best_key = str(key), (calls, cost)
     return best
+
+
+def _idle(root=None):
+    """空闲判定：借 `persona_autoloop.idle()`（队列空 + 无到点闹钟 + 无未完成任务）。
+
+    **延迟导入**：autoloop 反过来 import 本模块，模块级导入会成环。
+    判不了就当「不空闲」（保守：按最小档）。
+    """
+    try:
+        import persona_autoloop as AL        # noqa: WPS433（延迟导入是刻意的）
+        ok, why = AL.idle(root_of(root))
+        return bool(ok), str(why or "")
+    except Exception:                        # noqa: BLE001（判定失败不挡事）
+        return False, "空闲判定不可用（按最小档）"
+
+
+def _local_model_up(cfg):
+    """本机有没有本地模型服务在听：只连**回环地址**，不出网，连不上就当没有。
+
+    返回在线的 `host:port`（空串 = 没有）。这是"断网时的最保底"那条路的探针：
+    本地模型在线 → 电费档，联网与否都不影响它继续做事。
+    """
+    for ep in (cfg.get("local_models") or []):
+        host, _, port = str(ep).partition(":")
+        host = host.strip() or "127.0.0.1"
+        try:
+            with socket.create_connection((host, int(port or 11434)), timeout=0.4):
+                return "%s:%s" % (host, port or 11434)
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def current_detail(root=None):
@@ -276,13 +319,34 @@ def used_runs(root=None, now=None):
 
 
 def profile(root=None, now=None):
-    """当前生效的 {model, tier, 次数上限, 已用, 还能做}；只读。"""
+    """当前生效的 {model, tier, 次数上限, 已用, 还能做}；只读。
+
+    档位优先级（先命中先算）：
+      1) 识别到免费/本地模型 **且** `auto_free=on` → 免费档（全天放宽）
+      2) `free_when_idle=on` **且** 现在空闲 → 免费档（空闲期自动切，人在用时收回）
+      3) 其余 → 收费档（最小档）
+    """
     cfg = load(root)
     model, source = current_detail(root)
     tier_detected = classify(model, root)
     auto_free = bool(cfg.get("auto_free", False))
-    # 默认最小：识别到免费档但没显式打开 auto_free → 仍按收费档的最小次数执行
-    tier = tier_detected if (tier_detected != "free" or auto_free) else "paid"
+    free_when_idle = bool(cfg.get("free_when_idle", True))
+    idle_now, idle_why = _idle(root)
+    local_up = _local_model_up(cfg)
+    if local_up:
+        tier, why = "free", "本机本地模型在线（%s）——断网也能跑，最保底" % local_up
+    elif tier_detected == "free" and auto_free:
+        tier, why = "free", "识别到免费/本地模型，且 auto_free=on"
+    elif free_when_idle and idle_now:
+        tier, why = "free", "空闲期自动切（队列空、无到点闹钟、无未完成任务）"
+    else:
+        tier = "paid"
+        if not idle_now and idle_why:
+            why = "非空闲（%s），按最小档" % idle_why
+        elif tier_detected == "free":
+            why = "识别到免费档但 auto_free=off，且不在空闲期 → 最小档"
+        else:
+            why = "收费模型，按最小档"
     lv = (cfg.get("cur_by_model") or {}).get(tier) or {}
     base = DEFAULT_CFG["cur_by_model"][tier]
     rh = _num(lv.get("runs_per_hour"), base["runs_per_hour"])
@@ -290,6 +354,9 @@ def profile(root=None, now=None):
     used_h, used_d = used_runs(root, now)
     return {"model": model, "model_source": source,
             "tier": tier, "tier_detected": tier_detected, "auto_free": auto_free,
+            "free_when_idle": free_when_idle, "idle": idle_now,
+            "idle_why": idle_why, "tier_reason": why,
+            "local_model": local_up,
             "tier_label": TIER_LABEL[tier],
             "tier_note": lv.get("note") or TIER_DESC[tier],
             "runs_per_hour": rh, "runs_per_day": rd,
@@ -312,7 +379,7 @@ def limit_reason(p):
 
 
 def set_values(tier="", runs_per_hour=None, runs_per_day=None, model=None,
-               auto_free=None, root=None):
+               auto_free=None, free_when_idle=None, root=None):
     """改数/钉模型。返回 (profile, 变更说明列表)。只改 ops\\autonomy.json。"""
     cfg = load(root)
     changes = []
@@ -333,6 +400,11 @@ def set_values(tier="", runs_per_hour=None, runs_per_day=None, model=None,
         changes.append("auto_free=%s（%s）" % (
             "true" if auto_free else "false",
             "允许免费档放宽" if auto_free else "一律按最小档"))
+    if free_when_idle is not None:
+        cfg["free_when_idle"] = bool(free_when_idle)
+        changes.append("free_when_idle=%s（%s）" % (
+            "true" if free_when_idle else "false",
+            "空闲期自动切免费档" if free_when_idle else "空闲期也按最小档"))
     if model is not None:
         m = str(model or "").strip()
         if m.lower() == "auto":
@@ -355,6 +427,15 @@ def _fmt_show(p, cfg, root):
         "配置：%s" % config_path(root),
         "当前模型：%s（来自 %s）" % (p.get("model") or "—", src),
         "归到：%s · %s" % (p.get("tier_label"), p.get("tier_note")),
+        "为什么是这个档：%s" % p.get("tier_reason"),
+        "现在空闲吗：%s%s" % ("是" if p.get("idle") else "否",
+                          "" if p.get("idle") else "（%s）" % (p.get("idle_why") or "—")),
+        "空闲切换：%s · 全天放宽(auto_free)：%s" % (
+            "开（空闲期自动切免费档）" if p.get("free_when_idle") else "关",
+            "开" if p.get("auto_free") else "关"),
+        "本地模型：%s" % (
+            "在线 %s（最保底，断网可用）" % p.get("local_model")
+            if p.get("local_model") else "没探到（只看本机回环，不出网）"),
         "本小时：已用 %d 次 / 上限 %d 次 / 还能做 %d 次" % (
             p.get("used_hour"), p.get("runs_per_hour"), p.get("left_hour")),
         "今日：已用 %d 次 / 上限 %d 次 / 还能做 %d 次" % (
@@ -370,6 +451,7 @@ def _fmt_show(p, cfg, root):
     lines += [
         "改数：python persona_autonomy.py set --tier free --runs-per-hour 20 --runs-per-day 200",
         "      python persona_autonomy.py set --model \"ollama:qwen3:8b\"（钉住）/ --model auto（回到看账本）",
+        "空闲切档：python persona_autonomy.py set --free-when-idle off（空闲期也按最小档）",
         "红线：%s" % RED_LINES,
     ]
     return "\n".join(lines)
@@ -384,6 +466,9 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--auto-free", dest="auto_free", choices=["on", "off"], default=None,
                     help="set 是否允许免费/本地档放宽（默认 off = 一律按最小档）")
+    ap.add_argument("--free-when-idle", dest="free_when_idle", choices=["on", "off"],
+                    default=None,
+                    help="set 空闲期是否自动切到免费档（默认 on）")
     ap.add_argument("--tier", choices=list(TIERS), default="",
                     help="set 改哪一档（free/paid）")
     ap.add_argument("--runs-per-hour", type=int, default=None, dest="runs_per_hour")
@@ -406,9 +491,10 @@ def main(argv=None):
         return 0
 
     if a.cmd == "set":
-        if not a.tier and a.model_opt is None and a.auto_free is None:
+        if (not a.tier and a.model_opt is None and a.auto_free is None
+                and a.free_when_idle is None):
             print("set 要 --tier free|paid --runs-per-hour N [--runs-per-day N]，"
-                  "或 --model <模型键|auto>")
+                  "或 --model <模型键|auto>，或 --free-when-idle on|off")
             return 2
         if a.runs_per_hour is not None and a.runs_per_hour < 0:
             print("--runs-per-hour 不能为负（0 = 不自动做事）")
@@ -419,6 +505,8 @@ def main(argv=None):
         p, changes = set_values(a.tier, a.runs_per_hour, a.runs_per_day,
                                 a.model_opt,
                                 None if a.auto_free is None else (a.auto_free == "on"),
+                                None if a.free_when_idle is None
+                                else (a.free_when_idle == "on"),
                                 root)
         if p is None:
             print("；".join(changes))
