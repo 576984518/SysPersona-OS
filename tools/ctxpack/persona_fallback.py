@@ -32,17 +32,21 @@ import io
 import json
 import os
 import socket
+import sys
 import time
 
 TTL = 60.0                       # 判定缓存秒数（心跳 30 秒，两拍之内复用同一结论）
 
 DEFAULT_CFG = {
     "probe": True,
-    "offline_targets": ["223.5.5.5:443"],   # 公共 DNS，只握手
+    "offline_targets": ["223.5.5.5:443"],   # 公网探针：只握手，判断"有没有网"
+    # 服务器探针：网络通、但这些端点连不上 → 不是断网，是**当前云模型服务器挂了**
+    # （人 2026-11-10 定的区分：断网→本地模型；云服务器崩→备用云端模型）
+    "provider_targets": ["api.deepseek.com:443", "api.siliconflow.cn:443"],
     "balance_file": "",
     "balance_threshold": 1.0,
     "manual": "",
-    "note": "保底判定：欠费/断网时唤醒自动降级；manual 非空即降级，off=人工确认恢复",
+    "note": "保底判定：人工 / 余额 / 断网（切本地）/ 服务器不可达（切备用云端）；manual 非空即降级",
 }
 
 
@@ -200,11 +204,21 @@ def _decide(cfg):
         return True, why, detail
 
     targets = [t for t in (cfg.get("offline_targets") or []) if str(t).strip()]
+    provs = [t for t in (cfg.get("provider_targets") or []) if str(t).strip()]
     if cfg.get("probe") and targets:
         alive = [t for t in targets if _tcp_ok(t)]
         detail["probe"] = {"targets": targets, "alive": alive}
         if not alive:
-            return True, "断网（%d 个目标全连不上）" % len(targets), detail
+            detail["mode"] = "offline"
+            return True, "断网（%d 个目标全连不上）→ 切本地模型" % len(targets), detail
+        if provs:
+            up = [t for t in provs if _tcp_ok(t)]
+            detail["provider_probe"] = {"targets": provs, "alive": up}
+            if not up:
+                # 有网、但云端端点全不可达：不是断网，是服务器这边挂了/在维护
+                detail["mode"] = "server_down"
+                return True, ("服务器不可达（网络正常，%d 个云端点全连不上）→ 切备用云端模型"
+                              % len(provs)), detail
     return False, "", detail
 
 
@@ -232,9 +246,18 @@ def line(root=None):
     """给唤醒简讯的一行。"""
     s = state(root)
     if s.get("on"):
-        return ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载/抓本机会话），"
-                "付费模型与外部联网检索一律不走；本地模型在跑就它上"
-                % (s.get("why") or "已降级"))
+        mode = str(s.get("mode") or "")
+        if mode == "server_down":
+            tail = ("⛑ 保底：%s —— 云端不通但网络正常：切**备用云端**（硅基免费档先上），"
+                    "付费模型与外部联网检索先不走" % (s.get("why") or "已降级"))
+        elif mode == "offline":
+            tail = ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载/抓本机会话），"
+                    "本机模型在跑就它上" % (s.get("why") or "已降级"))
+        else:
+            tail = ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载/抓本机会话），"
+                    "付费模型与外部联网检索一律不走；本地模型在跑就它上"
+                    % (s.get("why") or "已降级"))
+        return tail
     srcs = s.get("balance_sources") or []
     if srcs:
         bits, warns = [], []
@@ -272,7 +295,66 @@ def set_ds_balance(value, source="", root=None):
     return snap
 
 
+def _key_of(name):
+    """读 key：环境变量 → 用户级注册表（守护进程开机起，拿不到后加的变量）。不打印值。"""
+    v = os.environ.get(name) or ""
+    if v:
+        return v, "环境变量"
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as h:
+            val, _ = winreg.QueryValueEx(h, name)
+        if val:
+            return str(val), "用户环境变量（注册表）"
+    except Exception:                     # noqa: BLE001
+        pass
+    return "", ""
+
+
+def fetch_ds_balance(root=None):
+    """从 DeepSeek 开放平台读余额（官方接口，准）：`GET /user/balance`。
+
+    需要 `DEEPSEEK_API_KEY`（开放平台 → API keys）。**读不到就不写**，绝不猜。
+    页面那条路（platform.deepseek.com/usage）要短信登录，调试浏览器里目前是未登录态，
+    所以优先用接口；接口没 key 时这条会明确报「没配」。
+    """
+    key, src = _key_of("DEEPSEEK_API_KEY")
+    if not key:
+        return None, "没配 DEEPSEEK_API_KEY（开放平台 → API keys，设成用户环境变量即可）"
+    try:
+        import urllib.request
+        req = urllib.request.Request("https://api.deepseek.com/user/balance",
+                                     headers={"Authorization": "Bearer " + key})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as e:                # noqa: BLE001
+        return None, "接口调用失败：%s" % str(e)[:120]
+    infos = d.get("balance_infos") or []
+    if not isinstance(infos, list) or not infos:
+        return None, "接口没返回 balance_infos"
+    cny = next((x for x in infos if str(x.get("currency")) == "CNY"), infos[0])
+    try:
+        bal = float(cny.get("total_balance"))
+    except (TypeError, ValueError):
+        return None, "balance_infos 里没有可认的 total_balance"
+    snap = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "balance": bal,
+            "currency": cny.get("currency") or "CNY",
+            "granted": cny.get("granted_balance"), "topped": cny.get("topped_up_balance"),
+            "source": "api.deepseek.com/user/balance（%s）" % src,
+            "available": d.get("is_available")}
+    _write_json(ds_balance_path(root), snap)
+    return snap, ""
+
+
 def main(argv=None):
+    # Windows 管道下 stdout 默认按 GBK 编码，`¥` 会直接抛 UnicodeEncodeError（退出码变 1），
+    # 守护就把它记成 FAIL。这里显式改成 UTF-8——数字取到了，就别因为一个符号整条失败。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:                 # noqa: BLE001（老 Python / 被重定向时忽略）
+            pass
+
     ap = argparse.ArgumentParser(description="保底判定：欠费或断网时唤醒自动降级")
     ap.add_argument("cmd", nargs="?", default="state",
                     choices=["state", "set", "balance"])
@@ -281,6 +363,8 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true", help="state 强制重探，不用缓存")
     ap.add_argument("--set", type=float, default=None, dest="set_value",
                     help="balance 子命令：记一笔 DeepSeek 余额（客户端里看到的数字）")
+    ap.add_argument("--fetch", action="store_true",
+                    help="balance 子命令：用 DEEPSEEK_API_KEY 直接调官方余额接口")
     ap.add_argument("--source", default="", help="balance 子命令：数字从哪来")
     ap.add_argument("--manual", default=None, help='set 钉住降级（如 "欠费"）/ off 表示恢复')
     ap.add_argument("--threshold", type=float, default=None, help="set 余额阈值")
@@ -291,9 +375,18 @@ def main(argv=None):
     root = a.root or None
 
     if a.cmd == "balance":
-        if a.set_value is None:
+        if a.set_value is None and not a.fetch:
             snap = _read_json(ds_balance_path(root), None)
             print(json.dumps(snap or {"note": "还没记过"}, ensure_ascii=False, indent=1))
+            return 0
+        if a.fetch:
+            snap, err = fetch_ds_balance(root)
+            if snap is None:
+                print("没取到：%s" % err)
+                return 2
+            print("已取：DeepSeek 余额 ¥%.4f（%s，%s）"
+                  % (snap["balance"], snap["at"], snap["source"]))
+            print(line(root))
             return 0
         snap = set_ds_balance(a.set_value, a.source, root)
         print("已记：DeepSeek 余额 ¥%.4f（%s）→ %s"

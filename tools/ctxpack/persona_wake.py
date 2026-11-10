@@ -438,6 +438,33 @@ def _fallback_line():
         return "⛑ 保底：（判不出来：%s）" % str(e)[:40]
 
 
+def _dr_line():
+    """🛟 容灾保底：显式开关状态 + 看门狗上一拍判定（只读，不动手）。"""
+    try:
+        import io as _io
+        import json as _json
+        sw = {}
+        p = os.path.join(ROOT, "ops", "dr-switch.json")
+        if os.path.exists(p):
+            with _io.open(p, encoding="utf-8-sig") as f:
+                sw = _json.load(f) or {}
+        on = bool(sw.get("on"))
+        last = {}
+        q = os.path.join(ROOT, "ops", "watchdog.jsonl")
+        if os.path.exists(q):
+            with _io.open(q, encoding="utf-8", errors="replace") as f:
+                tail = f.read().splitlines()[-1:]
+            if tail:
+                last = _json.loads(tail[0])
+        hold = os.path.exists(os.path.join(ROOT, "ops", "dr-hold"))
+        return "🛟 容灾：%s%s ｜ 上一拍 %s（%s）" % (
+            "**开**（自动动手）" if on else "关（只判定）",
+            " · 蹲住闸" if hold else "",
+            last.get("action") or "还没跑过", last.get("why") or "")
+    except Exception as e:                     # noqa: BLE001
+        return "🛟 容灾：（判不出来：%s）" % str(e)[:40]
+
+
 def render_brief(b):
     head = "唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", ""))
     lines = [head]
@@ -447,6 +474,7 @@ def render_brief(b):
     else:
         lines.append("设定已重读（30 分钟内、内容没变）")
     lines.append(_fallback_line())
+    lines.append(_dr_line())
     lines += ["",
               "醒后先做三件（顺序不许换）：",
               "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
