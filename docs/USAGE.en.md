@@ -37,6 +37,18 @@ permissions all differ.
 - Identity, kernel and handoff-format changes: produce a proposal only, wait for the human;
 - Every "implemented" claim must carry evidence — no conclusions without proof.
 
+## Dependencies (check before landing)
+
+| Layer | Needs | Without it |
+|---|---|---|
+| Core: index / retrieval / self-test | **standard library only** (Python 3.10+) | nothing |
+| Local semantic retrieval (optional) | `bge-m3` + vector deps | falls back to keyword search |
+| Tray | `pystray` + `Pillow` | no tray icon; background jobs still run |
+| Platform | Windows (`msvcrt` / `winreg`) | will not run elsewhere - by design, not a bug |
+
+**Environment variable**: `SYSPERSONA_ROOT` must point at your memory root and **must be set by you**;
+without it scripts fall back to example paths, which are not real paths on your machine.
+
 ## How to verify (do not trust claims, watch it run)
 
 1. Capture: trigger once, show the new archive file and its timestamp;

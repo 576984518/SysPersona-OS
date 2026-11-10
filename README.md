@@ -123,7 +123,12 @@
 ## 快速开始
 
 ```bash
-# 1) 记忆库：任何目录，含 archive/ 即可被识别（或用 SYSPERSONA_ROOT 指定）
+# 0) 先设记忆库根目录（必须自己设，脚本不会替你猜）
+#    PowerShell:  $env:SYSPERSONA_ROOT = 'D:\SysPersona'
+#    bash/zsh:    export SYSPERSONA_ROOT="$HOME/SysPersona"
+#    目录里有没有 archive/ 都行，没有会自动建
+
+# 1) 索引与检索
 python tools/ctxpack/persona_index_l1.py     # 一级索引：每个来源一行
 python tools/ctxpack/persona_search.py "关键词" --k 20 --show-source
 
@@ -134,7 +139,7 @@ python tools/persona/selftest.py
 python tools/ctxpack/persona_daemon.py --once <任务名>   # 例如 hctx / tasks / daily / observe
 ```
 
-零第三方依赖（本地 embedding 需要 `bge-m3`，没有就自动退回关键词）。
+**依赖**：核心（索引/检索/自检）= 纯标准库；托盘要 `pystray` + `Pillow`；本地语义检索要 `bge-m3`，没有就自动退回关键词；`msvcrt` / `winreg` 属 Windows 专有，别的平台跑不了（本仓库只承诺 Windows 端）。
 
 ## 怎么读这个仓库
 
