@@ -9,20 +9,14 @@
 
 ## This is not a program package — it is something that can be landed
 
-**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+> [!IMPORTANT]
+> **No installer, no binaries, no `setup.exe` — and no runnable product is shipped.**
+>
+> One way to use it: **hand the repository to an AI agent that can read/write files and execute commands, and let it build and verify the implementation for your environment.**
 
-The reason is simple — this system grew onto one specific machine: a notification area, scheduled
-tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
-machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
-just runs" would be a false promise.**
+Why: this system grew onto one specific machine. On another machine the paths, accounts, shell version and permissions all differ — **shipping "a program that just runs" would be a false promise**.
 
-What ships instead is the **design and its acceptance criteria**. There is one way to use it:
-
-> Hand the repository to an AI agent that can read/write files and execute commands, and let it
-> build and verify the implementation for your environment.
-
-Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
-[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
+Prompt template, environment inventory, seven-step acceptance list → **[`docs/USAGE.en.md`](docs/USAGE.en.md)**
 
 ---
 
