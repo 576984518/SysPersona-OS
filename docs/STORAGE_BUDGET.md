@@ -1,6 +1,6 @@
 # 容量预算（500GB 到底花在哪）
 
-> 实测日期：2026-11-08 15:15（本机 `D:\4590-PC-文件\AI会话检索记录`）。
+> 实测日期：2026-11-08 15:15（本机 `$env:MEM`）。
 > 复算命令见文末；数字变了就重跑一遍，不用信这份表。
 
 ## 一、当前实测（172.9 MB）
@@ -63,7 +63,7 @@
 ## 六、复算
 
 ```powershell
-$root='D:\4590-PC-文件\AI会话检索记录'
+$root='$env:MEM'
 Get-ChildItem $root -Recurse -File | Measure-Object Length -Sum
 Get-ChildItem "$root\archive\2026-11-08" -Recurse -File | Measure-Object Length -Sum
 (Get-Content "$root\index\meta.jsonl" | Measure-Object -Line).Lines

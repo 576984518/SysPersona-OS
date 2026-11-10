@@ -3,7 +3,7 @@
 > 用途：下一次会话从这里开始，不必重读全部历史。读完这份 + `README.md` 的四节，就能接着干。
 >
 > **范围**：本仓库交付方法与规范 + 最小可行性证据，不是产品。`impl/` 是参考实现，第三方可按规范自行实现，不要求沿用这些代码；下面的「尚未实现」是**未验证的设计**，不是开发 backlog。
-> **同名提醒**：记忆库 `D:\4590-PC-文件\AI会话检索记录\HANDOFF.md` 是 `ctxpack.py digest`
+> **同名提醒**：记忆库 `$env:MEM\HANDOFF.md` 是 `ctxpack.py digest`
 > 生成的**会话摘要**（另一个文件），与本页不是一回事。
 
 
@@ -13,7 +13,7 @@
 
 | 项 | 值 |
 |---|---|
-| 仓库 | https://github.com/576984518/SysPersona-OS |
+| 仓库 | https://github.com/MirHuang666/SysPersona-OS |
 | 最新版本 | 仓库 **`v4.2.0`**（2026-11-08）｜ 规范 **`v1.1.0`**（唯一现行页）｜ 实现 **`v1.2.0`** |
 | 运行规范 | `docs/WORK_MODE.md`（交互 v4.0）· `docs/HANDOFF_SPEC.md`（交接 v2.1）· `docs/PERMISSIONS.md`（权限矩阵） |
 | 人格规范 | `docs/PERSONA_SPEC.md` **v1.1**（kernel/traits/state/memory/冲突落库） |

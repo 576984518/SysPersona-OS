@@ -474,8 +474,8 @@
 
 **为什么不动版本**：只补文档，没有新增可运行产物；按发版规则，文档修订只记在这里。
 
-- `docs/PROJECT_MEMO.md` 新增 **§九 GitHub 工具链与提交动作**：`gh` = `D:\ProgramData\GitHub CLI\gh.exe`、
-  `git` = `D:\ProgramData\MinGit\cmd\git.exe`（**两者都不在 PATH**，这是今天满世界找 git 的原因），
+- `docs/PROJECT_MEMO.md` 新增 **§九 GitHub 工具链与提交动作**：`gh` = `$env:GH_EXE`、
+  `git` = `$env:GIT_EXE`（**两者都不在 PATH**，这是今天满世界找 git 的原因），
   写明认证账号、工作副本、提交 / 查版 / 发版命令，以及五条规矩（文档不发版、不建 Release 不打 tag、提交前扫私密文件等）。
 - §〇 查表新增「GitHub 操作」一行：GitHub 相关先读 §九 + `docs/RELEASING.md` + §一。
 - §二 坑表补「git / gh 不在 PATH」；§六 问题表补第 13 条（路径不进备忘，每次现找）。

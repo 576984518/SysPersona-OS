@@ -5,8 +5,8 @@ description: 从 NAS 记忆库取回历史会话上下文（DSH 会话 + DeepSee
 
 # 会话检索（SysPersona 记忆外挂）
 
-记忆库在 `D:\4590-PC-文件\AI会话检索记录\`（映射盘 `Z:`）。
-放的是**记忆**，不是源码；源码在 `D:\文档\deepseek-harness\default-workspace`。
+记忆库在 `$env:MEM\`（映射盘 `Z:`）。
+放的是**记忆**，不是源码；源码在 `$env:WORKSPACE`。
 
 ## 什么时候用
 
@@ -101,8 +101,8 @@ description: 从 NAS 记忆库取回历史会话上下文（DSH 会话 + DeepSee
 ## 1. 运行时（本机没有全局 python / node）
 
 ```powershell
-$PY   = "C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
-$NODE = "C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+$PY   = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+$NODE = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
 $env:PYTHONIOENCODING = "utf-8"   # 不设则中文在控制台显示为乱码（文件本身没问题）
 ```
 
@@ -128,9 +128,9 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 ## 3. 检索
 
 ```powershell
-& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py search 人格 --limit 5
-& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py search J1900 --source 网页对话 --sort time
-& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py status D:\4590-PC-文件\AI会话检索记录\sessions
+& $PY $env:MEM\ctxpack.py search 人格 --limit 5
+& $PY $env:MEM\ctxpack.py search J1900 --source 网页对话 --sort time
+& $PY $env:MEM\ctxpack.py status $env:MEM\sessions
 ```
 
 `--source` 可选：`电脑会话`（另一台电脑的 DSH 工作区）、`网页对话`、`网页文章`。
@@ -142,8 +142,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 关键词路（IDF + 回声降权）与向量路（bge-m3）并行，RRF 融合，默认 K=100。
 
 ```powershell
-& $PY D:\4590-PC-文件\AI会话检索记录\zsearch.py "防止舔狗化的具体惩罚规则" --k 100
-& $PY D:\4590-PC-文件\AI会话检索记录\zsearch.py "960 显卡" --no-vector   # 模型没起时降级
+& $PY $env:MEM\zsearch.py "防止舔狗化的具体惩罚规则" --k 100
+& $PY $env:MEM\zsearch.py "960 显卡" --no-vector   # 模型没起时降级
 ```
 
 实测（20 题跨文件、去回声）：关键词 20/20、向量 19/20、合并 **20/20**。
@@ -152,8 +152,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 ### 3.2 自测：`eval.py`
 
 ```powershell
-& $PY D:\4590-PC-文件\AI会话检索记录\eval.py                  # 内置 20 题，报三条路 recall
-& $PY D:\4590-PC-文件\AI会话检索记录\eval.py --no-vector      # 只测关键词
+& $PY $env:MEM\eval.py                  # 内置 20 题，报三条路 recall
+& $PY $env:MEM\eval.py --no-vector      # 只测关键词
 ```
 
 改动检索相关代码后**必须跑一次**，别凭感觉。当前基线：关键词 20/20、向量 19/20、合并 20/20。
@@ -166,8 +166,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 抓取每分钟在写，全量重建跑完即旧。所以按文件 `sha256` 记账，只重嵌变过的文件：
 
 ```powershell
-& $PY D:\4590-PC-文件\AI会话检索记录\index_inc.py --dry-run   # 看要嵌多少块
-& $PY D:\4590-PC-文件\AI会话检索记录\index_inc.py             # 增量，通常几十秒
+& $PY $env:MEM\index_inc.py --dry-run   # 看要嵌多少块
+& $PY $env:MEM\index_inc.py             # 增量，通常几十秒
 ```
 
 产物在 `index\`：`vectors.npy` + `meta.jsonl` + `manifest.json`；写入原子替换，重建期间旧索引照常可查。
@@ -203,8 +203,8 @@ net use Z: '\\Nas-1900\文档' /persistent:no
 
 ```powershell
 # 日常（推荐）：未变的不重新归档（按内容哈希幂等），摘要重写成全量版
-& $PY D:\4590-PC-文件\AI会话检索记录\ctxpack.py digest D:\4590-PC-文件\AI会话检索记录\sessions `
-     -o D:\4590-PC-文件\AI会话检索记录\HANDOFF.md --all --max-chars 14000
+& $PY $env:MEM\ctxpack.py digest $env:MEM\sessions `
+     -o $env:MEM\HANDOFF.md --all --max-chars 14000
 ```
 
 - `--all`：忽略水位，把所有来源汇成一份总摘要（唤醒用）；
@@ -228,10 +228,10 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 
 ```powershell
 # 日常：最近 10 个，约 1 分钟
-& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js D:\4590-PC-文件\AI会话检索记录\sessions\<今天>\网页对话
+& $NODE $env:MEM\deepseek_sweep.js $env:MEM\sessions\<今天>\网页对话
 
 # 周期全量：--full；连续 15 个未变即提前收工
-& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js <目录> --full --stop-after 15
+& $NODE $env:MEM\deepseek_sweep.js <目录> --full --stop-after 15
 
 # 只看前几个 / 只看不变动
 ... --limit 3        ... --dry-run
@@ -243,7 +243,7 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 ### 实时模式（只盯当前会话）
 
 ```powershell
-& $NODE D:\4590-PC-文件\AI会话检索记录\deepseek_sweep.js <目录> --active
+& $NODE $env:MEM\deepseek_sweep.js <目录> --active
 ```
 
 **不跳转**，只读当前标签的 DOM；只看**最近 4 条**尾部指纹，没变 0.3 秒退出，变了才临时撑高视口抓全量，抓完还原视口与滚动位置。
@@ -278,9 +278,9 @@ Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
 ## 8. 导出本机 DSH 会话
 
 ```powershell
-& $NODE D:\4590-PC-文件\AI会话检索记录\dsh_export.js `
+& $NODE $env:MEM\dsh_export.js `
   "$env:USERPROFILE\.dsh\sessions\<工作区哈希>\<会话ID>" `
-  D:\4590-PC-文件\AI会话检索记录\sessions\<日期>\电脑会话\<日期>.md
+  $env:MEM\sessions\<日期>\电脑会话\<日期>.md
 ```
 
 原始文件在 `...\sessions\<工作区哈希>\<会话ID>\session.v4.jsonl.zstd`（多帧 zstd 的 JSONL）；

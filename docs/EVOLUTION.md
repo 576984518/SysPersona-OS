@@ -140,7 +140,7 @@
 
 ## 十、并行项目：同一个方法的另一次验证
 
-同一段时间里，还有另一个仓库 [`snailstar-j1900-bios`](https://github.com/576984518/snailstar-j1900-bios)：
+同一段时间里，还有另一个仓库 [`snailstar-j1900-bios`](https://github.com/MirHuang666/snailstar-j1900-bios)：
 
 > 蜗牛星际 B 款双网口（J1900 / NCT5532D）BIOS 热复位修复 + S3 排查记录。
 

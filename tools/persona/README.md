@@ -76,7 +76,7 @@ TASKS = {..., "wake": t_wake, "agent": t_agent, "reap": t_reap, "proxy": t_proxy
 ## 四、用法
 
 ```powershell
-$PY = "D:\ProgramData\SysPersona-Runtime\python\python.exe"
+$PY = "<运行时>\python.exe"
 $R  = "C:\hermes-mem"          # 库根，按实际部署改
 
 & $PY $R\persona_wake.py add --in 90 "检查抓取结果" --agent hermes-v4

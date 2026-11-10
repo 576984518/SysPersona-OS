@@ -2,8 +2,23 @@
 
 > 这份不许并进全局交接包。全局的人格 / 记忆 / 交互规则在记忆库的 `DECISIONS.md`；
 > 这里只记**项目事务**：发版规矩、今天踩的坑、常用命令、定时任务、当前状态。
-> 最后更新：2026-11-08 16:55
+> 最后更新：2026-11-10 08:05
 
+## 〇·〇、本机路径与脱敏（2026-11-10 定）
+
+> 本仓库是**公开**的。备忘 / 文档里**一律不写**：本机用户名、盘符绝对路径、旧账号 ID、机器型号。
+> 只用下面这些环境变量占位；真实值只存本机 `$env:LOCALAPPDATA\SysPersona\local-paths.ps1`（**不进仓库**）。
+
+| 变量 | 含义 |
+|---|---|
+| `$env:MEM` | 记忆库根目录 |
+| `$env:REPO` | 本仓库工作副本 |
+| `$env:GIT_EXE` | `git.exe` 全路径（不在 PATH） |
+| `$env:GH_EXE` | `gh.exe` 全路径（不在 PATH） |
+| `$env:USERPROFILE` / `$env:LOCALAPPDATA` | 系统变量，直接用 |
+
+换机器：先把 `local-paths.ps1` 拷过去并 `. ` 引一次；缺变量时脚本会报错，**不会静默跑错**。
+提交前一律先扫一遍：`Select-String -Path docs\*.md -Pattern 'C:\\Users|D:\\|ProgramData'`，有命中就不许提交。
 ## 〇、动手前先查表（2026-11-08 定）
 
 > **每次做什么，先读相关备忘，再动手。** 不读就做 = 重复踩同一个坑。
@@ -46,8 +61,8 @@
 ## 三、常用命令
 
 ```powershell
-$PY = "C:\Users\Huang\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
-$R  = "D:\4590-PC-文件\AI会话检索记录"
+$PY = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+$R  = $env:MEM
 
 & $PY $R\ctxguard.py                       # 水位
 & $PY $R\ctxguard.py --prepare             # 出包 + 剪贴板
@@ -108,6 +123,7 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 | 11 | 每次读取只读一次，读完就停 | **起点 = 你说话的那一刻，读完立刻以新时间点续挂**，始终跟到最新 | `read_watch.py --since`、`SKILL.md` |
 | 12 | 小事也要先问一句才做 | **耗时短、不会造成严重后果的，自己判断自己做**，不问；出了事再纠正 | 本备忘 §六、`DECISIONS.md` 5.4 |
 | 13 | GitHub 工具路径没进备忘，每次都现找 | **GitHub 相关先读 §九**；不够再回检索翻以前做法，然后把新发现补回 §九 | 本备忘 §九 |
+| 14 | 公开仓库的备忘里露出本机用户名 / 盘符路径 / 旧账号 ID | **公开文档只写环境变量占位**，真实路径留本机 `local-paths.ps1`；提交前扫一遍隐私串 | 本备忘 §〇·〇 |
 
 ## 七、待做：记忆库根目录瘦身（2026-11-08 记，未执行）
 
@@ -130,7 +146,7 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 ## 八、自备份
 
-- 脚本：`C:\Users\Huang\AppData\Local\SysPersona\repo_backup.ps1`
+- 脚本：`$env:LOCALAPPDATA\SysPersona\repo_backup.ps1`
 - 做法：`git bundle create 备份\SysPersona-OS-<日期>.bundle --all`（含全部分支与历史，单文件可克隆）+
   把本备忘复制一份明文；**只留最近 8 份**。
 - 计划任务：`SysPersona-Repo-Backup`，每天 23:30（记忆库备份 23:00 之后）。
@@ -143,18 +159,18 @@ $R  = "D:\4590-PC-文件\AI会话检索记录"
 
 | 项 | 值 |
 |---|---|
-| GitHub CLI | `D:\ProgramData\GitHub CLI\gh.exe`（v2.103.3，**不在 PATH**） |
-| Git | `D:\ProgramData\MinGit\cmd\git.exe`（2.56.0，**不在 PATH**） |
-| 认证 | `gh auth status` → 账号 `576984518`（keyring，scope: gist / read:org / repo） |
+| GitHub CLI | `$env:GH_EXE`（v2.103.3，**不在 PATH**） |
+| Git | `$env:GIT_EXE`（2.56.0，**不在 PATH**） |
+| 认证 | `gh auth status` → 账号 `MirHuang666`（keyring，scope: gist / read:org / repo） |
 | git 凭据 | `credential.helper = manager`（Git Credential Manager，走系统登录态） |
-| 工作副本 | `D:\文档\SysPersona-OS`（`main` 与 `origin/main` 同步；远端是权威） |
-| 远端 | `https://github.com/576984518/SysPersona-OS.git` |
+| 工作副本 | `$env:REPO`（`main` 与 `origin/main` 同步；远端是权威） |
+| 远端 | `https://github.com/MirHuang666/SysPersona-OS.git` |
 
 提交文档（本备忘 / CHANGELOG / docs 下任何 md）：
 
 ```powershell
-$git = 'D:\ProgramData\MinGit\cmd\git.exe'
-$R   = 'D:\文档\SysPersona-OS'
+$git = $env:GIT_EXE
+$R   = $env:REPO
 
 & $git -C $R status --short          # 先看改了什么、有没有夹带私密文件
 & $git -C $R add -A
@@ -165,10 +181,10 @@ $R   = 'D:\文档\SysPersona-OS'
 查 / 发版：
 
 ```powershell
-$gh = 'D:\ProgramData\GitHub CLI\gh.exe'
-& $gh release list  --repo 576984518/SysPersona-OS --limit 5     # 看最新版本
-& $gh release view  v3.10.0 --repo 576984518/SysPersona-OS        # 看正文全文
-& $gh api repos/576984518/SysPersona-OS/commits --jq '.[0:3][]|.sha[0:7]+" "+.commit.message'
+$gh = $env:GH_EXE
+& $gh release list  --repo MirHuang666/SysPersona-OS --limit 5     # 看最新版本
+& $gh release view  v3.10.0 --repo MirHuang666/SysPersona-OS        # 看正文全文
+& $gh api repos/MirHuang666/SysPersona-OS/commits --jq '.[0:3][]|.sha[0:7]+" "+.commit.message'
 ```
 
 规矩：
@@ -190,7 +206,7 @@ $gh = 'D:\ProgramData\GitHub CLI\gh.exe'
 |---|---|---|
 | 100 | `<项目根>/.dsh/skills` | 项目根 = 最近的含 `.git` 的祖先目录 |
 | 200 | `<项目根>/.agents/skills` | 兼容 agents 约定 |
-| 400 | `C:\Users\Huang\.dsh\skills` | **本机实际注册位置** |
+| 400 | `$env:USERPROFILE\.dsh\skills` | **本机实际注册位置** |
 | 500 | `~/.agents/skills` | 共享 |
 
 - 结构：`<name>/SKILL.md`；`name` 必须 kebab-case，`description` 必填；

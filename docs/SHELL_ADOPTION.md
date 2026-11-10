@@ -15,7 +15,7 @@
 ### 1. 架构脱身：接入开源壳
 
 - 壳：Hermes Agent 中文社区桌面版（Electron 前端 + Python 运行时，本地 `state.db` 是 SQLite + FTS5）。
-- 记忆层仍是纯文件：`D:\4590-PC-文件\AI会话检索记录`（`sessions/` + `archive/` + `index/`）。
+- 记忆层仍是纯文件：`$env:MEM`（`sessions/` + `archive/` + `index/`）。
 - 壳不托管记忆，只**读**记忆：它的工具直接读我们的文件，两边不绑定，随时能换壳。
 
 ### 2. 免费双核路由：本地检索 + 云端大脑
@@ -33,7 +33,7 @@
 解法是 Windows 目录联接（Junction，不需要管理员权限）：
 
 ```powershell
-cmd /c mklink /J C:\hermes-mem "D:\4590-PC-文件\AI会话检索记录"
+cmd /c mklink /J C:\hermes-mem "$env:MEM"
 ```
 
 之后一律让它读 `C:\hermes-mem\LATEST.md`——纯 ASCII、无空格，一次就中。
