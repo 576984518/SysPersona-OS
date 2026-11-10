@@ -1040,6 +1040,25 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
     所以「什么时候动手」只有一处实现，不会两边打架（冷却看同一份 dr-state.json）。
     """
     manual = fulfill_request()
+
+    # 第一层：后台程序本身必须活着（计划任务每拍兜底，不看心跳、不讲条件）。
+    # 人 2026-11-10 定：「后台程序由计划任务保底拉起，客户端由后台的拉起。」
+    if not daemon_alive():
+        ok, msg = revive_daemon()
+        d = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "action": "revive_daemon",
+             "why": "后台程序没在跑 → 计划任务兜底拉起", "switch": switch()["on"],
+             "beat_s": heartbeat_interval(), "stale_after": stale_after(),
+             "heartbeat_age": round(heartbeat_age(), 1),
+             "acted": [{"step": "拉起守护", "ok": ok, "msg": msg}]}
+        if manual:
+            d["acted"].insert(0, {"step": "手动请求", "ok": True, "msg": manual})
+        try:
+            with io.open(OUT, "a", encoding="utf-8") as f:
+                f.write(json.dumps(d, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        return d
+
     d = decide(stale, net_override=net_override, prov_override=prov_override)
     acted = []
     if manual:
