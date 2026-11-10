@@ -562,6 +562,48 @@ def switch_model(cmd, model=""):
     return _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", ver])
 
 
+def write_relay():
+    r"""给代班的 Hermes 写一张交接卡：它开的是新窗口，得先知道「现在到哪儿了」。
+
+    人 2026-11-10 说的：「拉起来了，但是是新窗口，需要切换到旧窗口，或者手动让他读文件。」
+    Hermes 没有可用的调试口，驱动不了它的界面；能做的是把该读的文件写成一页纸，让它一读就接上。
+    """
+    prov, model = current_model()
+    ch = chain()
+    lines = [
+        "# 交接卡（给 Hermes 代班）",
+        "",
+        "生成时间：%s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+        "为什么是你：DSH 那边断网/服务器不可达，主模型叫不动；你这边模型写在配置文件里，能立刻顶上。",
+        "",
+        "## 现在什么状态",
+        "- DSH 客户端：保持不动（没人杀它）",
+        "- DSH 配置档：%s / %s" % (prov or "?", model or "?"),
+        "- 容灾开关：%s" % ("开" if switch()["on"] else "关"),
+        "- 模型链：%s" % " → ".join("%s(%s)" % (c.get("label"), c.get("model")) for c in ch),
+        "",
+        "## 你要读的东西（按序）",
+        "1. 设定：%s（30-流程与运维 / 40-事实与现状 等）" % os.path.join(ROOT, "memory", "设定"),
+        "2. 最近的纪要：%s" % os.path.join(ROOT, "memory", "备忘"),
+        "3. 台账：%s（最近动手记录）、%s（每拍判定）"
+        % (os.path.join(OPS, "dr-actions.jsonl"), os.path.join(OPS, "watchdog.jsonl")),
+        "4. 计划：%s（开关/阈值/条件→任务）" % os.path.join(OPS, "dr-plan.json"),
+        "",
+        "## 规矩（别踩）",
+        "- 删记忆、改内核、换底座、跨设备迁移 → 必须人点头；",
+        "- 不写死路径；密钥只从环境变量取；",
+        "- 前台在聊，后台在干；先给结论再干活；",
+        "- 上下文到线先落盘再压缩。",
+        "",
+        "## 恢复后做什么",
+        "- 网络恢复后，后台会唤醒 DSH；把结论同步到 memory\\备忘\\ 一份，别只留在这个窗口。",
+    ]
+    p = os.path.join(OPS, "hermes-relay.md")
+    with io.open(p, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return True, p
+
+
 def session_cache_drop():
     r"""把「本会话的模型缓存」整份移走（不是改，是让它没有可恢复的模型）。
 
@@ -841,7 +883,8 @@ def enact(what, dry=False):
                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
             "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
-            "hermes": [("把 Hermes 切到本地档", "hconf"),
+            "hermes": [("写交接卡给 Hermes", "relay"),
+                       ("把 Hermes 切到本地档", "hconf"),
                        ("拉起 Hermes", "hermes"),
                        ("记录 Hermes 代班", "proxy")]}.get(what)
     if todo is None:
@@ -872,6 +915,8 @@ def enact(what, dry=False):
                 msg = "%s；回滚到 %s：%s" % (msg, prev, "ok" if ok2 else msg2)
         elif kind == "session":
             ok, msg = session_cache_drop()       # 不致命
+        elif kind == "relay":
+            ok, msg = write_relay()
         elif kind == "hconf":
             ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use", "local"])
         elif kind == "hermes":
@@ -1074,8 +1119,8 @@ def request_switch(to, by="human", dry=False):
     后台（守护的 dr 任务 60 秒一拍、外层 SysPersona-Watchdog 1 分钟一拍）看到这个文件就干活。
     """
     to = (to or "").strip().lower()
-    if to not in ("cloud", "local", "paid", "restart"):
-        print("用法：python persona_watchdog.py request cloud | local | paid | restart [--by human|agent]")
+    if to not in ("cloud", "local", "paid", "restart", "daemon", "hermes"):
+        print("用法：python persona_watchdog.py request <cloud|local|paid|restart|daemon|hermes> [--by human|agent]")
         return 2
     if dry:
         print("会下请求：%s（--dry，没写文件）" % to)
@@ -1099,7 +1144,8 @@ def fulfill_request():
     to = (d.get("to") or "").strip().lower()
     by = d.get("by") or "?"
     task = {"cloud": "SysPersona-DR-Free", "local": "SysPersona-DR-Local",
-            "paid": "SysPersona-DR-Paid", "restart": "SysPersona-DR-Restart"}.get(to)
+            "paid": "SysPersona-DR-Paid", "restart": "SysPersona-DR-Restart",
+            "daemon": "SysPersona-DR-Daemon", "hermes": "SysPersona-DR-Hermes"}.get(to)
     if not task:
         out = "不认识的切档请求：%s" % to
         ok = False
