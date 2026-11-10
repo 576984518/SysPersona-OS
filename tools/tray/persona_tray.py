@@ -48,6 +48,9 @@ STALE = 180          # 秒：状态文件多久没更新算守护挂了
 GAUGE_EVERY = 60     # 秒：DSH 水位多久测一次（gauge 一次约 1.7 秒，别太勤）
 TICK = 5             # 秒：托盘刷新间隔
 
+# ok=False 但「设计如此」的任务：agent 是保活项，配置为只报不拉，永远报 false。
+BENIGN_FAIL = {"agent"}
+
 # pythonw 是 GUI 进程，直接 spawn 控制台程序会弹黑窗——必须一律带上这个标志。
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -178,7 +181,9 @@ def daemon_health():
     if not st:
         return False, "状态文件缺失", {}
     tasks = st.get("tasks") or {}
-    failed = [k for k, v in tasks.items() if v.get("ok") is False]
+    # 有些任务 ok=False 是「设计如此」，不是故障：agent 是「只报不拉」的保活项。
+    failed = [k for k, v in tasks.items()
+              if v.get("ok") is False and k not in BENIGN_FAIL]
     busy = [k for k, v in tasks.items() if v.get("busy")]
     age = file_age(STATUS)
     if age > STALE:
