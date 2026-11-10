@@ -401,15 +401,31 @@ def _nextstep_lines():
         return ["⑧ 现在能做：（判不出来：%s）" % str(e)[:40]]
 
 
-def _autoloop_lines():
-    """⑩ 我留给自己的 / ⑪ 现在要做的：只读判定，**绝不在简讯里执行**。"""
+def _autonomy_line():
+    """⑨·5 自主档位：只读（模型 / 免费·收费档 / 本小时与今日用量），不执行。"""
     try:
         sys.path.insert(0, ROOT)
-        import persona_autoloop as AL
-        return AL.wake_lines(root=ROOT)
+        import persona_autonomy as AU
+        p = AU.profile(root=ROOT)
+        return "⑨·5 自主档位：%s（%s）· 本小时 %d/%d 次 · 今日 %d/%d 次" % (
+            p.get("tier"), p.get("tier_label"),
+            p.get("used_hour", 0), p.get("runs_per_hour", 0),
+            p.get("used_day", 0), p.get("runs_per_day", 0))
     except Exception as e:
-        return ["⑩ 我留给自己的：（判不出来：%s）" % str(e)[:40],
-                "⑪ 现在要做的：—"]
+        return "⑨·5 自主档位：（判不出来：%s）" % str(e)[:40]
+
+
+def _autoloop_lines():
+    """⑨·5 自主档位 / ⑩ 我留给自己的 / ⑪ 现在要做的：只读判定，**绝不在简讯里执行**。"""
+    lines = [_autonomy_line()]
+    root = ROOT
+    try:
+        sys.path.insert(0, root)
+        import persona_autoloop as AL
+        return lines + AL.wake_lines(root=root)
+    except Exception as e:
+        return lines + ["⑩ 我留给自己的：（判不出来：%s）" % str(e)[:40],
+                        "⑪ 现在要做的：—"]
 
 
 def render_brief(b):

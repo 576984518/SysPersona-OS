@@ -1,0 +1,31 @@
+{
+  "_说明": "自主的次数闸：空闲时它自己做事，按底座模型花不花钱分两档——免费/本地模型只花电费，放宽；收费模型做多了花钱，收紧。行为差异只有次数；优先级、needs、护栏、抢占、饥饿保护都不在这里。超限落 rest，ops\\autoloop.jsonl 记 event=rate_limited。",
+  "_字段": {
+    "cur_by_model.free.runs_per_hour": "免费档每小时最多做几次（默认 12）。0 = 不自动做事。",
+    "cur_by_model.free.runs_per_day": "免费档每天最多做几次（默认 120，按本地时间零点切）。",
+    "cur_by_model.paid.runs_per_hour": "收费档每小时最多做几次（默认 3）。超了落 rest，账本记 rate_limited。",
+    "cur_by_model.paid.runs_per_day": "收费档每天最多做几次（默认 20）。",
+    "patterns.free": "归到免费档的模型键 glob（忽略大小写）；先匹配 free 再匹配 paid，都不中按 paid 保守处理。",
+    "patterns.paid": "归到收费档的模型键 glob；收费模型名单尽量写全。",
+    "current_model": "人工钉住的当前模型键；留空 = 从成本账本 ~/.dsh/storages/cost-meter/ledger.json 今日 byProviderModel 取 calls 最大的那个。set --model 只登记，不会真的换模型。"
+  },
+  "_改法": "python persona_autonomy.py set --tier free --runs-per-hour 20 --runs-per-day 200；set --model \"ollama:qwen3:8b\" 钉住，--model auto 回到看账本。",
+  "_红线": "删除/清理记忆、改 kernel.json、换模型、迁移合并、改交接格式、改注入四闸、改 350K/900s、出网、pip install、git push——任何档位都不放宽（包括免费档），在 persona_autoloop.py 的 GUARDS 里写死。",
+  "cur_by_model": {
+    "free": {
+      "runs_per_hour": 12,
+      "runs_per_day": 120,
+      "note": "免费/本地：只花电费，可以多做"
+    },
+    "paid": {
+      "runs_per_hour": 3,
+      "runs_per_day": 20,
+      "note": "收费：做多了花钱，收紧"
+    }
+  },
+  "patterns": {
+    "free": ["local/*", "*free*", "siliconflow*", "ollama*", "lmstudio*", "deepseek-web*"],
+    "paid": ["deepseek-account:*", "deepseek-official:*", "openai*", "anthropic*"]
+  },
+  "current_model": ""
+}

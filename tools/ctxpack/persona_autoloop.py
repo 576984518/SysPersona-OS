@@ -33,6 +33,13 @@ r"""persona_autoloop.py — 空闲时的全局自主循环（v2，自述意图�
 `rest` 兜底保留：没有「想做又能做且到点」的事，就休息（不再执行任何命令）。
 全局开关：`ops\autoloop.json` 的 enabled（首次自动生成）；false 时整块停。
 
+次数闸（persona_autonomy，按底座模型花不花钱分免费/收费两档）：
+  * 只限「一小时/一天最多自己做几次」；免费/本地档放宽、收费档收紧；
+  * tick 先问档位，超限就落 `rest`，账本记一条 `event=rate_limited`；
+  * 其余（priority、needs、护栏、抢占、饥饿保护）**一律不动**；
+  * 红线（删/清记忆、改 kernel、换模型、迁移合并、改交接格式、改注入四闸、
+    改 350K/900s、出网、pip、git push）任何档位都不放宽，仍由下面 GUARDS 写死。
+
 命令行：
   python persona_autoloop.py wish "我想做 X" [--why …] [--run "命令"] [--priority N]
                                  [--gap 秒] [--needs none|human|external] [--by self|human]
@@ -52,6 +59,11 @@ import subprocess
 import sys
 import threading
 import time
+
+try:
+    import persona_autonomy as AU      # 次数闸：缺模块时 tick 保守休息，不执行
+except Exception:                      # noqa: BLE001 —— 坏部署不许把 tick 带崩
+    AU = None
 
 NEEDS = ("none", "human", "external")
 TICK_TIMEOUT = 120
@@ -227,7 +239,7 @@ def last_runs(root=None):
     out = {}
     for rec in _read_jsonl(lpath):
         cid = rec.get("id")
-        if not cid:
+        if not cid or rec.get("event"):   # rate_limited/rest 等不是一次执行
             continue
         ts = _parse_ts(rec.get("at"))
         if ts and ts > out.get(cid, 0):
@@ -472,6 +484,35 @@ def _run(cmd, root, job="", priority=99):
                 "preempted_by": "", "state": "idle", "started": time.time()}
 
 
+def _autonomy_profile(root):
+    """当前档位与用量；模块缺失/坏配置 → None（tick 保守休息，不执行）。"""
+    if AU is None:
+        return None
+    try:
+        p = AU.profile(root=root)
+        return p if isinstance(p, dict) else None
+    except Exception:                  # noqa: BLE001 —— 判不出来就休息，别乱跑
+        return None
+
+
+def _append_rate_limited(root, prof, reason, min_gap=120):
+    """rate_limited 记账：30 秒一 tick，同一条最多 2 分钟记一次（不刷屏）。"""
+    last = _last_entry(root)
+    if last.get("event") == "rate_limited":
+        ts = _parse_ts(last.get("at"))
+        if ts and time.time() - ts < min_gap:
+            return False
+    rec = {"at": _now_str(), "id": "rest", "rc": 0, "out": reason,
+           "event": "rate_limited",
+           "tier": prof.get("tier"), "model": prof.get("model"),
+           "model_source": prof.get("model_source"),
+           "used_hour": prof.get("used_hour"),
+           "runs_per_hour": prof.get("runs_per_hour"),
+           "used_day": prof.get("used_day"),
+           "runs_per_day": prof.get("runs_per_day")}
+    return _append_ledger(rec, root)
+
+
 def tick(dry_run=False, root=None):
     """跑一次空闲循环。返回 dict（id / what / rc / out / dry / recorded / msg）。"""
     root = root_of(root)
@@ -485,6 +526,22 @@ def tick(dry_run=False, root=None):
         out["msg"] = "上一轮还没跑完，跳过"
         return out
     try:
+        # ── 次数闸（persona_autonomy）：免费/本地档放宽、收费档收紧。 ──
+        # 只限次数：超了落 rest 并记 rate_limited；优先级/needs/护栏/抢占/
+        # 饥饿保护都不在这里改，红线任何档位都不放宽。
+        prof = _autonomy_profile(root)
+        if prof is None:
+            out.update(rc=0, out="休息",
+                       msg="自主档位不可用，本轮休息（保守，不执行）")
+            return out
+        out["autonomy"] = prof
+        if prof.get("over_hour") or prof.get("over_day"):
+            reason = AU.limit_reason(prof)
+            out.update(id="rest", what="rest", rc=0, out=reason,
+                       msg="次数闸：%s → 落 rest" % reason)
+            if not dry_run:
+                out["recorded"] = _append_rate_limited(root, prof, reason)
+            return out
         if not dry_run:
             maybe_promote(root)
         cand, meta = pick_detail(root)
@@ -762,6 +819,12 @@ def main(argv=None):
 
     if a.once or a.dry_run:
         r = tick(dry_run=a.dry_run, root=root)
+        aut = r.get("autonomy") or {}
+        if a.dry_run and aut:
+            print("[dry-run] 档位：%s（%s）· 本小时 %d/%d · 今日 %d/%d" % (
+                aut.get("tier"), aut.get("tier_label"),
+                aut.get("used_hour", 0), aut.get("runs_per_hour", 0),
+                aut.get("used_day", 0), aut.get("runs_per_day", 0)))
         if a.dry_run:
             if r.get("id") == "rest":
                 print("[dry-run] %s" % (r.get("msg") or "休息"))

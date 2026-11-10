@@ -172,6 +172,13 @@ python persona_autoloop.py wish "每小时扫一遍日志编码" --run "<python>
 python persona_autoloop.py wish "想删掉旧会话记忆省空间"   # → 拒绝（属于需人点头项，先问），记 refused
 ```
 
+## 六·六、自主的次数闸（免费/收费两档）
+
+免费/本地模型只花电费，允许更频繁地自主做事（默认 12 次/时、120 次/日）；收费模型次数收紧（默认 3 次/时、20 次/日），省的是钱不是自由。超限就落 `rest`，`ops\autoloop.jsonl` 记一条 `rate_limited`。
+归到哪档看模型键的 glob（`ops\autonomy.json` 的 `patterns`，匹配不上按收费档）；`python persona_autonomy.py show` 看当前模型、档位、本小时与今日用量。
+改数：`python persona_autonomy.py set --tier free --runs-per-hour 20 --runs-per-day 200`（`--tier paid` 同理）；`set --model "ollama:qwen3:8b"` 钉住模型，`--model auto` 回到看成本账本。
+行为差异**只有次数**：优先级、`needs`、护栏、抢占、饥饿保护一律不动；红线在任何档位都不放宽（包括免费档）——删/清记忆、改 kernel、换模型、迁移合并、改交接格式、改注入四闸、改 350K/900s、出网、`pip`、`git push`，`wish` 时就拒。
+
 ## 七、外部模型实测（部署验证记录）
 
 > 这一节只记**实测**：谁、在哪跑、跑到哪一步、卡在哪、结论是什么。**不改上面任何一条设计与判据。**
