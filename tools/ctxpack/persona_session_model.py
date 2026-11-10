@@ -89,7 +89,7 @@ def cmd_show(a):
     print("会话文件：%s（%.0f KB，改于 %s）"
           % (os.path.basename(p), os.path.getsize(p) / 1024,
              time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(p)))))
-    print("记住的模型：%s" % json.dumps(get_last_used(d), ensure_ascii=False))
+    print("记住的模型：%s" % json.dumps(get_last_used(d), ensure_ascii=True))
     return 0
 
 
@@ -102,11 +102,11 @@ def cmd_set(a):
     d = json.loads(raw.decode("utf-8-sig"))
     before = set_last_used(d, a.provider, a.model, a.drop_reasoning)
     after = get_last_used(d)
-    text = json.dumps(d, ensure_ascii=False)
+    text = json.dumps(d, ensure_ascii=True)   # 有孤立代理字符，非 ASCII 一律转义，避免编码炸
     if a.dry:
         print("会话：%s" % os.path.basename(p))
-        print("%s → %s" % (json.dumps(before, ensure_ascii=False),
-                           json.dumps(after, ensure_ascii=False)))
+        print("%s -> %s" % (json.dumps(before, ensure_ascii=True),
+                            json.dumps(after, ensure_ascii=True)))
         print("--dry：未写入")
         return 0
     # 回读校验：把要写的字节再解一遍，确认字段对得上
@@ -156,7 +156,7 @@ def main(argv=None):
 
 if __name__ == "__main__":
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:                      # noqa: BLE001
         pass
