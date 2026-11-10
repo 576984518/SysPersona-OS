@@ -20,6 +20,11 @@ import json
 import os
 import re
 import subprocess
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import sys
 import time
 
@@ -62,6 +67,79 @@ def _estimate(rec, calls):
         return int(rec.get("cacheRead", 0) / max(1, calls))
     except Exception:
         return 0
+
+
+DSH_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "dsh-ctx.json")
+PROJCACHE = os.path.join(HOME, ".dsh", "storages", "session_projcache", "sessions")
+
+
+def dsh_pressure():
+    """**壳自己的口径**（2026-11-10 定）：最新会话的 `contextPressure`。
+
+    壳在 `storages\\session_projcache\\sessions\\session-<id>.json` 里记着两个数：
+
+      - `pressureTokens` —— 壳**判压缩用的那个数**（= 最近一次调用的 cacheRead + 未缓存输入）；
+      - `surfaceTokens`  —— 界面上「消息占用」那个数（system + tools + messages）。
+
+    以前我们靠账本增量去推：那是**一段时间内的平均值**，窗口里只要有一次压缩前的大调用，
+    平均值就会被拉高（实测 130K，壳口径 139K；压缩刚发生时更离谱——我们报 18K、壳报的是真值）。
+    既然壳自己记着，就不要再算第二份：**读数只有一个来源**。
+    """
+    try:
+        fs = glob.glob(os.path.join(PROJCACHE, "*.json"))
+        if not fs:
+            return 0, 0, 0
+        p = max(fs, key=os.path.getmtime)
+        d = json.loads(io.open(p, encoding="utf-8", errors="replace").read())
+        rows = (d.get("record") or {}).get("rows") or {}
+        cp = (rows.get("contextPressure") or {}).get("val") or {}
+        return (int(cp.get("pressureTokens") or 0),
+                int(cp.get("surfaceTokens") or 0),
+                int(cp.get("contextWindow") or 0))
+    except Exception:
+        return 0, 0, 0
+
+
+def dsh_ctx():
+    """DSH 实测：账本累计值的**增量** = 最近一次调用真正带进去的 prompt。
+
+    账本里只有累计数（calls / cacheRead / input），单看它就是「历次平均」——会话越久，
+    这个平均值越迟钝，会长时间钉在一个偏低的值上。所以存一份上次快照，两次相减：
+    `ΔcacheRead + Δinput` 就是最后一轮真正发出去的上下文量，再除以这期间的调用次数。
+
+    返回 (每轮输入, 会话 id)；取不到返回 (0, "")。
+    """
+    try:
+        data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
+        days = data.get("days") or {}
+        day = days[sorted(days)[-1]]
+        rec = max(day.get("sessions") or [], key=lambda s: s.get("calls", 0))
+    except Exception:
+        return 0, ""
+    cur = {"id": rec.get("id", ""), "calls": int(rec.get("calls", 0) or 0),
+           "cache": int(rec.get("cacheRead", 0) or 0), "input": int(rec.get("input", 0) or 0)}
+    prev = None
+    try:
+        prev = json.load(io.open(DSH_STATE, encoding="utf-8"))
+    except Exception:
+        prev = None
+    last = 0
+    if prev and prev.get("id") == cur["id"] and cur["calls"] > int(prev.get("calls", 0) or 0):
+        step = max(0, cur["cache"] - int(prev.get("cache", 0) or 0)) + \
+               max(0, cur["input"] - int(prev.get("input", 0) or 0))
+        n = max(1, cur["calls"] - int(prev.get("calls", 0) or 0))
+        last = int(step / n)
+    if not last and prev:
+        last = int(prev.get("last") or 0)      # 没新调用就沿用上次测到的值
+    try:
+        os.makedirs(os.path.dirname(DSH_STATE), exist_ok=True)
+        tmp = DSH_STATE + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({**cur, "last": last}, ensure_ascii=False))
+        os.replace(tmp, DSH_STATE)
+    except Exception:
+        pass
+    return last, cur["id"]
 
 
 HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
@@ -124,25 +202,35 @@ def report(ctx=None):
     取大不取小：低估水位会让人撞线，高估最多早出一次包。
     """
     c = current()
+    dsh, sid = dsh_ctx()
+    press, surface, win = dsh_pressure()
     real, model, tid = hermes_ctx()
     est = c["ctx"]
-    # 按他的口径：**输入优先**。实测拿不到才退回账本估算（并标 ~）。
-    use = real or est
-    c["estimated"] = not bool(real)
+    # 优先级：壳自己的 pressureTokens > 账本增量 > Hermes 实测 > 账本平均
+    # （前两个才有意义时才算数；Hermes 那条读的是另一个客户端的库，只在没有 DSH 会话时兜底）
+    use = press or dsh or real or est
+    c["estimated"] = not bool(press or dsh or real)
+    c["src"] = "DSH壳口径" if press else ("DSH增量" if dsh else ("Hermes" if real else "账本"))
+    c["pressure"] = press
+    c["surface"] = surface
     if ctx:
         use = ctx               # 测试/复算用：不依赖账本也能验证到线行为
         c["estimated"] = False
+        c["src"] = "指定"
     c["ctx"] = use
     lv, tip = level(use)
-    pct = 100.0 * use / LIMIT
+    pct = 100.0 * use / (win or LIMIT)
     print("[上下文] %s%s · %s（%.1f%% / 上限 %s）· 调用 %d 次 · ￥%.3f"
           % ("~" if c.get("estimated") else "", human(use), lv, pct,
-             human(LIMIT), c["calls"], c["cost"]))
+             human(win or LIMIT), c["calls"], c["cost"]))
     if not ctx:
-        print("         口径：输入（每轮带进去的 token），不是累计缓存"
-              "｜实测 %s%s · 账本兜底 ~%s"
-              % (human(real) if real else "（取不到）",
-                 ("（%s）" % model) if model else "", human(est)))
+        print("         口径：壳的 pressureTokens（判压缩用那个），不是累计缓存"
+              "｜主读数 %s = %s · 界面口径 %s · Hermes %s · 账本平均 ~%s"
+              % (c["src"],
+                 human(press) if press else (human(dsh) if dsh else "（无）"),
+                 human(surface) if surface else "（无）",
+                 human(real) if real else "（无）",
+                 human(est)))
     print("         建议：%s" % tip)
     return c
 
@@ -240,6 +328,10 @@ def _last_assistant(path, cap=300):
         return ""
     blocks = re.split(r"\n## ", text)
     msgs = [b for b in blocks[1:] if b.startswith(("用户", "助手"))]
+    # 交接时会自动带上运行时上下文（"Current runtime context…"），那不是人话，不该当收尾。
+    NOISE = ("Current runtime context", "Time sampled", "Browser time zone", "Elapsed since")
+    msgs = [b for b in msgs
+            if not b.partition("\n")[2].strip().startswith(NOISE)]
     if not msgs:
         return ""
     pick = msgs[-2:] if len(msgs) >= 2 else msgs[-1:]
@@ -330,7 +422,7 @@ def prepare(c=None, clip=True, canonical=False):
                     if l.strip().startswith((">", "1.", "2.", "3.", "4."))]
             parts += ["## 〇、哲学", "", _clip("\n".join(keep), 520), ""]
 
-        red = ["## 红线（5.3 仲裁 / 5.4 边界 / 5.6 拒绝权）", ""]
+        red = ["## 红线（5.3 仲裁 / 5.4 边界 / 5.6 拒绝权 / 5.7 外部 AI）", ""]
         s53 = _section(dec_txt, "### 5.3 冲突仲裁")
         ladder = _fence(s53)
         if ladder:
@@ -349,6 +441,14 @@ def prepare(c=None, clip=True, canonical=False):
         body56 = "\n".join(l for l in body56.splitlines() if not l.strip().startswith(">"))
         if body56:
             red += ["**5.6 拒绝权：**", _clip(body56, 480), ""]
+
+        # 5.7 外部 AI 的定位（2026-11-10）：他反复要求这条必须随包走，
+        # 只写在台账表格里等于没写（包只抽 0.0 / 〇 / 5.3 / 5.4 / 5.6 这几个定标题段）。
+        body57 = _section(dec_txt, "### 5.7 外部 AI")
+        if body57:
+            body57 = body57.split("\n", 1)[-1].strip()
+            body57 = "\n".join(l for l in body57.splitlines() if not l.strip().startswith(">"))
+            red += ["**5.7 外部 AI 只收补充/观点/讨论：**", _clip(body57, 480), ""]
         parts += red
     # 上一轮收尾：可变段（每次重生成），限 300 字。
     # "上一轮"必须是**另一个会话**的最后一条助手消息；本会话自己的历史快照不算。
