@@ -50,8 +50,16 @@ def cmd_report(a):
     d = load()
     now = time.time()
     rec = d.get(a.agent) or {"first": now}
+    prev_read = rec.get("read_at") or 0
     rec.update({"agent": a.agent, "last": now, "status": a.status, "at": _ts(now),
                 "note": a.note, "read_index": bool(a.read_index)})
+    # 读索引的时刻单独记：这是「接活」那道门要用的凭证（B75）。
+    # 只在这一轮真读了才刷新，否则留着上一次——不能让一次没读的报到把旧凭证顶掉。
+    if a.read_index:
+        rec["read_at"] = now
+        rec["read_at_str"] = _ts(now)
+    elif prev_read:
+        rec["read_at"] = prev_read
     rec["count"] = rec.get("count", 0) + 1
     d[a.agent] = rec
     save(d)
@@ -102,6 +110,13 @@ def cmd_dispatch(a):
     return 0
 
 
+def _epoch(s):
+    try:
+        return time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return 0.0
+
+
 def cmd_ack(a):
     try:
         import persona_dispatch as D
@@ -112,6 +127,20 @@ def cmd_ack(a):
     if a.id not in st:
         print("没有这条派发：%s" % a.id)
         return 1
+    # B75 索引门·第二道（2026-11-10）：**接活这一刻**再查一次凭证。
+    # 第一道在派发时查"读过没有"；但读到的是派发**之前**的索引，等于没看见这条活。
+    # 所以：读索引的时刻必须晚于这条派发的创建时刻，否则就是"闭着眼接活"。
+    row = st.get(a.id) or {}
+    task_at = _epoch(row.get("at", ""))
+    if a.status in ("accepted", "claimed", "running") and task_at and not a.force:
+        agent = row.get("agent", "")
+        rec = load().get(agent) or {}
+        read_at = float(rec.get("read_at") or 0)
+        if read_at < task_at:
+            print("不接活：%s 读总索引的时刻是 %s，比这条派发（%s）还早——"
+                  "接活前必须再读一遍（persona_master.py → report --read-index）"
+                  % (agent, rec.get("read_at_str") or "（从未读到）", row.get("at", "")))
+            return 3
     D.update(a.id, a.status, a.note)
     print("%s → %s%s" % (a.id, a.status, ("（%s）" % a.note) if a.note else ""))
     return 0
@@ -160,6 +189,8 @@ def main():
     c.add_argument("id")
     c.add_argument("--status", default="done")
     c.add_argument("--note", default="")
+    c.add_argument("--force", action="store_true",
+                   help="跳过「接活前再读索引」这道门（人工兜底，会记在台账里）")
     c = sub.add_parser("reap")
     c.add_argument("--ttl", type=int, default=600)
     c.add_argument("--max-retry", dest="max_retry", type=int, default=None,

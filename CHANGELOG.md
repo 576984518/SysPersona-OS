@@ -10,6 +10,16 @@
 
 ---
 
+## 2026-11-10 — B75 落地：接活时也要验索引凭证
+
+**范围**：`tools/persona/persona_report.py`——`report` 增记 `read_at` / `read_at_str`（只在真读了索引的报到里刷新）；`ack --status accepted|claimed|running` 前校验 `read_at ≥ 派发时刻`，早于则 exit 3；新增 `ack --force` 人工兜底。`docs/INTERACT_SPEC.md` §3.2 索引门拆成两道。
+
+**为什么**：只查「派发时读没读过」时，拿**派发之前**的索引去接活照样过门——看着合规，实际没看见这条活。所以第二道门查的是**凭证的时间**，不是凭证的有无。
+
+**证据**：`_t_b75`——从未读索引 → `ack` 返回 exit 3（提示"读总索引的时刻是（从未读到），比这条派发还早"）；`report --read-index` 之后同一条 → exit 0。`selftest.py` **PASS 36 / FAIL 0**。
+
+---
+
 ## 2026-11-10 — 唤醒三段式写进规范页（**文档修订，不发版**）
 
 **范围**：`docs/INTERACT_SPEC.md` 新增 §三「三段式：醒 → 报 → 领」（原 §三～§九 顺延为 §四～§十）；`docs/SCHEDULER_SPEC.md` 云端唤醒一节加指针；`BACKLOG` 补 B93。
