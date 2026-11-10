@@ -456,6 +456,10 @@ def decide(stale=None, net_override=None, prov_override=None):
     d["client_alive"] = client_alive()
 
     if not net_up:
+        if is_local:
+            d.update({"action": "ok",
+                      "why": "心跳 %.0f 秒没动 + 网络不通，但本来就是本地档 → 不重复动手" % age})
+            return d
         d.update({"action": "fallback_local", "target": local,
                   "why": "心跳 %.0f 秒没动 + 网络不通 → 保底：切本地模型" % age})
         return d
@@ -488,6 +492,10 @@ def decide(stale=None, net_override=None, prov_override=None):
     if tgt.get("provider") == cur_p and tgt.get("model") == cur_m:
         d.update({"action": "restart_client", "target": tgt,
                   "why": "心跳 %.0f 秒没动 + 当前模型服务器通 → 只是本地卡死：重启客户端" % age})
+        return d
+    if (tgt.get("provider"), tgt.get("model")) == (cur_p, cur_m):
+        d.update({"action": "ok",
+                  "why": "下一个可用就是当前这档 → 不重复动手"})
         return d
     d.update({"action": "switch_backup_cloud", "target": tgt,
               "why": "心跳 %.0f 秒没动 + 有网 + 当前服务器不通 → 换下一个可用：%s"
@@ -740,13 +748,53 @@ def ensure_tasks():
     return fixed
 
 
-def enact(what, dry=False):
-    """分支本体：由计划任务调用，自带「杀 → 改配置 → 拉起」全流程。
+def _version_of(prov, model):
+    """这个 provider/model 对应哪套固定版本（回滚时用）。"""
+    for name in ("paid", "cloud", "local"):
+        vp = os.path.join(OPS, "profiles", name + ".yml")
+        try:
+            txt = io.open(vp, encoding="utf-8").read()
+        except OSError:
+            continue
+        p2 = m2 = ""
+        inb = False
+        for ln in txt.splitlines():
+            if ln.startswith("- id: agent-default-model"):
+                inb = True
+                continue
+            if inb:
+                if ln.startswith("- id:"):
+                    inb = False
+                elif ln.strip().startswith("provider:"):
+                    p2 = ln.split(":", 1)[1].strip()
+                elif ln.strip().startswith("model:"):
+                    m2 = ln.split(":", 1)[1].strip()
+        if (p2, m2) == (prov, model):
+            return name
+    return ""
 
-    这里是**唯一**真动手的地方；看门狗只负责判定 + 触发任务。
+
+def _try(fn, tries=2, wait=2.0):
+    """跑一步，失败重试；两次都不成就返回失败（由调用方决定怎么兜）。"""
+    ok, msg = False, ""
+    for i in range(tries):
+        ok, msg = fn()
+        if ok:
+            return True, msg
+        time.sleep(wait)
+    return False, msg
+
+
+def enact(what, dry=False):
+    r"""分支本体：杀 → 改配置 → 移走会话缓存 → 拉起，**每一步都有兜底**。
+
+    人 2026-11-10 定：「每一步都要加容灾，防止不成功。」
+      * 杀不干净：重试一次；还不行就停手，配置一个字不动（免得留个死窗口 + 错配置）；
+      * 改配置失败：自动回滚到切换前那套版本，照样往下走（错的是配置，不是窗口）；
+      * 移走缓存失败：不致命，记一笔继续（大不了这个会话照旧用老模型）；
+      * 拉起失败：重试一次；还不行就把配置回滚到原来的版本再拉一次；
+      * 事后校验：3 秒后看窗口在不在，不在就按「回滚 → 再拉」兜最后一道。
     """
-    # 顺序：先杀 → 再改配置 → 再拉起（人 2026-11-10 纠的：反了）
-    # 先改配置的话，正在跑的那个进程还可能把文件写回去，改了也白改。
     todo = {"daemon": [("拉起守护", "daemon")],
             "restart": [("杀客户端", "kill"), ("拉起客户端", "launch")],
             "local": [("杀客户端", "kill"), ("改配置 → 本地档", "switch"),
@@ -758,38 +806,59 @@ def enact(what, dry=False):
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
         return 2
+    if dry:
+        for label, _ in todo:
+            print("%s：（dry：没执行）" % label)
+        return 0
+
+    prev = _version_of(*current_model())      # 记下切换前是哪套，用来回滚
     out = []
     for label, kind in todo:
-        if dry:
-            out.append({"step": label, "ok": None, "msg": "（dry：没执行）"})
-            continue
         if kind == "daemon":
-            ok, msg = revive_daemon()
+            ok, msg = _try(revive_daemon, tries=2, wait=3)
         elif kind == "kill":
-            ok, msg = kill_client()
+            ok, msg = _try(kill_client, tries=2, wait=2)
+            if not ok:
+                out.append({"step": label, "ok": False, "msg": msg})
+                break                            # 没杀干净：绝不动配置
         elif kind == "switch":
-            time.sleep(0.5)                # 等文件句柄彻底放开
-            ok, msg = switch_model(what)
+            time.sleep(0.5)
+            ok, msg = _try(lambda: switch_model(what), tries=2, wait=2)
+            if not ok and prev:
+                ok2, msg2 = _try(lambda: switch_model(prev), tries=2, wait=2)
+                msg = "%s；回滚到 %s：%s" % (msg, prev, "ok" if ok2 else msg2)
         elif kind == "session":
-            ok, msg = session_cache_drop()
+            ok, msg = session_cache_drop()       # 不致命
         else:
-            time.sleep(1.5)                # 让触发我们的人先退干净
-            ok, msg = launch_client()
+            time.sleep(1.0)
+            ok, msg = _try(launch_client, tries=2, wait=3)
+            if not ok and prev:
+                _try(lambda: switch_model(prev), tries=1, wait=0)
+                ok, msg = _try(launch_client, tries=2, wait=3)
+                msg = "%s（已回滚 %s 再拉）" % (msg, prev)
         out.append({"step": label, "ok": ok, "msg": msg})
-        if not ok and kind in ("daemon", "kill"):
-            break                          # 没杀干净就别改、也别开第二份
-        if not ok and kind == "switch":
-            continue                       # 配置没改成就按原配置拉起，别留个死窗口
+        if not ok and kind == "daemon":
+            break
+
+    # 事后校验：窗口在吗？不在就兜最后一道（回滚配置 + 再拉一次）
+    if what != "daemon":
+        time.sleep(3)
+        if not client_alive():
+            if prev:
+                _try(lambda: switch_model(prev), tries=1, wait=0)
+            ok2, msg2 = _try(launch_client, tries=2, wait=3)
+            out.append({"step": "事后校验", "ok": ok2,
+                        "msg": "窗口没起来 → 回滚 %s 再拉：%s" % (prev or "（无）", msg2)})
+        else:
+            out.append({"step": "事后校验", "ok": True, "msg": "窗口在"})
     try:
         with io.open(os.path.join(OPS, "dr-actions.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "what": what,
-                                "steps": out}, ensure_ascii=False) + "\n")
+                                "prev": prev, "steps": out}, ensure_ascii=False) + "\n")
     except OSError:
         pass
     for x in out:
         print("%s：%s" % (x["step"], x["msg"] or ("ok" if x["ok"] else "失败")))
-    if dry:
-        return 0
     return 0 if all(x["ok"] for x in out) else 4
 
 
@@ -1046,6 +1115,11 @@ def _gate(d):
     recent = [h for h in hist if now - float(h.get("ts", 0)) < 3600]
     if len(recent) >= cap:
         return False, "本小时已动手 %d 次（上限 %d）" % (len(recent), cap)
+    # 断电器：同一个动作连着失败 3 次，就别再试了（免得每 10 分钟杀一次窗口）
+    last3 = hist[-3:]
+    if len(last3) == 3 and len({h.get("action") for h in last3}) == 1:
+        if all(not any(s.get("ok") for s in (h.get("steps") or [])) for h in last3):
+            return False, "同一个动作连续失败 3 次 → 停手，等人看"
     return True, ""
 
 
