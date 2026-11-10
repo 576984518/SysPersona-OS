@@ -189,14 +189,15 @@ def client_rows():
 
     d = dsh_watermark()
     n = counts.get("DeepSeek Harness.exe", 0)
-    if n or d.get("ctx"):
-        rows.append({"name": "DSH", "alive": n > 0, "procs": n,
+    # 只显示「正在运行」的客户端：没运行的不进图标、不进提示。
+    if n:
+        rows.append({"name": "DSH", "alive": True, "procs": n,
                      "ctx": d.get("ctx"), "max": d.get("max"), "pct": d.get("pct")})
 
     h = hermes_watermark()
     hn = counts.get("hermes.exe", 0) + counts.get("Hermes.exe", 0)
-    if hn or h:
-        rows.append({"name": "Hermes", "alive": hn > 0, "procs": hn,
+    if hn:
+        rows.append({"name": "Hermes", "alive": True, "procs": hn,
                      "ctx": (h or {}).get("ctx"), "max": (h or {}).get("max"),
                      "pct": (h or {}).get("pct")})
 
@@ -239,48 +240,45 @@ def snapshot():
 
     parts = []
     for r in rows:
-        tag = "" if r["alive"] else "（上次）"
         if r["ctx"] is not None:
-            parts.append("%s %s/%s %s%s" % (r["name"], human(r["ctx"]), human(r["max"]),
-                                            ("%.0f%%" % r["pct"]) if r["pct"] is not None else "?", tag))
+            parts.append("%s %s/%s %s" % (r["name"], human(r["ctx"]), human(r["max"]),
+                                          ("%.0f%%" % r["pct"]) if r["pct"] is not None else "?"))
         else:
-            parts.append("%s 在跑" % r["name"] if r["alive"] else "%s（上次）" % r["name"])
+            parts.append("%s 在跑" % r["name"])
     title = "SysPersona · " + (" · ".join(parts) if parts else "没有客户端在跑")
     if not ok:
         title += " · 守护异常"
     return {"bars": bars, "title": title, "rows": rows, "daemon": (ok, msg, tasks)}
 
 
-# ── 画图标：每个客户端一根竖条，条数随客户端数自动变宽 ───────────────
+# ── 画图标：一个客户端一个正方形，几个就并排几个 ─────────────────────
 def make_icon(bars):
-    """bars = [(color, pct_bytes, 有无水位)]；pct=None 的只画底座。
+    """bars = [(color, pct, 有无水位)]；只放「正在运行」的客户端。
 
-    64×64 里横向排 n 根竖条：条宽 = (64 - 间隔) / n，一个个从底部往上填充。
-    1 个客户端就是一根满宽的长条，4 个就自动变窄——「长度」随 agent 数量变。
+    n 个客户端 → 画布横向切成 n 个正方形（边长 = 64/n），从左到右排开：
+    1 个 = 一个满尺寸正方形，2 个 = 两个并排，4 个 = 四个；正方形里从底部
+    往上填充水位高度，颜色按各自水位（绿 / 黄 / 红）。
     """
     S = 64
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     n = len(bars)
     if n == 0:
-        d.rectangle((8, 24, S - 8, S - 24), fill=(120, 120, 120, 255))
+        d.rectangle((22, 22, S - 22, S - 22), outline=(120, 120, 120, 255), width=3)
         return img
     gap = 2 if n > 1 else 0
-    usable = S - gap * (n + 1)
-    bw = max(3, usable // n)
-    top, bottom = 4, S - 4
-    x = gap
-    for color, pct, has in bars[:6]:
-        x2 = x + bw - 1
-        d.rectangle((x, top, x2, bottom), fill=(40, 40, 40, 255))
+    side = max(4, (S - gap * (n - 1)) // n)
+    total = side * n + gap * (n - 1)
+    x0 = (S - total) // 2
+    y0 = (S - side) // 2
+    for i, (color, pct, has) in enumerate(bars[:8]):
+        x = x0 + i * (side + gap)
+        d.rectangle((x, y0, x + side - 1, y0 + side - 1), fill=(38, 38, 38, 255))
         if has and pct is not None:
-            frac = max(0.06, min(1.0, pct / 100.0))
-            y = int(bottom - frac * (bottom - top))
-            d.rectangle((x, y, x2, bottom), fill=color + (255,))
-        else:
-            # 没有水位源的客户端：底部一小块，表示「在跑」
-            d.rectangle((x, bottom - 5, x2, bottom), fill=color + (255,))
-        x = x2 + 1 + gap
+            frac = max(0.0, min(1.0, pct / 100.0))
+            h = max(1, int(round(frac * side)))
+            d.rectangle((x, y0 + side - h, x + side - 1, y0 + side - 1), fill=color + (255,))
+        d.rectangle((x, y0, x + side - 1, y0 + side - 1), outline=color + (255,), width=1)
     return img
 
 
