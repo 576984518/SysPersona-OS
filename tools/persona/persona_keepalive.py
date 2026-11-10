@@ -7,7 +7,7 @@ r"""persona_keepalive.py — 保活（v5.3）：盯进程、没在就跑起来�
 
 用法：
   python persona_keepalive.py add --name shell --match hermes-agent-cn-desktop \
-      --exe "D:\path\app.exe" [--cooldown 120]
+      --exe "<壳的程序.exe>" [--cooldown 120]
   python persona_keepalive.py list
   python persona_keepalive.py rm --name shell
   python persona_keepalive.py check [--json]      # 守护进程每 60 秒调一次
@@ -15,6 +15,9 @@ r"""persona_keepalive.py — 保活（v5.3）：盯进程、没在就跑起来�
 落盘：ops/keepalive.json（目标表）、ops/keepalive-state.json（上次拉起时间）、
       ops/keepalive.log（只在拉起/失败/查不了时写一行；正常在跑不写，免得日志被刷满）。
 退出码：check 恒为 0（保活是巡检，不是门禁）。
+
+环境变量：PERSONA_ROOT（或 SYSPERSONA_ROOT）指定记忆库根；不设就用本脚本所在目录。
+两者都没有也不报错——ops\ 就在脚本旁边，这是平铺部署时的正常形态。
 """
 import argparse
 import io

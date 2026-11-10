@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 persona_gauge.py — 上下文守卫：测当前上下文、到线就准备"接续包"
 
   python persona_gauge.py                 # 报当前上下文规模与水位
@@ -12,6 +12,11 @@ persona_gauge.py — 上下文守卫：测当前上下文、到线就准备"接�
   L0 铁律（0.0 交互 + 5.3/5.4/5.6 红线）→ L1 现状 + 待办 → L2 指针。
   只带"必读"，其余用指针指回台账/待办/原文；硬上限 3000 字（约 9 KB）。
   超了就截断并注明——宁短，不要一份没人读完的长包。
+
+环境变量：SYSPERSONA_ROOT = 记忆库根（旧名 PERSONA_ROOT 也认）；PERSONA_NODE = node
+可执行文件（不设就找 <runtime>\node\bin\node.exe，再找 PATH）；PERSONA_HERMES_UI_DB =
+Hermes 的 desktop-ui.sqlite（不设就按 PERSONA_HERMES_HOME 拼）。缺 Hermes 侧只少一项
+水位、不会崩：这几路都按「取不到就报空」处理。
 """
 import argparse
 import glob
@@ -28,10 +33,12 @@ except Exception:
 import sys
 import time
 
+from persona_root import hermes_home as _hermes_home, node as _node, root as _persona_root
+
 HOME = os.path.expanduser("~")
 LEDGER = os.path.join(HOME, ".dsh", "storages", "cost-meter", "ledger.json")
-ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
-NODE = r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
+ROOT = _persona_root()
+NODE = _node()
 
 # 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -184,6 +191,9 @@ def dsh_ctx():
         last = int(step / n)
     if not last and prev:
         last = int(prev.get("last") or 0)      # 没新调用就沿用上次测到的值
+    # 注意：dsh-ctx.json 现在**只留痕/审计**，不再作为任何显示来源。
+    # 托盘与水位展示一律读 dsh_pressure() 的 pressureTokens（壳判压缩用的那个数）；
+    # 这里的 last 是账本增量，和它实测差一百多 K，别拿它当水位（2026-11-10 定）。
     try:
         os.makedirs(os.path.dirname(DSH_STATE), exist_ok=True)
         tmp = DSH_STATE + ".tmp"
@@ -195,8 +205,8 @@ def dsh_ctx():
     return last, cur["id"]
 
 
-HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
-    r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\desktop-ui.sqlite"
+HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or (
+    os.path.join(_hermes_home(), "desktop-ui.sqlite") if _hermes_home() else None)
 
 
 # 本地小模型（免费/兜底档）：它们的输入很小，混进来会把"上下文"算小、把该交接的会话判成安全。
@@ -215,7 +225,7 @@ def hermes_ctx():
     只看最后一轮会把大水位误判成安全。**低估会让人撞线，高估最多早出一次包。**
     取不到返回 (0, "", "")。
     """
-    if not os.path.exists(HERMES_UI_DB):
+    if not HERMES_UI_DB or not os.path.exists(HERMES_UI_DB):
         return 0, "", ""
     try:
         import sqlite3
@@ -432,6 +442,8 @@ def prepare(c=None, clip=True, canonical=False):
     if canonical and fresh:
         export_line = old[0]          # 一小时内的导出够用，别每个周期都生成一份
         target = old[0]               # 让"上一轮"仍取另一个会话
+    elif sess and not NODE:
+        export_line = "导出失败：没配置 PERSONA_NODE（找不到 node：设变量，或把 <runtime>\\node\\bin 放进 PATH）"
     elif sess:
         target = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "电脑会话", "续接前-%s.md" % stamp)
         os.makedirs(os.path.dirname(target), exist_ok=True)

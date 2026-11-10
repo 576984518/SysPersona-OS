@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 r"""persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 秒、不出网）
 
 背景：Hermes 主模型是纯文本；壳自带 vision_analyze 慢且会卡在工具返回后。
@@ -11,6 +11,10 @@ r"""persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 
   python persona_vision.py --vl <图片> --model Qwen/Qwen3-VL-8B-Instruct "问题"   # 收费档，慎用
 
 云端 key 来源：环境变量 SILICONFLOW_API_KEY → hermes-home\.env → config.yaml（不写死）
+
+环境变量：PERSONA_HERMES_HOME = Hermes 家目录（.env / config.yaml / images 都在它下面）；
+PERSONA_PY 不需要，本脚本不拉别的 Python。没配 PERSONA_HERMES_HOME 时 `--latest` 直接
+报错、`--vl` 只认环境变量里的 key——不会退回某台机器的路径。
 """
 import base64
 import io
@@ -26,7 +30,14 @@ except Exception:
 import sys
 import urllib.request
 
-HOME = r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home"
+try:
+    from persona_root import hermes_home as _hermes_home
+except ImportError:   # 仓库布局：tools\persona\ → tools\ctxpack\
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ctxpack"))
+    from persona_root import hermes_home as _hermes_home
+
+HOME = _hermes_home()
 API = "https://api.siliconflow.cn/v1/chat/completions"
 MODEL = "PaddlePaddle/PaddleOCR-VL-1.5"
 OCR_PS1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "winocr.ps1")
@@ -38,6 +49,8 @@ def find_key():
     k = os.getenv("SILICONFLOW_API_KEY", "").strip()
     if k:
         return k
+    if not HOME:
+        return None      # 没配 PERSONA_HERMES_HOME：只认环境变量
     envf = os.path.join(HOME, ".env")
     if os.path.exists(envf):
         for line in io.open(envf, encoding="utf-8", errors="replace"):
@@ -54,6 +67,9 @@ def find_key():
 
 
 def latest_image():
+    if not HOME:
+        raise SystemExit("没配置 PERSONA_HERMES_HOME（Hermes 家目录），--latest 用不了；"
+                         "请设这个变量，本脚本不再猜机器路径。")
     d = os.path.join(HOME, "images")
     files = [os.path.join(d, f) for f in os.listdir(d)
              if os.path.splitext(f)[1].lower() in MIME]

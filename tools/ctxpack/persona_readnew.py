@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""每次任务前读会话：先比时间，时间对不上就自动抓取重试。
+r"""每次任务前读会话：先比时间，时间对不上就自动抓取重试。
 
 他 2026-11-09 的原话：「我让你读取，肯定是刚才有的，时间不对就自动重试，检查一下刷新是否成功。」
 
@@ -17,6 +17,11 @@
   python persona_readnew.py --minutes 10        # 放宽到 10 分钟
   python persona_readnew.py --no-capture        # 只读不抓（排查用）
   python persona_readnew.py --mark              # 记水位，收尾用
+
+环境变量：SYSPERSONA_ROOT/PERSONA_ROOT = 记忆库根；PERSONA_NODE = node；
+PERSONA_CDP_LAUNCHER = 拉起调试浏览器的 start_cdp_browser.ps1（不设就用
+%LOCALAPPDATA%\SysPersona\ 下那份）；PERSONA_POWERSHELL = powershell.exe（不设就按
+%SystemRoot% 拼）。缺哪个就少哪一步，报错时写明是哪个变量。
 """
 import argparse
 import io
@@ -32,7 +37,9 @@ import sys
 import time
 import urllib.request
 
-ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.abspath(__file__))
+from persona_root import app_local as _app_local, node as _node, root as _persona_root
+
+ROOT = _persona_root()
 ARCHIVE = os.path.join(ROOT, "archive")
 OPS = os.path.join(ROOT, "ops")
 MARK = os.path.join(OPS, "last-read.json")
@@ -97,15 +104,15 @@ def tail(path, n):
     return "\n".join(io.open(path, encoding="utf-8", errors="replace").read().splitlines()[-n:])
 
 
-NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
+NODE = _node()
 RELOAD_JS = os.path.join(ROOT, "reload_page.js")
 
 # 抓取要连的调试浏览器：不通就拉 start_cdp_browser.ps1（独立 profile，默认无头）。
 CDP_PORT = int(os.environ.get("PERSONA_CDP_PORT") or 9222)
-CDP_LAUNCHER = os.environ.get("PERSONA_CDP_LAUNCHER") or \
-    r"C:\Users\Huang\AppData\Local\SysPersona\start_cdp_browser.ps1"
-POWERSHELL = os.environ.get("PERSONA_POWERSHELL") or \
-    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+CDP_LAUNCHER = os.environ.get("PERSONA_CDP_LAUNCHER") or _app_local("start_cdp_browser.ps1")
+POWERSHELL = os.environ.get("PERSONA_POWERSHELL") or os.path.join(
+    os.environ.get("SystemRoot") or r"C:\Windows",
+    "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 
 
 def cdp_alive(port=CDP_PORT, timeout=1.5):
@@ -127,8 +134,8 @@ def ensure_cdp(port=CDP_PORT, wait_sec=20):
     """
     if cdp_alive(port):
         return True, "已在跑"
-    if not os.path.exists(CDP_LAUNCHER):
-        return False, "CDP 起不来：找不到启动脚本 %s" % CDP_LAUNCHER
+    if not CDP_LAUNCHER or not os.path.exists(CDP_LAUNCHER):
+        return False, "CDP 起不来：找不到启动脚本 %s（设 PERSONA_CDP_LAUNCHER）" % CDP_LAUNCHER
     if not os.path.exists(POWERSHELL):
         return False, "CDP 起不来：找不到 powershell.exe（%s）" % POWERSHELL
     cmd = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -161,6 +168,8 @@ def force_reload():
     """CDP 强制刷新网页会话——**不指望他按 F5**（2026-11-10 读会话铁律第 3 条）。"""
     if not os.path.exists(RELOAD_JS):
         return False, "没有 reload_page.js"
+    if not NODE:
+        return False, "没配置 PERSONA_NODE（找不到 node：设变量，或把 <runtime>\\node\\bin 放进 PATH）"
     try:
         r = subprocess.run([NODE, RELOAD_JS], capture_output=True, timeout=30,
                            cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

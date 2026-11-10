@@ -10,6 +10,9 @@ r"""handoff_rotate.py — 交接文件分级保留 + 目录归拢
 用法：
   python handoff_rotate.py            # 归拢 + 分级
   python handoff_rotate.py --dry-run  # 只报会做什么
+
+环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认），整理的是
+`<根>\续接\`；不设就按脚本所在目录推导，推不出来直接抛错。
 """
 import argparse
 import glob
@@ -20,7 +23,9 @@ import shutil
 import sys
 import time
 
-ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
+from persona_root import root as _persona_root
+
+ROOT = _persona_root()
 HANDOFF = os.path.join(ROOT, "续接")
 HIST = os.path.join(HANDOFF, "历史")
 REST = os.path.join(HIST, "其余")

@@ -95,8 +95,41 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 | 托盘 | `pystray` + `Pillow` | 托盘起不来；后台任务照常 |
 | 平台 | Windows（`msvcrt` / `winreg`） | 别的平台直接跑不了——设计边界，不是 bug |
 
-**环境变量**：`SYSPERSONA_ROOT` 指向记忆库根目录，**必须自己设**。不设时脚本会回退到示例路径，
-那是给示例用的，不是你机器上的真路径。
+## 四·六、路径与环境变量
+
+**本机路径一律不写死在代码里。** 路径解析只有唯一出口 `tools/ctxpack/persona_root.py`
+（`root()` / `repo()` / `runtime_py()` / `node()` / `hermes_home()` / `localappdata()` /
+`programdata()`），取值顺序固定为：**显式参数 > 环境变量 > 本机可选配置 > 相对脚本自身的推导 > 默认值**。
+
+| 变量名 | 作用 | 默认值 | 必填？ | 不设会怎样 |
+|---|---|---|---|---|
+| `SYSPERSONA_ROOT` | 记忆库根目录（`archive\`、`index\`、`ops\` 所在） | 脚本自身目录（该目录含 `archive\` 或 `index\` 时） | 平铺部署（脚本就在库里）不必填；从仓库直接跑必填 | 抛 `PathUnset`，消息里直接写「请设 SYSPERSONA_ROOT」并给出当前脚本目录——**不会退回作者那台机器的路径** |
+| `SYSPERSONA_REPO` | 代码仓库根（含 `tools\ctxpack\` 与 `docs\`） | 从 `persona_root.py` 向上找 | 否 | 只有「密钥扫描」和安装脚本少一项能力，会明确写「没配置 / 跳过」 |
+| `PERSONA_PY` | Python 解释器（`python.exe` / `pythonw.exe`） | `<runtime>\python\python.exe` → 正在运行的解释器 | `install-service.ps1` 必填；其它不必 | 其它脚本用当前解释器；安装脚本直接 `[FAIL]` 退出（exit 2），不做猜测 |
+| `SYSPERSONA_RUNTIME` | 运行时根（其下有 `python\` 与 `node\bin\`） | 从 `sys.executable` 反推；再试 `%ProgramData%\SysPersona-Runtime`（存在才算） | 否 | 推不出来就不猜：node 只能靠 `PERSONA_NODE` 或 `PATH` |
+| `PERSONA_NODE` | node 可执行文件 | `<runtime>\node\bin\node.exe` → `PATH` 上的 `node` → 无 | 否 | 抓取 / 导出 / 注入类任务报「没配置 PERSONA_NODE」并跳过；索引与检索不受影响 |
+| `PERSONA_HERMES_HOME` | Hermes 家目录（`state.db`、`desktop-ui.sqlite`） | `%ProgramData%\Hermes Agent CN Desktop\data\hermes-home`（存在才算） | 否 | Hermes 相关任务（导出 / 水位 / 交接记录）报「没配置」并跳过；索引、检索、自检照常 |
+| `PERSONA_CAPTURE` | 网页抓取用的 node 脚本（`collect7.js` 一类） | 无 | 否 | `capture` 任务跳过 |
+| `PERSONA_HERDSMAN` | `herdsman.exe` | `%ProgramData%\Herdsman\herdsman.exe`（存在才算） | 否 | 8080 端口挂了也不自动拉起 |
+| `PERSONA_BACKUP2` | 第二备份根（必须在**另一块盘**） | 无 | 否 | `backup2` 任务跳过——绝不把第二份备份写进库内凑数 |
+| `LOCALAPPDATA` | `cdp-profile\`、心跳、托盘日志、可选本机配置的基址 | 系统给 | 系统变量 | 用到这几项的脚本跳过；`localappdata()` 返回 `None`，**不猜** |
+| `ProgramData` | 上面几个 `%ProgramData%` 默认值的基址 | 系统给 | 系统变量 | 同上；`programdata()` 返回 `None`，**不猜** |
+| `PERSONA_ROOT` | `SYSPERSONA_ROOT` 的旧名 | 无 | 否 | 兼容保留；两个都设时以 `SYSPERSONA_ROOT` 为准 |
+
+还有几个只影响单点行为的小变量，用不到可以不管：`NODE_BIN`（`persona_sf_models.py` 里
+`PERSONA_NODE` 的旧名）、`PERSONA_CDP_PORT`、`PERSONA_CDP_LAUNCHER`、`PERSONA_POWERSHELL`、
+`PERSONA_HERMES_DB`、`PERSONA_HERMES_UI_DB`。
+
+**可选的本机配置**：`%LOCALAPPDATA%\SysPersona\paths.json`，键名
+`root` / `repo` / `runtime` / `python` / `node` / `hermes_home` / `capture` / `herdsman` / `backup2`。
+仓库**不创建、不提交**这个文件；它只是把变量固化成一个文件，优先级低于环境变量。
+
+两个提醒：
+
+1. `%ProgramData%` 是系统给的（通常指向系统盘），不一定等于你实际放运行时的目录。两者不同时，
+   请设 `SYSPERSONA_RUNTIME` / `PERSONA_HERMES_HOME`，不要指望推导。
+2. 从仓库直接跑 `tools\ctxpack\*.py` 时必须设 `SYSPERSONA_ROOT`：脚本旁边没有 `archive\`，
+   推导不出来就会直接报错。这是故意的——以前那版会静默指向作者自己的库。
 
 ## 五、验收：别听它说，看它跑
 
@@ -143,3 +176,29 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 
 - 不设 `SYSPERSONA_ROOT` 时会回退到示例路径，导致「识别到 0 条来源」——不是仓库缺陷，是环境没设对；
 - 沙箱不能出网时 clone/下载都会失败——属于被测环境限制，**不要算成仓库的问题**。
+
+> 2026-11-10 之后：第一条已改。「不设 `SYSPERSONA_ROOT`」不再回退到任何示例路径，而是直接报错并
+> 指出该设哪个变量（详见「四·六、路径与环境变量」）。
+
+---
+
+## 附：仓库里仍然存在的示例路径（仅文档示例，不是运行路径）
+
+下面这些只出现在**文档/示例**里，不参与运行；落地时按自己的目录替换。行号是 2026-11-10 的快照，
+文档再更新可能会漂。
+
+| 文件 | 位置 | 示例路径 | 说明 |
+|---|---|---|---|
+| `README.md` | 136 | `$env:SYSPERSONA_ROOT = 'D:\SysPersona'` | 快速开始里的占位写法 |
+| `CHANGELOG.md` | 522 / 791 | `C:\hermes-mem`、`Z:\…` / `D:\…` | 历史记录，只说明当年踩过的坑 |
+| `docs/SERVICE.md` | 27–30、36–38、46、55、63–69、80–81、114–116、159–160、168、171、177–178、387 | `D:\文档\SysPersona-OS`、`D:\4590-PC-文件\AI会话检索记录`、`D:\ProgramData\SysPersona-Runtime` | 按旧机器写的操作步骤；照它落地前先换成 `$env:SYSPERSONA_ROOT` / `$env:PERSONA_PY` |
+| `docs/SERVICE.md` | 298–300、363 | `%LOCALAPPDATA%\SysPersona\…` | 变量写法，任何机器都成立 |
+| `docs/PERSONA_SPEC.md` | 165 | `%LOCALAPPDATA%\SysPersona\persona` | 规范里的默认位置，变量占位 |
+| `docs/PROJECT_MEMO.md` | 21 / 56 | `C:\Users`、`C:\Windows\win.ini` | 一个是提交前扫描用的正则，一个是路径判定的测试断言 |
+| `docs/ROADMAP.md` | 19 | `C:\hermes-mem` | 历史记录 |
+| `docs/SHELL_ADOPTION.md` | 36 / 39 | `C:\hermes-mem` | 联结（junction）示例 |
+| `impl/m4/feasibility/README.md` | 27 | `$env:SYSPERSONA_NODE="C:\Program Files\nodejs\node.exe"` | node 路径示例 |
+| `tools/ctxpack/SKILL.md` | 220 / 256 | `C:\Program Files (x86)\Microsoft\Edge\…`、`%LOCALAPPDATA%\SysPersona\live.log` | 浏览器安装位置与日志位置示例 |
+| `tools/persona/README.md` | 80 / 91 | `C:\hermes-mem`、`--exe "D:\path\app.exe"` | 库根与保活目标示例（`D:\path\app.exe` 是占位） |
+
+> 不在表里的：`备份\` 目录是本地快照，未纳入版本控制。

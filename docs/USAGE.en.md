@@ -1,4 +1,4 @@
-﻿# Usage: hand the repo to an AI agent
+# Usage: hand the repo to an AI agent
 
 > This is **not a program package**. No installer, no binaries, no `setup.exe` — and no
 > runnable product is shipped.
@@ -46,8 +46,46 @@ permissions all differ.
 | Tray | `pystray` + `Pillow` | no tray icon; background jobs still run |
 | Platform | Windows (`msvcrt` / `winreg`) | will not run elsewhere - by design, not a bug |
 
-**Environment variable**: `SYSPERSONA_ROOT` must point at your memory root and **must be set by you**;
-without it scripts fall back to example paths, which are not real paths on your machine.
+## Paths and environment variables
+
+**No machine-specific path is hard-coded.** Path resolution has a single entry point,
+`tools/ctxpack/persona_root.py` (`root()` / `repo()` / `runtime_py()` / `node()` /
+`hermes_home()` / `localappdata()` / `programdata()`), and a fixed precedence:
+**explicit argument > environment variable > optional machine config > derivation from the
+script itself > built-in default**.
+
+| Variable | Purpose | Default | Required? | If unset |
+|---|---|---|---|---|
+| `SYSPERSONA_ROOT` | Memory root (`archive\`, `index\`, `ops\` live here) | The script's own directory (when it contains `archive\` or `index\`) | Not needed for a flat deployment (scripts already in the vault); required when running from the repo | Raises `PathUnset` with "set SYSPERSONA_ROOT" plus the current script directory — it **never** falls back to the author's paths |
+| `SYSPERSONA_REPO` | Repository root (contains `tools\ctxpack\` and `docs\`) | Found by walking up from `persona_root.py` | No | Only the secret scan and the install script lose one capability; they say "not configured / skipped" |
+| `PERSONA_PY` | Python interpreter (`python.exe` / `pythonw.exe`) | `<runtime>\python\python.exe` → the running interpreter | Required by `install-service.ps1`; optional elsewhere | Other scripts use the current interpreter; the installer exits with `[FAIL]` (exit 2) instead of guessing |
+| `SYSPERSONA_RUNTIME` | Runtime root (holds `python\` and `node\bin\`) | Derived from `sys.executable`; else `%ProgramData%\SysPersona-Runtime` (only if it exists) | No | Nothing is guessed: node then comes from `PERSONA_NODE` or `PATH` only |
+| `PERSONA_NODE` | node executable | `<runtime>\node\bin\node.exe` → `node` on `PATH` → none | No | Capture / export / injection tasks report "PERSONA_NODE is not configured" and skip; indexing and search are unaffected |
+| `PERSONA_HERMES_HOME` | Hermes home (`state.db`, `desktop-ui.sqlite`) | `%ProgramData%\Hermes Agent CN Desktop\data\hermes-home` (only if it exists) | No | Hermes-side tasks (export / water level / handoff log) report "not configured" and skip; indexing, search and self-test keep working |
+| `PERSONA_CAPTURE` | node script used for web capture (a `collect7.js`-style file) | none | No | The `capture` task is skipped |
+| `PERSONA_HERDSMAN` | `herdsman.exe` | `%ProgramData%\Herdsman\herdsman.exe` (only if it exists) | No | Nothing restarts the service when port 8080 dies |
+| `PERSONA_BACKUP2` | Second backup root (must be on **another disk**) | none | No | The `backup2` task is skipped — a second copy is never written inside the vault |
+| `LOCALAPPDATA` | Base for `cdp-profile\`, heartbeats, tray logs, optional machine config | Provided by the OS | OS variable | Scripts that need those directories skip; `localappdata()` returns `None` and **does not guess** |
+| `ProgramData` | Base for the `%ProgramData%` defaults above | Provided by the OS | OS variable | Same as above; `programdata()` returns `None` and **does not guess** |
+| `PERSONA_ROOT` | Legacy alias of `SYSPERSONA_ROOT` | none | No | Kept for compatibility; `SYSPERSONA_ROOT` wins when both are set |
+
+A few per-feature variables exist as well and can be ignored unless you use that feature:
+`NODE_BIN` (legacy alias of `PERSONA_NODE` in `persona_sf_models.py`), `PERSONA_CDP_PORT`,
+`PERSONA_CDP_LAUNCHER`, `PERSONA_POWERSHELL`, `PERSONA_HERMES_DB`, `PERSONA_HERMES_UI_DB`.
+
+**Optional machine config**: `%LOCALAPPDATA%\SysPersona\paths.json` with keys
+`root` / `repo` / `runtime` / `python` / `node` / `hermes_home` / `capture` / `herdsman` / `backup2`.
+The repository **never creates or commits** that file; it merely freezes variables into one file and
+ranks below environment variables.
+
+Two notes:
+
+1. `%ProgramData%` is whatever the OS says (usually on the system drive) and need not be where you
+   actually keep the runtime. When the two differ, set `SYSPERSONA_RUNTIME` / `PERSONA_HERMES_HOME`
+   instead of hoping for a derivation.
+2. Running `tools\ctxpack\*.py` straight from the repo requires `SYSPERSONA_ROOT`: there is no
+   `archive\` next to the scripts, so nothing can be derived and the command fails loudly. That is
+   deliberate — the previous version silently pointed at the author's vault.
 
 ## How to verify (do not trust claims, watch it run)
 
@@ -92,3 +130,31 @@ classified as "platform mismatch" or "real defect".
 **Two known traps** (seen 2026-11-10, already fixed): an unset `SYSPERSONA_ROOT` falls back to example
 paths and yields "0 sources" - an environment mistake, not a repo defect; and a sandbox with no outbound
 network cannot clone or download - an environment limit, not a repo defect.
+
+> As of 2026-11-10 the first trap no longer exists: an unset `SYSPERSONA_ROOT` does not fall back to
+> example paths any more; the command stops and names the variable to set (see
+> "Paths and environment variables").
+
+---
+
+## Appendix: example paths still present in the repo (docs only, not runtime paths)
+
+The entries below live in **documentation and examples only** and take no part in execution; replace
+them with your own directories when you land the system. Line numbers are a 2026-11-10 snapshot and may
+drift as the docs change.
+
+| File | Location | Example path | Note |
+|---|---|---|---|
+| `README.md` | 136 | `$env:SYSPERSONA_ROOT = 'D:\SysPersona'` | Placeholder in the quick start |
+| `CHANGELOG.md` | 522 / 791 | `C:\hermes-mem`, `Z:\…` / `D:\…` | Historical notes about past pitfalls |
+| `docs/SERVICE.md` | 27-30, 36-38, 46, 55, 63-69, 80-81, 114-116, 159-160, 168, 171, 177-178, 387 | `D:\文档\SysPersona-OS`, `D:\4590-PC-文件\AI会话检索记录`, `D:\ProgramData\SysPersona-Runtime` | Operations steps written for the old machine; replace with `$env:SYSPERSONA_ROOT` / `$env:PERSONA_PY` before following them |
+| `docs/SERVICE.md` | 298-300, 363 | `%LOCALAPPDATA%\SysPersona\…` | Variable form, valid on any machine |
+| `docs/PERSONA_SPEC.md` | 165 | `%LOCALAPPDATA%\SysPersona\persona` | Default location from the spec, variable placeholder |
+| `docs/PROJECT_MEMO.md` | 21 / 56 | `C:\Users`, `C:\Windows\win.ini` | One is a pre-commit scan regex, the other a path-validation test assertion |
+| `docs/ROADMAP.md` | 19 | `C:\hermes-mem` | Historical note |
+| `docs/SHELL_ADOPTION.md` | 36 / 39 | `C:\hermes-mem` | Junction example |
+| `impl/m4/feasibility/README.md` | 27 | `$env:SYSPERSONA_NODE="C:\Program Files\nodejs\node.exe"` | node path example |
+| `tools/ctxpack/SKILL.md` | 220 / 256 | `C:\Program Files (x86)\Microsoft\Edge\…`, `%LOCALAPPDATA%\SysPersona\live.log` | Browser install location and log location examples |
+| `tools/persona/README.md` | 80 / 91 | `C:\hermes-mem`, `--exe "D:\path\app.exe"` | Vault root and keep-alive target examples (`D:\path\app.exe` is a placeholder) |
+
+> Not listed: `备份\` is a local snapshot directory and is not under version control.

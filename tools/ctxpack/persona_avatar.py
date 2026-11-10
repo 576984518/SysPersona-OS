@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""分身主键 avatar：`<agent>-<model>[-<version>]`，以及性格目录的唯一入口。
+r"""分身主键 avatar：`<agent>-<model>[-<version>]`，以及性格目录的唯一入口。
 
 规范：`docs/AVATAR_SPEC.md` §1.2（性格隔离，2026-11-09 人定）
 
@@ -8,13 +8,18 @@
 2. 性格文件 `memory\\分身\\<avatar>\\persona.json` **只归本人读写**；
 3. 检索层只读性格文件（本模块只提供 `load_persona`，没有 save）；
 4. 取名不取专名，只留简称——模型的出厂身份已经有了，别叠加。
+
+环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认），用于读
+`memory\分身\<avatar>\persona.json`；不设就按脚本所在目录推导，推不出来直接抛错。
 """
 import io
 import json
 import os
 import re
 
-ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
+from persona_root import root as _persona_root
+
+ROOT = _persona_root()
 
 # 头里有两种方言：老导出（设备 / 底座）与 Hermes 导出（来源 / 模型）。
 # 两样都认，缺了就留空——宁可为空，也不要瞎猜。

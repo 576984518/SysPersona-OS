@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""read_watch.py — "读会话"的后台重复读取（读到有新内容为止）
+r"""read_watch.py — "读会话"的后台重复读取（读到有新内容为止）
 
 用户发 `1` 或说"读会话"时，要**记住他发消息的时间**，然后一直重复读，直到读到新内容——
 不是等 60 秒就下结论，也不是只看一次。
@@ -14,6 +14,9 @@
 
 退出码：0 = 有新内容；2 = 到顶仍无变化；1 = 参数/环境问题。
 输出一行结论，方便后台任务直接贴回来。
+
+环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认），要读
+`<根>\archive\` 与 `<根>\LATEST.md`；不设就按脚本所在目录推导，推不出来直接抛错。
 """
 import argparse
 import io
@@ -23,7 +26,9 @@ import re
 import sys
 import time
 
-ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索记录"
+from persona_root import root as _persona_root
+
+ROOT = _persona_root()
 ARCHIVE = os.path.join(ROOT, "archive")
 LATEST = os.path.join(ROOT, "LATEST.md")
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 maint.py — 记忆库与本地缓存的维护：扫描 / 压缩 / 清理
 
 设计原则：
@@ -10,6 +10,9 @@ maint.py — 记忆库与本地缓存的维护：扫描 / 压缩 / 清理
 用法：
   python maint.py             # 只看能回收多少
   python maint.py --apply     # 真执行
+
+环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认）；不设就按脚本所在
+目录推导，推不出来直接抛错。缓存类路径一律在 `~\.dsh` / `~\.cache` 下，跟着用户走。
 """
 
 import argparse
@@ -20,8 +23,10 @@ import os
 import shutil
 import time
 
+from persona_root import root as _persona_root
+
 HOME = os.path.expanduser("~")
-ROOT = r"D:\4590-PC-文件\AI会话检索记录"
+ROOT = _persona_root()
 NOW = time.time()
 DAY = 86400
 

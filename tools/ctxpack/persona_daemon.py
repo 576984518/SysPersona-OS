@@ -25,6 +25,16 @@ r"""persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 
     ctx        300s  刷新滚动上下文头（--live）
     watermark  900s  算上下文水位，过线写提醒
     capture    on-demand  抓网页会话（request 文件触发）
+
+环境变量（缺了只影响对应那件事，日志里写"没配置哪个变量"，不猜机器路径）：
+  SYSPERSONA_ROOT/PERSONA_ROOT  记忆库根；不设就按本脚本目录推导，推不出来直接抛错
+  PERSONA_NODE       node 可执行文件（不设就找 <runtime>\node\bin\node.exe，再找 PATH）
+  PERSONA_CAPTURE    抓取脚本 collect7.js 一类（不设则 capture 任务跳过）
+  PERSONA_HERMES_HOME  Hermes 家目录；不设则 export / hctx / handoff 三项跳过
+  PERSONA_HERDSMAN   herdsman.exe；不设则 8080 挂了也不会自动拉起
+  PERSONA_BACKUP2    第二备份根；不设则 backup2 任务跳过（不往库内凑合写）
+  SYSPERSONA_REPO    代码仓库根（t_scan 要从 impl/launcher 导入 mask_secrets）
+  LOCALAPPDATA       navwatch 心跳/日志的基址（系统变量；缺了 reload / navwatch 两项跳过）
 """
 import argparse, io, json, os, re, subprocess, sys, threading, time, traceback
 
@@ -33,8 +43,16 @@ try:
 except Exception:
     pass
 
+from persona_root import app_local as _app_local
+from persona_root import backup_root as _backup_root
+from persona_root import capture_js as _capture_js
+from persona_root import hermes_home as _hermes_home
+from persona_root import herdsman as _herdsman
+from persona_root import node as _node
+from persona_root import repo as _repo
+from persona_root import root as _persona_root
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = _persona_root()
 OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
 LOCK = os.path.join(OPS, "persona.lock")
@@ -43,21 +61,22 @@ LOG = os.path.join(OPS, "persona.log")
 CAPTURE_REQ = os.path.join(OPS, "persona-capture.request")
 EXPORT_LOCK = os.path.join(OPS, "export.lock")
 INDEX_LOCK = os.path.join(OPS, "index.lock")
-BACKUP2 = os.environ.get("PERSONA_BACKUP2") or r"C:\SysPersona-Backup"
+BACKUP2 = _backup_root()
 
 PY = sys.executable
-NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
-CAPTURE_JS = os.environ.get("PERSONA_CAPTURE") or r"D:\文档\deepseek-harness\default-workspace\cdp\collect7.js"
+NODE = _node()
+CAPTURE_JS = _capture_js()
 
 # Hermes 的会话库：变了就立刻导出，不等 30 分钟的周期（2026-11-09）。
 # 不把目录 junction 进库：state.db 带 WAL，被同步软件抓走会拿到半截快照。
-HERMES_DB = os.environ.get("PERSONA_HERMES_DB") or \
-    r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\state.db"
+_HERMES = _hermes_home()
+HERMES_DB = os.environ.get("PERSONA_HERMES_DB") or (
+    os.path.join(_HERMES, "state.db") if _HERMES else None)
 DB_QUIET = 3.0   # 连续这么久没写入，才认为这一轮答完了
 
 # 迁移后的上下文水位：Hermes 的 UI 账本里有每轮输入 token，state.db 的 context_used 是空的
-HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or \
-    r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\desktop-ui.sqlite"
+HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or (
+    os.path.join(_HERMES, "desktop-ui.sqlite") if _HERMES else None)
 # 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import persona_limits as _LIM  # noqa: E402
@@ -127,7 +146,9 @@ def t_herdsman():
         pass
     finally:
         s.close()
-    exe = r"D:\ProgramData\Herdsman\herdsman.exe"
+    exe = _herdsman()
+    if not exe:
+        return False, "没配置 PERSONA_HERDSMAN（找不到 herdsman.exe），8080 不自动拉起"
     if not os.path.exists(exe):
         return False, "herdsman.exe missing"
     subprocess.Popen([exe], cwd=os.path.dirname(exe),
@@ -216,6 +237,10 @@ def t_watermark():
 
 
 def t_capture():
+    if not NODE:
+        return False, "没配置 PERSONA_NODE（找不到 node：设变量，或把 <runtime>\\node\\bin 放进 PATH）"
+    if not CAPTURE_JS:
+        return False, "没配置 PERSONA_CAPTURE（抓取脚本 collect7.js 一类），跳过抓取"
     anchor = os.path.join(OPS, "anchor.txt")
     out = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "deepseek网页",
                        "capture-%s.md" % time.strftime("%H%M%S"))
@@ -229,7 +254,10 @@ def t_capture():
 
 def t_scan():
     """DLP 哨兵：扫入口文件里有没有像密钥的东西（只报，不改）。"""
-    sys.path.insert(0, r"D:\文档\SysPersona-OS\impl\launcher")
+    base = _repo()
+    if not base:
+        return True, "没配置 SYSPERSONA_REPO（找不到代码仓库），跳过密钥扫描"
+    sys.path.insert(0, os.path.join(base, "impl", "launcher"))
     try:
         from mask_secrets import mask
     except ImportError:
@@ -251,6 +279,8 @@ def t_hctx():
     state.db 的 context_used 是空的，只能用这个；它跟 DSH 的 cacheRead 是同一把尺子。
     """
     import sqlite3
+    if not HERMES_UI_DB:
+        return False, "没配置 PERSONA_HERMES_HOME（找不到 desktop-ui.sqlite），跳过水位"
     con = sqlite3.connect("file:%s?mode=ro" % HERMES_UI_DB.replace("\\", "/"), uri=True)
     try:
         row = con.execute(
@@ -297,12 +327,15 @@ def t_hctx():
 
 
 def t_backup2():
-    """第二份实时备份：主库在 D:，这一份落到 C:，两块盘同时挂的概率极低。
+    """第二份实时备份：落在一块**另一块盘**上（PERSONA_BACKUP2 指哪儿就落哪儿）。
 
     只拷"能重建一切"的东西：当天会话正文、memory\\、几本台账。
     不做镜像删除（不用 /MIR 那种），只增量覆盖——宁可多留，不可误删。
+    没配 PERSONA_BACKUP2 就跳过：第二备份必须真的在第二块盘上，不能在库里面凑合。
     """
     import shutil
+    if not BACKUP2:
+        return False, "没配置 PERSONA_BACKUP2（第二备份根），跳过（别拿库内目录当第二份）"
     src_root = ROOT
     pairs = []
 
@@ -369,6 +402,8 @@ def t_handoff():
     last, ids = seen.get("last", 0), set(seen.get("ids", []))
 
     try:
+        if not HERMES_DB:
+            return False, "没配置 PERSONA_HERMES_HOME（找不到 state.db），跳过交接记录"
         con = sqlite3.connect("file:%s?mode=ro" % HERMES_DB.replace("\\", "/"), uri=True)
         rows = list(con.execute(
             "select id, started_at, message_count, input_tokens from sessions "
@@ -407,7 +442,7 @@ def t_handoff():
 
 
 RELOAD_STATE = os.path.join(OPS, "reload-state.json")
-NAVWATCH_LOG = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "navwatch.log")
+NAVWATCH_LOG = _app_local("navwatch.log")
 
 
 def t_reload():
@@ -423,6 +458,8 @@ def t_reload():
     seen = int(st.get("seen", 0))
 
     try:
+        if not NAVWATCH_LOG:
+            return True, "没配置 LOCALAPPDATA，跳过重载证据"
         lines = io.open(NAVWATCH_LOG, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
         return True, "无 navwatch.log"
@@ -461,14 +498,16 @@ def t_reload():
 def t_navwatch():
     """F5 监听器（watch_nav.js）必须常驻。以前只靠开机启动项，掉了没人管；
     这里用心跳文件的时效判断它是否还活着，掉了就按原样拉起来。"""
-    hb = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "navwatch.heartbeat")
+    hb = _app_local("navwatch.heartbeat")
+    vbs = _app_local("start_navwatch.vbs")
+    if not hb or not vbs:
+        return False, "没配置 LOCALAPPDATA（找不到 navwatch 心跳与启动脚本），跳过"
     try:
         age = time.time() - os.stat(hb).st_mtime
     except OSError:
         age = 1e9
     if age < 120:
         return True, "心跳 %.0fs 前" % age
-    vbs = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "start_navwatch.vbs")
     if not os.path.exists(vbs):
         return False, "心跳断了且缺 start_navwatch.vbs"
     subprocess.Popen(["wscript.exe", vbs],
@@ -531,6 +570,8 @@ def t_uiskin():
     """壳的界面注入器必须常驻：壳重启/页面重载后靠它补样式。
     心跳文件 ops/uiskin.heartbeat，超过 30 秒没更新就重新拉起。"""
     beat = os.path.join(OPS, "uiskin.heartbeat")
+    if not NODE:
+        return False, "没配置 PERSONA_NODE（找不到 node），注入器拉不起来"
     try:
         age = time.time() - os.stat(beat).st_mtime
     except OSError:
@@ -795,8 +836,8 @@ class PersonaDaemon:
 
             # 会话库一变就把 export 提前：安静 3 秒 = 这一轮说完了
             try:
-                st = os.stat(HERMES_DB)
-                cur = (st.st_mtime, st.st_size)
+                st = os.stat(HERMES_DB) if HERMES_DB else None
+                cur = (st.st_mtime, st.st_size) if st else None
             except OSError:
                 cur = None
             if cur is not None:

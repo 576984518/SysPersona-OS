@@ -3,17 +3,21 @@ r"""persona_tray.py — 托盘状态灯：多客户端并列显示 + 实时水�
 
 设计（2026-11-10 重写）：
 - 有几个 agent 客户端在跑，就并列显示几个，各自带自己的水位，互不覆盖。
-  DSH 的水位来自 `persona_gauge.py`，Hermes 的来自守护写的 `ops\hctx.json`；
-  没有水位源的客户端只报「在跑」。
+  DSH 的水位**只认壳的 `pressureTokens`**（`persona_gauge.dsh_pressure()`，壳判压缩
+  用的就是那个数）；Hermes 的来自守护写的 `ops\hctx.json`；没有水位源的客户端只报「在跑」。
+  `ops\dsh-ctx.json`（账本增量）只留痕/审计，**不再参与显示**——同一个数只能有一个来源。
 - 图标是同心进度环：最外圈第一个客户端、往里第二圈……环长=各自占用百分比。
 - 悬停提示一行并列：`DSH 123K/1.0M 12% · Hermes 125K/1.0M 12%`。
 - 菜单「状态」：逐个客户端 + 守护各任务最近一次结果。
 - 只读不代办：托盘不派活、不改状态，只显示。
 
 启动：
-  D:\ProgramData\SysPersona-Runtime\python\pythonw.exe persona_tray.py
+  <runtime>\python\pythonw.exe persona_tray.py      # 或 $env:PERSONA_PY
 自检：
   同上 --probe 只打印一帧状态然后退出（不进托盘）。
+
+环境变量：SYSPERSONA_ROOT（旧名 PERSONA_ROOT / MEM / SYSPERSONA_MEM 也认）指记忆库根；
+不设就按脚本自身目录向上找含 ops\ 与 sessions\ 的目录，再找不到直接报错——不再写死盘符。
 """
 import json
 import os
@@ -24,6 +28,14 @@ import time
 
 import pystray
 from PIL import Image, ImageDraw
+
+try:
+    from persona_root import root as _persona_root
+except ImportError:   # 仓库布局：tools\tray\ → tools\ctxpack\
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ctxpack"))
+    from persona_root import root as _persona_root
+
 
 # ── 路径：以记忆库为准（托盘在代码仓库里，ops\ 在记忆库） ──────────────
 def _resolve_root():
@@ -36,7 +48,11 @@ def _resolve_root():
         if os.path.isdir(os.path.join(cur, "ops")) and os.path.isdir(os.path.join(cur, "sessions")):
             return cur
         cur = os.path.dirname(cur)
-    return r"D:\4590-PC-文件\AI会话检索记录"
+    found = _persona_root(strict=False)
+    if found:
+        return found
+    raise SystemExit("找不到记忆库根：请设 SYSPERSONA_ROOT（或 MEM）指向记忆库目录；"
+                     "托盘不再退回某台机器的路径。")
 
 
 ROOT = _resolve_root()
@@ -47,8 +63,29 @@ LOG = os.path.join(OPS, "persona.log")
 PY = os.path.join(os.path.dirname(sys.executable), "python.exe")
 GAUGE = os.path.join(ROOT, "persona_gauge.py")
 
+# 注入告警（2026-11-10）：状态/三档判定/提示音都在记忆库的 persona_inject.py 里，
+# 托盘只读它，阈值不在这里复制一份。
+# 不能直接 `import persona_inject`：仓库 tools\ctxpack 下也有一份旧版，会抢先命中。
+def _load_inject():
+    path = os.path.join(ROOT, "persona_inject.py")
+    if not os.path.exists(path):
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("persona_inject_live", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+INJ = _load_inject()
+if INJ is not None and not hasattr(INJ, "evaluate_state"):
+    INJ = None          # 旧版 persona_inject（没有告警函数）：托盘照常跑，只是不显示注入档
+
 STALE = 180          # 秒：状态文件多久没更新算守护挂了
-GAUGE_EVERY = 60     # 秒：DSH 水位多久测一次（gauge 一次约 1.7 秒，别太勤）
+GAUGE_EVERY = 60     # 秒：DSH 水位多久读一次（直接读壳的缓存文件，很轻；60 秒够用）
 PROC_EVERY = 20      # 秒：进程表缓存
 TICK = 5             # 秒：托盘刷新间隔
 
@@ -68,7 +105,7 @@ CLIENTS = [
 ]
 
 _PROC = {"at": 0.0, "counts": {}}
-_DSH = {"at": 0.0, "ctx": None, "max": None, "pct": None}
+_DSH = {"at": 0.0, "ctx": None, "max": None, "pct": None, "note": ""}
 _LOCK = threading.Lock()
 
 
@@ -96,6 +133,19 @@ def human(n):
     if n < 1000000:
         return "%.0fK" % (n / 1000.0)
     return "%.1fM" % (n / 1000000.0)
+
+
+def human_win(n):
+    """窗口大小：先按两位小数取整再显示一位（1.048576M → 1.1M）。
+
+    壳的 contextWindow 真值是 1,048,576；旧版是把 gauge 打印的「上限 1.05M」再
+    四舍五入成 1.1M。这里保持同一显示，**不因为换了数据源就改视觉**。
+    """
+    if n is None:
+        return "?"
+    if n >= 1000000:
+        return "%.1fM" % round(n / 1000000.0, 2)
+    return human(n)
 
 
 def color_of(pct):
@@ -133,11 +183,45 @@ def proc_counts():
 
 
 # ── 水位源 ───────────────────────────────────────────────────────────
-def dsh_watermark(force=False):
-    now = time.time()
-    with _LOCK:
-        if not force and now - _DSH["at"] < GAUGE_EVERY and _DSH["ctx"] is not None:
-            return dict(_DSH)
+# 2026-11-10：**显示只认壳的 pressureTokens**（persona_gauge.dsh_pressure()）。
+# `ops\dsh-ctx.json` 是账本增量（两次快照相减/调用数），和壳判压缩用的那个数实测
+# 差一百多 K；它现在只留痕/审计，**不再参与显示**——同一个数只能有一个来源。
+WIN_FALLBACK = 1048576      # 壳的 contextWindow 真值（1 MiB）：窗口读不到时按它显示
+
+
+def _load_gauge():
+    """从记忆库直接加载 persona_gauge，用它的 `dsh_pressure()` 取数。
+
+    不能 `import persona_gauge`：仓库 tools\\ctxpack 下也有一份旧版会抢先命中。
+    也不能去解析 gauge 的 stdout：`[上下文]` 那行走的是兜底链
+    （pressureTokens → 账本增量 → Hermes → 账本平均），pressureTokens 缺失时它会
+    悄悄换成别处的数——那就又变成「两个入口两个水位」了。
+    """
+    path = os.path.join(ROOT, "persona_gauge.py")
+    if not os.path.exists(path):
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("persona_gauge_live", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod if hasattr(mod, "dsh_pressure") else None
+    except Exception:
+        return None
+
+
+GAUGE_MOD = _load_gauge()
+# 阈值只在 persona_limits.py 定义；gauge 已经把它 import 进来了，这里借它的。
+_LIMIT = getattr(GAUGE_MOD, "LIMIT", None) or 1000000
+
+
+def _legacy_dsh():
+    """**旧读法**（只在 import 失败时降级用）：跑 persona_gauge.py 解析 stdout。
+
+    返回 (ctx, max, pct)，一行都解析不出来就全 None。注意这一行可能是兜底链给的数
+    （含 ops\\dsh-ctx.json 的 last），所以调用方必须在 tooltip 上明标 `(旧读法)`，
+    不许静默冒充壳口径。
+    """
     ctx = mx = pct = None
     try:
         out = subprocess.run([PY, GAUGE], capture_output=True, text=True,
@@ -146,7 +230,7 @@ def dsh_watermark(force=False):
         for line in out.splitlines():
             if "[上下文]" in line:
                 seg = line.split("·")
-                ctx = _parse_k(seg[0].split("]")[-1].strip())
+                ctx = _parse_k(seg[0].split("]")[-1].strip().lstrip("~"))
                 for s in seg[1:]:
                     if "%" in s:
                         try:
@@ -158,8 +242,37 @@ def dsh_watermark(force=False):
                 break
     except Exception:
         pass
+    return ctx, mx, pct
+
+
+def dsh_watermark(force=False):
+    """DSH 水位：只认壳的 pressureTokens；读不到就 ctx=None，**不许拿旧数冒充**。"""
+    now = time.time()
     with _LOCK:
-        _DSH.update({"at": now, "ctx": ctx, "max": mx, "pct": pct})
+        if not force and _DSH["at"] and now - _DSH["at"] < GAUGE_EVERY:
+            return dict(_DSH)
+    press = mx = pct = None
+    note = ""
+    if GAUGE_MOD is not None:
+        try:
+            press, _surface, win = GAUGE_MOD.dsh_pressure()
+        except Exception:
+            press, win = 0, 0
+        mx = win or WIN_FALLBACK
+        if press and press > 0:
+            pct = 100.0 * press / (win or _LIMIT)
+        else:
+            press, pct = None, None      # 读数不可用：显示 ?，不冒充
+            note = " 读数不可用"
+    else:
+        press, mx, pct = _legacy_dsh()   # 降级：旧读法，明标
+        note = " (旧读法)"
+        if press is None:
+            note += " 读数不可用"
+        elif mx is None:
+            mx = WIN_FALLBACK
+    with _LOCK:
+        _DSH.update({"at": now, "ctx": press, "max": mx, "pct": pct, "note": note})
         return dict(_DSH)
 
 
@@ -191,24 +304,41 @@ def client_rows():
     n = counts.get("DeepSeek Harness.exe", 0)
     # 只显示「正在运行」的客户端：没运行的不进图标、不进提示。
     if n:
-        rows.append({"name": "DSH", "alive": True, "procs": n,
-                     "ctx": d.get("ctx"), "max": d.get("max"), "pct": d.get("pct")})
+        rows.append({"name": "DSH", "alive": True, "procs": n, "wm": True,
+                     "ctx": d.get("ctx"), "max": d.get("max"), "pct": d.get("pct"),
+                     "note": d.get("note") or ""})
 
     h = hermes_watermark()
     hn = counts.get("hermes.exe", 0) + counts.get("Hermes.exe", 0)
     if hn:
-        rows.append({"name": "Hermes", "alive": True, "procs": hn,
+        rows.append({"name": "Hermes", "alive": True, "procs": hn, "wm": bool(h),
                      "ctx": (h or {}).get("ctx"), "max": (h or {}).get("max"),
-                     "pct": (h or {}).get("pct")})
+                     "pct": (h or {}).get("pct"), "note": ""})
 
     for img, label in CLIENTS:
         if label in ("DSH", "Hermes"):
             continue
         c = counts.get(img, 0)
         if c:
-            rows.append({"name": label, "alive": True, "procs": c,
-                         "ctx": None, "max": None, "pct": None})
+            rows.append({"name": label, "alive": True, "procs": c, "wm": False,
+                         "ctx": None, "max": None, "pct": None, "note": ""})
     return rows
+
+
+def wm_part(r):
+    """一个客户端在 tooltip 里的水位片段。
+
+    正常：`DSH 392K/1.1M 37%`（格式与旧版一字不差）。
+    读数不可用：`DSH ?/1.1M 读数不可用`——**宁可显示 ?，也不拿旧数冒充**。
+    """
+    if not r.get("wm"):
+        return "%s 在跑" % r["name"]
+    core = "%s %s/%s" % (r["name"],
+                         human(r["ctx"]) if r["ctx"] is not None else "?",
+                         human_win(r["max"]))
+    if r["ctx"] is not None and r["pct"] is not None:
+        core += " %.0f%%" % r["pct"]
+    return core + (r.get("note") or "")
 
 
 # ── 守护健康 ─────────────────────────────────────────────────────────
@@ -234,35 +364,39 @@ def daemon_health():
 def snapshot():
     rows = client_rows()
     ok, msg, tasks = daemon_health()
+    inj = INJ.evaluate_state() if INJ else None
 
     # 竖条顺序 = 客户端顺序（位置固定，便于辨认：左=DSH，右=下一个）
     bars = [(color_of(r["pct"]), r["pct"], r["ctx"] is not None) for r in rows]
 
-    parts = []
-    for r in rows:
-        if r["ctx"] is not None:
-            parts.append("%s %s/%s %s" % (r["name"], human(r["ctx"]), human(r["max"]),
-                                          ("%.0f%%" % r["pct"]) if r["pct"] is not None else "?"))
-        else:
-            parts.append("%s 在跑" % r["name"])
+    parts = [wm_part(r) for r in rows]
     title = "SysPersona · " + (" · ".join(parts) if parts else "没有客户端在跑")
     if not ok:
         title += " · 守护异常"
-    return {"bars": bars, "title": title, "rows": rows, "daemon": (ok, msg, tasks)}
+    if inj and inj["level"] != "ok":
+        title += " · " + inj["text"]
+    return {"bars": bars, "title": title, "rows": rows, "daemon": (ok, msg, tasks),
+            "inject": inj}
 
 
 # ── 画图标：一个客户端一个正方形，几个就并排几个 ─────────────────────
-def make_icon(bars):
+def make_icon(bars, alarm="ok"):
     """bars = [(color, pct, 有无水位)]；只放「正在运行」的客户端。
 
     n 个客户端 → 画布横向切成 n 个正方形（边长 = 64/n），从左到右排开：
     1 个 = 一个满尺寸正方形，2 个 = 两个并排，4 个 = 四个；正方形里从底部
     往上填充水位高度，颜色按各自水位（绿 / 黄 / 红）。
+
+    alarm == "warn"/"error" 时整块底色变黄/红（注入发不出去），条块压成白色，
+    保证一眼能看出「告警」而不是普通水位。
     """
     S = 64
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     n = len(bars)
+    alarm_bg = {"warn": (230, 170, 40), "error": (220, 60, 60)}.get(alarm)
+    if alarm_bg:
+        d.rectangle((0, 0, S - 1, S - 1), fill=alarm_bg + (255,))
     if n == 0:
         d.rectangle((22, 22, S - 22, S - 22), outline=(120, 120, 120, 255), width=3)
         return img
@@ -277,17 +411,31 @@ def make_icon(bars):
         if has and pct is not None:
             frac = max(0.0, min(1.0, pct / 100.0))
             h = max(1, int(round(frac * side)))
-            d.rectangle((x, y0 + side - h, x + side - 1, y0 + side - 1), fill=color + (255,))
-        d.rectangle((x, y0, x + side - 1, y0 + side - 1), outline=color + (255,), width=1)
+            d.rectangle((x, y0 + side - h, x + side - 1, y0 + side - 1),
+                        fill=((255, 255, 255) if alarm_bg else color) + (255,))
+        d.rectangle((x, y0, x + side - 1, y0 + side - 1),
+                    outline=((30, 30, 30) if alarm_bg else color) + (255,), width=1)
     return img
 
 
 # ── 弹窗：详细状态 ───────────────────────────────────────────────────
 def detail_text(s):
-    out = [s["title"], "", "【客户端】"]
+    out = [s["title"], ""]
+    inj = s.get("inject")
+    if inj:
+        out.append("【注入】%s" % inj.get("text", ""))
+        out.append("")
+    out.append("【客户端】")
     if s["rows"]:
         for r in s["rows"]:
-            wm = ("%s / %s" % (human(r["ctx"]), human(r["max"]))) if r["ctx"] is not None else "无水位源"
+            if r["ctx"] is not None:
+                wm = "%s / %s%s" % (human(r["ctx"]), human_win(r["max"]),
+                                    r.get("note") or "")
+            elif r.get("wm"):
+                wm = "? / %s%s" % (human_win(r["max"]),
+                                   r.get("note") or " 读数不可用")
+            else:
+                wm = "无水位源"
             out.append("  %s %-8s %-18s %s" % ("●" if r["alive"] else "○", r["name"], wm,
                                                ("%d 进程" % r["procs"]) if r["procs"] else ""))
     else:
@@ -353,11 +501,26 @@ def refresh(icon):
     while True:
         try:
             s = snapshot()
-            icon.icon = make_icon(s["bars"])
+            icon.icon = make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok"))
             icon.title = s["title"][:120]
+            if INJ:
+                INJ.check_alert()      # 上升沿才响；marker 落盘，不会每轮都响
         except Exception:
             pass
         time.sleep(TICK)
+
+
+def retry_inject(icon=None, item=None):
+    """菜单「立即重试一次注入」：只跑探针（选窗+抢焦点），不真发内容。"""
+    script = os.path.join(ROOT, "persona_inject.py")
+    try:
+        r = subprocess.run([PY, script, "--probe"], cwd=ROOT, capture_output=True,
+                           text=True, timeout=40, encoding="utf-8", errors="replace",
+                           creationflags=NO_WINDOW)
+        msg = ((r.stdout or "") + (r.stderr or "")).strip() or ("exit %d" % r.returncode)
+    except Exception as e:
+        msg = "探针失败：%s" % e
+    _dialog(msg[:800], "立即重试一次注入（只探测，不发内容）")
 
 
 
@@ -454,15 +617,32 @@ def submit_task(icon=None, item=None):
 
 def main():
     if "--probe" in sys.argv:
-        print(detail_text(snapshot()))
+        s = snapshot()
+        ev = INJ.check_alert() if INJ else None
+        if ev:
+            print("[托盘] 注入档位=%s → 图标底色=%s" % (
+                ev.get("level"),
+                {"error": "红", "warn": "黄"}.get(ev.get("level"), "无告警（按水位上色）")))
+        print(detail_text(s))
+        if ev:
+            if ev.get("beeped"):
+                print("[提示音] 响（上升沿 %s → %s；MessageBeep %s）" % (
+                    ev.get("prev"), ev.get("level"),
+                    "MB_ICONHAND" if ev.get("level") == "error" else "MB_ICONEXCLAMATION"))
+            elif ev.get("level") == "ok":
+                print("[提示音] 不响（正常/已恢复；上次报过 %s）" % ev.get("prev"))
+            else:
+                print("[提示音] 不响（当前 %s 与上次已报的 %s 同档，只响一次）" % (
+                    ev.get("level"), ev.get("prev")))
         return
     s = snapshot()
     icon = pystray.Icon(
         "SysPersona",
-        icon=make_icon(s["bars"]),
+        icon=make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok")),
         title=s["title"][:120],
         menu=pystray.Menu(
             pystray.MenuItem("状态", show_status, default=True),
+            pystray.MenuItem("立即重试一次注入", retry_inject),
             pystray.MenuItem("任务池（只读）", show_pool),
             pystray.MenuItem("派一条…", submit_task),
             pystray.MenuItem("打开日志", open_log),

@@ -23,10 +23,51 @@ try {
     $OutputEncoding = $utf8
 } catch { }
 
-$Repo    = 'D:\文档\SysPersona-OS'
-$Mem     = 'D:\4590-PC-文件\AI会话检索记录'
-$Py      = 'D:\ProgramData\SysPersona-Runtime\python\python.exe'
-$Pyw     = 'D:\ProgramData\SysPersona-Runtime\python\pythonw.exe'
+# 路径全部来自变量/环境变量，**不再写死任何机器的盘符**：
+#   SYSPERSONA_REPO     代码仓库根；不设就按本文件位置推导（tools\persona\ → 上两级）
+#   SYSPERSONA_ROOT     记忆库根（旧名 PERSONA_ROOT 也认）；必填
+#   PERSONA_PY          Python 解释器；不设就试 SYSPERSONA_RUNTIME\python\python.exe
+#   SYSPERSONA_RUNTIME  运行时根；不设就试 %ProgramData%\SysPersona-Runtime（存在才算）
+# 缺 SYSPERSONA_ROOT 或 PERSONA_PY：直接报错退出（exit 2），不会去猜路径。
+$Repo = $env:SYSPERSONA_REPO
+if (-not $Repo) {
+    $Repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+}
+$Mem = if ($env:SYSPERSONA_ROOT) { $env:SYSPERSONA_ROOT } else { $env:PERSONA_ROOT }
+$Py = $env:PERSONA_PY
+if (-not $Py) {
+    $rt = $env:SYSPERSONA_RUNTIME
+    if (-not $rt -and $env:ProgramData) { $rt = Join-Path $env:ProgramData 'SysPersona-Runtime' }
+    if ($rt) {
+        $cand = Join-Path $rt 'python\python.exe'
+        if (Test-Path -LiteralPath $cand -PathType Leaf) { $Py = $cand }
+    }
+}
+$Pyw = $null
+if ($Py) {
+    $Pyw = Join-Path (Split-Path -Parent $Py) 'pythonw.exe'
+    if (-not (Test-Path -LiteralPath $Pyw -PathType Leaf)) { $Pyw = $null }
+}
+
+if (-not $Mem) {
+    Write-Host '[FAIL] 没设置 SYSPERSONA_ROOT（记忆库根目录）。例：'
+    Write-Host '       $env:SYSPERSONA_ROOT = ''<记忆库目录>'''
+    Write-Host '[停止] 未改动系统。'
+    exit 2
+}
+if (-not $Py) {
+    Write-Host '[FAIL] 没设置 PERSONA_PY（Python 解释器）。例：'
+    Write-Host '       $env:PERSONA_PY = ''<运行时>\python\python.exe'''
+    Write-Host '[停止] 未改动系统。'
+    exit 2
+}
+if (-not $Pyw) {
+    Write-Host ('[FAIL] Python 旁边没有 pythonw.exe：' + $Py)
+    Write-Host '       托盘与计划任务走 GUI 入口，必须用 pythonw.exe。'
+    Write-Host '[停止] 未改动系统。'
+    exit 2
+}
+
 $Tray    = Join-Path $Repo 'tools\tray\persona_tray.py'
 $DaemonPy = Join-Path $Mem 'persona_daemon.py'
 $DigestPy = Join-Path $Mem 'persona_digest.py'

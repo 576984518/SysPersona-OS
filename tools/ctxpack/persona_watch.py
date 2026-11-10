@@ -16,6 +16,10 @@ r"""persona_watch.py — Hermes 会话实时导出守护
   pythonw persona_watch.py            # 常驻（无窗口）
   python  persona_watch.py --once     # 只跑一次，用于测试
   python  persona_watch.py --verbose  # 前台看日志
+
+环境变量：SYSPERSONA_ROOT = 记忆库根（旧名 PERSONA_ROOT 也认）；
+PERSONA_HERMES_HOME = Hermes 家目录（里面要有 state.db）。
+前者缺了直接抛错；后者缺了就报一句「没配置 PERSONA_HERMES_HOME」并退出，不再猜机器路径。
 """
 import argparse, os, subprocess, sys, time
 
@@ -24,9 +28,11 @@ try:
 except Exception:
     pass
 
+from persona_root import hermes_home as _hermes_home, root as _persona_root
 
-ROOT = r"D:\4590-PC-文件\AI会话检索记录"
-DB = r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\state.db"
+ROOT = _persona_root()
+_HERMES = _hermes_home()
+DB = os.path.join(_HERMES, "state.db") if _HERMES else None
 PY = sys.executable
 POLL = 3          # 轮询间隔（秒）
 QUIET = 3         # 连续多久没变化才认为写完了
@@ -73,6 +79,9 @@ def main():
         once(verbose=True)
         return
 
+    if not DB:
+        raise SystemExit("没配置 PERSONA_HERMES_HOME（Hermes 家目录，里面要有 state.db）；"
+                         "本脚本不再猜某台机器的路径。")
     if not os.path.exists(DB):
         raise SystemExit("找不到 state.db: %s" % DB)
 

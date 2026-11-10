@@ -23,6 +23,10 @@ r"""persona_digest.py — 每日自检：六项一起看，结论落到一张纸
     python persona_digest.py --json     # 只打印 JSON，不写文件
 
 退出码：0 = 全部 OK/WARN；1 = 有 FAIL。
+
+环境变量：SYSPERSONA_ROOT/PERSONA_ROOT = 记忆库根；LOCALAPPDATA 用来找
+`%LOCALAPPDATA%\SysPersona` 下的备份 zip（没有就只查库里的 `备份\`，不算错）。
+库根不设就按本文件所在目录推导（要有 ops\），推不出来直接抛错。
 """
 import argparse
 import io
@@ -31,12 +35,10 @@ import os
 import sys
 import time
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-# 记忆库根：环境变量优先；在库里跑就用库目录；被复制到仓库（tools/ctxpack）时仍指向真库。
-ROOT = os.environ.get("PERSONA_ROOT") or os.environ.get("SYSPERSONA_ROOT")
-if not ROOT:
-    ROOT = _HERE if os.path.isdir(os.path.join(_HERE, "ops")) \
-        else r"D:\4590-PC-文件\AI会话检索记录"
+from persona_root import localappdata as _localappdata, root as _persona_root
+
+# 记忆库根：环境变量优先；在库里跑就用库目录（有 ops\）；推导不出来就报错，不再写死路径。
+ROOT = _persona_root()
 sys.path.insert(0, ROOT)
 
 try:
@@ -230,7 +232,7 @@ def check_capture():
 
 def latest_backup_zip():
     bases = [os.path.join(ROOT, "备份")]
-    local = os.environ.get("LOCALAPPDATA")
+    local = _localappdata()
     if local:
         bases.append(os.path.join(local, "SysPersona"))
     newest, newest_mtime = "", 0.0

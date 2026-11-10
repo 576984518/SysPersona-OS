@@ -7,7 +7,10 @@ r"""persona_tray.py — 托盘状态灯（只显示与退出，不代办任何�
 - 菜单：打开日志 / 打开记忆库 / 退出托盘。
 
 启动：快捷方式或开机项，直接跑：
-  D:\ProgramData\SysPersona-Runtime\python\pythonw.exe persona_tray.py
+  <runtime>\python\pythonw.exe persona_tray.py      # 或 $env:PERSONA_PY
+
+环境变量：不需要（ROOT 取本脚本所在目录，ops\ 就在旁边）；若单独拷走，
+用 PERSONA_ROOT 指定记忆库根即可。不设任何变量也能跑。
 """
 import io
 import json

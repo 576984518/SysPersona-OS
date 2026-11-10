@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 score.py — 记忆三维权重打分器（原型）
 
 设计来自 2026-11-08 的讨论：
@@ -11,6 +11,9 @@ score.py — 记忆三维权重打分器（原型）
   python score.py            # 全量重建 memory.db
   python score.py --stats    # 只看统计
   python score.py --top 20   # 看总分最高的 N 条
+
+环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认），重建的是
+`<根>\memory.db`；不设就按脚本所在目录推导，推不出来直接抛错。
 """
 
 import argparse
@@ -21,7 +24,9 @@ import re
 import sqlite3
 import time
 
-ROOT = r"D:\4590-PC-文件\AI会话检索记录"
+from persona_root import root as _persona_root
+
+ROOT = _persona_root()
 DB = os.path.join(ROOT, "memory.db")
 
 # ---------- 词表 ----------

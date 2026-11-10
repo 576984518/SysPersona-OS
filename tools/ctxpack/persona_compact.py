@@ -15,6 +15,10 @@ r"""persona_compact.py — 水位到线就自己压缩（用注入通道发 /com
   python persona_compact.py check            # 到线就压
   python persona_compact.py check --dry-run  # 只报告会不会压
   python persona_compact.py check --threshold 350000 --cooldown 900
+
+环境变量：PERSONA_NODE = node 可执行文件（不设就找 <runtime>\node\bin\node.exe，再找
+PATH）；找不到就跳过导出并说明原因，不会瞎起进程。ROOT 取本脚本所在目录（脚本与
+库里的其它模块同级），不需要额外变量。
 """
 import argparse
 import io
@@ -30,6 +34,8 @@ try:
 except Exception:
     pass
 
+from persona_root import node as _node
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
 STATE = os.path.join(OPS, "compact-state.json")
@@ -37,7 +43,7 @@ LOG = os.path.join(OPS, "compact.jsonl")
 PY = sys.executable
 GAUGE = os.path.join(ROOT, "persona_gauge.py")
 HOME = os.path.expanduser("~")
-NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
+NODE = _node()
 EXPORTER = os.path.join(ROOT, "dsh_export.js")
 MIRROR = os.path.join(ROOT, "persona_mirror.py")
 DEFAULT_THRESHOLD = 350_000      # 到 350K 就该压了（壳的自动线是 ~367K，这里提前一点）
@@ -151,6 +157,8 @@ def ensure_mirror(trigger=""):
     if srcs and (time.time() - os.path.getmtime(srcs[0])) < FRESH_EXPORT:
         src = srcs[0]
     if not src:
+        if not NODE:
+            return False, "没配置 PERSONA_NODE（找不到 node：设变量，或把 <runtime>\\node\\bin 放进 PATH）"
         stamp = time.strftime("%Y%m%d-%H%M")
         src = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "电脑会话",
                            "续接前-%s.md" % stamp)

@@ -11,6 +11,10 @@
  *
  * 它只做两件事：跳转就抓、活着就写心跳。不做轮询兜底——
  * 不按 F5，DOM 不会变，轮询本来就是空转。
+ *
+ * 环境变量：PERSONA_POWERSHELL = powershell.exe（不设就按 %SystemRoot% 拼）；
+ * LOCALAPPDATA 用来放心跳 / 日志 / last.json（缺了就落在本脚本目录）。
+ * 状态文件与包装脚本都在 %LOCALAPPDATA%\SysPersona\ 下，不写死盘符。
  */
 import { spawn } from 'node:child_process';
 import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -26,6 +30,8 @@ const LOG = join(dirname(HB), 'navwatch.log');
 const DEBOUNCE_MS = 6000;   // 重载后 CDP target 会换，等页面稳定再抓
 let ws = null, capturing = false, pending = null, lastLog = 0, retries = 0;
 const STATE = join(process.env.LOCALAPPDATA || HERE, 'SysPersona', 'last.json');
+const PS = process.env.PERSONA_POWERSHELL ||
+  join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
 function log(msg) {
   const line = `${new Date().toLocaleString('sv-SE').slice(5, 19)}  ${msg}\n`;
@@ -50,7 +56,7 @@ function capture(reason) {
   log(`触发抓取（${reason}）`);
   // 必须走 PowerShell 包装脚本：归档 + 重出 HANDOFF + 写 last.json 都在它里面。
   // 直接调 deepseek_sweep.js 只会落盘 .md，后面三步全被绕过（2026-11-08 踩过）。
-  const ps = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  const ps = PS;
   const wrapper = join(process.env.LOCALAPPDATA || HERE, 'SysPersona', 'sweep_live.ps1');
   const p = spawn(ps, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapper], { stdio: 'ignore' });
   p.on('exit', (code) => {
