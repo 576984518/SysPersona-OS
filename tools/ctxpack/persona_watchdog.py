@@ -138,6 +138,27 @@ def heartbeat_age():
     return min(ages) if ages else 1e9
 
 
+def heartbeat_interval():
+    """一拍多少秒：读守护自测的 beat_s；没有就退回它配置的 heartbeat；再没有 60。"""
+    st = _read_json(os.path.join(OPS, "persona-status.json"), {}) or {}
+    for k in ("beat_s", "beat_cfg"):
+        v = st.get(k)
+        if isinstance(v, (int, float)) and 1 <= v <= 3600:
+            return float(v)
+    return 60.0
+
+
+def stale_after(stale=None):
+    """判定阈值：显式给的秒数 > 计划里的 stale_after > 节拍 × missing_beats。"""
+    if stale is not None:
+        return float(stale)
+    p = plan()
+    fixed = p.get("stale_after")
+    if isinstance(fixed, (int, float)) and fixed > 0:
+        return float(fixed)
+    return max(60.0, heartbeat_interval() * float(p.get("missing_beats", 3) or 3))
+
+
 def _parse_ts(s):
     try:
         return time.mktime(time.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S"))
@@ -264,7 +285,8 @@ def default_plan():
         "note": "容灾计划：后台程序每分钟读这一份；条件到了按 task 触发（任务要先用 install 建好）。"
                 "改这里不用改代码。",
         "enabled": False,                  # 总开关；dr on / dr off 就是改这一行
-        "stale_after": 300,                # 心跳多少秒没动算死
+        "missing_beats": 3,              # 心跳允许漏几拍才算死（按实测节拍算）
+        "stale_after": None,             # 显式覆盖秒数；None = 用 节拍 × 漏拍数
         "cooldown": 600,                   # 两次动手之间最少隔多少秒
         "max_per_hour": 3,                 # 每小时最多动手几次
         "hold_file": "ops/dr-hold",        # 有这个文件就一律不动手
@@ -376,10 +398,10 @@ def decide(stale=None, net_override=None, prov_override=None):
     """
     ch = chain()
     age = heartbeat_age()
-    if stale is None:
-        stale = float(plan().get("stale_after", 300))
+    stale = stale_after(stale)
     d = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "heartbeat_age": round(age, 1),
-         "stale_after": stale, "switch": switch()["on"]}
+         "stale_after": stale, "beat_s": heartbeat_interval(),
+         "switch": switch()["on"]}
     if age <= stale:
         d.update({"action": "ok", "why": "心跳正常（%.0f 秒前）" % age})
         # 心跳正常但客户端没了（崩了 / 被人关了）：容灾最后一道，重启客户端
@@ -812,6 +834,11 @@ def main(argv=None):
     else:
         print("看门狗：%s ｜ %s" % (d["action"], d["why"]))
         print("  开关：%s" % ("开" if d["switch"] else "关"))
+        mb = plan().get("missing_beats") if not plan().get("stale_after") else None
+        print("  心跳：%.0f 秒/拍%s → %.0f 秒算死"
+              % (d.get("beat_s") or 0,
+                 (" × 允许漏 %s 拍" % mb) if mb else "（阈值显式指定）",
+                 d.get("stale_after") or 0))
         if d.get("current"):
             print("  当前模型：%s · %s" % (d["current"]["provider"] or "?",
                                         d["current"]["model"] or "?"))

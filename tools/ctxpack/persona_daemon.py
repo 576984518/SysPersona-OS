@@ -1304,15 +1304,30 @@ class PersonaDaemon:
         self.next_due = {k: 0 for k in TASKS}
         self.started = time.time()
         self.stop = False
+        self.beats = []          # 最近几次心跳的时刻，用来自测「一拍多少秒」
         self._last_export = 0.0
 
+    def beat_interval(self):
+        """实测心跳节拍（秒）：最近几次心跳间隔的中位数；样本不够就退回配置值。"""
+        b = self.beats[-9:]
+        diffs = sorted(b[i + 1] - b[i] for i in range(len(b) - 1))
+        diffs = [x for x in diffs if 0 < x < 3600]
+        if len(diffs) >= 2:
+            return diffs[len(diffs) // 2]
+        return float(self.cfg.get("heartbeat", 60) or 60)
+
     def status(self, extra=None):
+        if _IS_DAEMON or not self.beats:
+            self.beats.append(time.time())
+            self.beats = self.beats[-9:]
         d = {
             "at": now(),
             "uptime_s": int(time.time() - self.started),
             # pid 只报「真正常驻的那个」：--once 跑一拍时不能把守护的 pid 顶掉——
             # 看门狗靠这个 pid 判守护死活，2026-11-10 实测被顶掉过（误判 → 起了第二个守护）。
             "pid": _resident_pid(),
+            "beat_s": round(self.beat_interval(), 1),
+            "beat_cfg": float(self.cfg.get("heartbeat", 60) or 60),
             "tasks": {k: dict(v, next_in=int(max(0, self.next_due[k] - time.time())))
                       for k, v in self.state.items()},
         }
@@ -1399,6 +1414,7 @@ class PersonaDaemon:
                         self._last_export = t
                         self.next_due["export"] = 0
 
+            self.cfg["dr"] = max(3.0, self.beat_interval())   # 容灾巡检 = 一拍一次
             for name in TASKS:
                 st = self.state[name]
                 if float(self.cfg.get(name, 1) or 0) <= 0:
