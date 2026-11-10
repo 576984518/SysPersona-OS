@@ -509,6 +509,21 @@ def switch_model(cmd, model=""):
     return _run(args)
 
 
+def session_model_sync(drop_reasoning=True):
+    r"""把「当前会话记住的模型」也改成配置里的那个。
+
+    不做这一步的话，配置改了也白改：会话开窗时恢复的是它自己记着的 lastUsed
+    （~\\.dsh\\storages\\session_projcache\\sessions\\session-<id>.json）。
+    """
+    prov, model = current_model()
+    if not (prov and model):
+        return False, "读不到当前配置里的 provider/model"
+    args = [PY_EXE, os.path.join(ROOT, "persona_session_model.py"), "set", prov, model]
+    if drop_reasoning:
+        args.append("--drop-reasoning")
+    return _run(args)
+
+
 def revive_daemon():
     """把守护拉起来。用 Popen 起（`subprocess.run` 会一直等守护退出 → 任务挂住）。"""
     if daemon_alive():
@@ -707,11 +722,11 @@ def enact(what, dry=False):
     todo = {"daemon": [("拉起守护", "daemon")],
             "restart": [("杀客户端", "kill"), ("拉起客户端", "launch")],
             "local": [("杀客户端", "kill"), ("改配置 → 本地档", "switch"),
-                       ("拉起客户端", "launch")],
+                       ("本会话也切到本地", "session"), ("拉起客户端", "launch")],
             "free": [("杀客户端", "kill"), ("改配置 → 硅基免费档", "switch"),
-                      ("拉起客户端", "launch")],
+                      ("本会话也切到硅基", "session"), ("拉起客户端", "launch")],
             "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
-                      ("拉起客户端", "launch")]}.get(what)
+                      ("本会话也切回 DeepSeek", "session"), ("拉起客户端", "launch")]}.get(what)
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
         return 2
@@ -727,6 +742,8 @@ def enact(what, dry=False):
         elif kind == "switch":
             time.sleep(0.5)                # 等文件句柄彻底放开
             ok, msg = switch_model(what)
+        elif kind == "session":
+            ok, msg = session_model_sync(drop_reasoning=(what != "paid"))
         else:
             time.sleep(1.5)                # 让触发我们的人先退干净
             ok, msg = launch_client()
