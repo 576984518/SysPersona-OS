@@ -70,6 +70,7 @@ HOLD = os.path.join(OPS, "dr-hold")               # 蹲住闸：有它就绝不�
 TASK_DIR = os.path.join(OPS, "tasks")             # 计划任务的 XML 配置（提前落盘）
 NET_STATE = os.path.join(OPS, "dr-net.json")      # 网络连续不通的拍数
 DR_SESS_DIR = os.path.join(OPS, "session-dr")      # 每个会话一份容灾档案（建一次）
+REQ = os.path.join(OPS, "switch-request.json")     # 手动切档请求（前台只写这个文件）
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -923,6 +924,46 @@ def preflight_line():
                "开" if d.get("switch_on") else "关"))
 
 
+def request_switch(to, by="cli", dry=False):
+    """**手动切档的入口**：只写一个请求文件，由后台接手执行。
+
+    为什么不让前台直接杀：从客户端窗口里起的进程会被 	askkill /T 连坐；
+    而且断网、窗口关了、终端没了的时候，前台根本叫不动。
+    后台（守护的 dr 任务 60 秒一拍、外层 SysPersona-Watchdog 1 分钟一拍）看到这个文件就干活。
+    """
+    to = (to or "").strip().lower()
+    if to not in ("cloud", "local", "paid"):
+        print("用法：python persona_watchdog.py request cloud | local | paid")
+        return 2
+    if dry:
+        print("会下请求：%s（--dry，没写文件）" % to)
+        return 0
+    d = {"to": to, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": by}
+    _write_json(REQ, d)
+    print("已下请求：%s（%s）\n后台下一拍接手（≤60 秒），窗口会断几秒再回来。" % (to, d["at"]))
+    return 0
+
+
+def fulfill_request():
+    """后台每拍看一眼：有请求就执行（先删文件，避免重复）。返回一句话，没有就空串。"""
+    d = _read_json(REQ, None)
+    if not isinstance(d, dict):
+        return ""
+    try:
+        os.remove(REQ)
+    except OSError:
+        pass
+    to = (d.get("to") or "").strip().lower()
+    task = {"cloud": "SysPersona-DR-Free", "local": "SysPersona-DR-Local",
+            "paid": "SysPersona-DR-Paid"}.get(to)
+    if not task:
+        return "不认识的切档请求：%s" % to
+    if not task_exists(task):
+        ensure_tasks()
+    ok, msg = task_run(task)
+    return "手动切档 %s → %s（%s）" % (to, "已触发" if ok else "触发失败", msg or "")
+
+
 def pick(which, dry=False):
     """手动选一个模型档并执行：cloud（云端免费）/ local（本地）/ paid（云端收费）。
 
@@ -998,8 +1039,11 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
     后台程序（persona_daemon 的 `dr` 任务、计划任务 SysPersona-Watchdog）都只调这一个入口，
     所以「什么时候动手」只有一处实现，不会两边打架（冷却看同一份 dr-state.json）。
     """
+    manual = fulfill_request()
     d = decide(stale, net_override=net_override, prov_override=prov_override)
     acted = []
+    if manual:
+        acted.append({"step": "手动请求", "ok": True, "msg": manual})
     if act and d["action"] != "ok":
         if dry:                            # 演练不动手，就不看冷却
             acted = execute(d, dry=True)
@@ -1033,7 +1077,7 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
 def main(argv=None):
     ap = argparse.ArgumentParser(description="看门狗 / 容灾保底（心跳 → 网络 → 模型链 → 动作）")
     ap.add_argument("cmd", nargs="?", default="check",
-                    choices=["check", "dr", "install", "enact", "pick", "verify", "tasks", "preflight"])
+                    choices=["check", "dr", "install", "enact", "pick", "request", "verify", "tasks", "preflight"])
     ap.add_argument("arg", nargs="?", default="")
     ap.add_argument("--stale", type=float, default=None,
                     help="心跳超过多少秒算死（默认取 dr-plan.json 的 stale_after）")
@@ -1065,6 +1109,9 @@ def main(argv=None):
 
     if a.cmd == "pick":
         return pick(a.arg, dry=a.dry)
+
+    if a.cmd == "request":
+        return request_switch(a.arg, dry=a.dry)
 
     if a.cmd == "preflight":
         d = preflight()
