@@ -176,8 +176,11 @@ def ensure_mirror(trigger=""):
 
 
 def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
-          do_mirror=True):
+          do_mirror=True, force_ctx=0):
     ctx, err = measure()
+    if force_ctx:                      # 极限实测用：不改真实文件，只假装量到了这个数
+        ctx, err = int(force_ctx), ""
+        print("TEST 强制水位 %dK（真实值不参与判定）" % (ctx // 1000))
     if err:
         print("FAIL " + err)
         return 2
@@ -238,13 +241,14 @@ def main():
     c.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD)
     c.add_argument("--cooldown", type=int, default=DEFAULT_COOLDOWN)
     c.add_argument("--dry-run", action="store_true")
+    c.add_argument("--ctx", type=int, default=0, help="极限实测：假装水位是这个数")
     c.add_argument("--no-mirror", action="store_true",
                    help="跳过镜像（只用于测试；生产环境不许用——没落盘就压等于拿记忆赌运气）")
     a = ap.parse_args()
     if a.cmd != "check":
         ap.print_help()
         return 0
-    return check(a.threshold, a.cooldown, a.dry_run, not a.no_mirror)
+    return check(a.threshold, a.cooldown, a.dry_run, not a.no_mirror, a.ctx)
 
 
 if __name__ == "__main__":
