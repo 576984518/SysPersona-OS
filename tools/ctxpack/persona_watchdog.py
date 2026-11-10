@@ -67,6 +67,7 @@ PLAN = os.path.join(OPS, "dr-plan.json")          # **计划配置文件**：后
 STATE = os.path.join(OPS, "dr-state.json")        # 执行台账（冷却 / 次数）
 HOLD = os.path.join(OPS, "dr-hold")               # 蹲住闸：有它就绝不动手
 TASK_DIR = os.path.join(OPS, "tasks")             # 计划任务的 XML 配置（提前落盘）
+NET_STATE = os.path.join(OPS, "dr-net.json")      # 网络连续不通的拍数
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -159,6 +160,19 @@ def stale_after(stale=None):
     return max(60.0, heartbeat_interval() * float(p.get("missing_beats", 3) or 3))
 
 
+def net_fails(alive):
+    """网络连续几拍不通了（跨进程记在 ops\\dr-net.json；通了就清零）。
+
+    为什么要有它：断网时守护照样发心跳，光看心跳永远等不到「死」——
+    所以断网必须自己数拍子，连续 N 拍不通才动手（N 在 dr-plan.json 的 net_fail_beats）。
+    """
+    st = _read_json(NET_STATE, {}) or {}
+    n = 0 if alive else int(st.get("fails") or 0) + 1
+    _write_json(NET_STATE, {"fails": n, "alive": bool(alive),
+                            "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+    return n
+
+
 def _parse_ts(s):
     try:
         return time.mktime(time.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S"))
@@ -200,7 +214,8 @@ def proc_table(force=False):
         return _PROC_CACHE["rows"]
     try:
         out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
-                             capture_output=True, timeout=25)
+                             capture_output=True, timeout=25,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         txt = (out.stdout or b"").decode("mbcs", "replace")
         rows = []
         for ln in txt.splitlines():
@@ -286,6 +301,7 @@ def default_plan():
                 "改这里不用改代码。",
         "enabled": False,                  # 总开关；dr on / dr off 就是改这一行
         "missing_beats": 3,              # 心跳允许漏几拍才算死（按实测节拍算）
+        "net_fail_beats": 2,             # 网络连续几拍不通就保底（断网不受心跳影响）
         "stale_after": None,             # 显式覆盖秒数；None = 用 节拍 × 漏拍数
         "cooldown": 600,                   # 两次动手之间最少隔多少秒
         "max_per_hour": 3,                 # 每小时最多动手几次
@@ -402,10 +418,31 @@ def decide(stale=None, net_override=None, prov_override=None):
     d = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "heartbeat_age": round(age, 1),
          "stale_after": stale, "beat_s": heartbeat_interval(),
          "switch": switch()["on"]}
+    p = plan()
+
+    # 网线探针每拍都打：断网这条要独立算，不能等心跳死（守护在断网时心跳照常，等不来）
+    net_t = ([net_override] if net_override else
+             (cfg().get("offline_targets") or ["223.5.5.5:443"]))
+    net_t, net_up = probe(net_t)
+    d["network"] = {"targets": net_t, "alive": net_up}
+    pf = net_fails(bool(net_up))
+    d["net_fails"] = pf
+
+    cur_p, cur_m = current_model()
+    d["current"] = {"provider": cur_p, "model": cur_m}
+    local = next((c for c in ch if c.get("cmd") == "local"), ch[-1])
+    is_local = cur_p == local.get("provider")
+
     if age <= stale:
         d.update({"action": "ok", "why": "心跳正常（%.0f 秒前）" % age})
-        # 心跳正常但客户端没了（崩了 / 被人关了）：容灾最后一道，重启客户端
-        if not client_alive():
+        need = int(p.get("net_fail_beats", 2) or 2)
+        if not net_up and pf >= need:
+            if is_local:
+                d.update({"why": "断网中（连续 %d 拍不通），但已经是本地档 → 不动" % pf})
+            else:
+                d.update({"action": "fallback_local", "target": local,
+                          "why": "网络连续 %d 拍不通（心跳还在）→ 保底：切本地模型" % pf})
+        elif not client_alive():           # 心跳正常但客户端没了：崩了 / 被人关了
             d["client_alive"] = False
             d.update({"action": "restart_client",
                       "why": "心跳正常但客户端进程不在了 → 重新拉起"})
@@ -414,18 +451,8 @@ def decide(stale=None, net_override=None, prov_override=None):
     d["daemon_alive"] = daemon_alive()
     d["client_alive"] = client_alive()
 
-    # 网线探针：不通 → 只有本地这一条路
-    net_t = ([net_override] if net_override else
-             (cfg().get("offline_targets") or ["223.5.5.5:443"]))
-    net_t, net_up = probe(net_t)
-    d["network"] = {"targets": net_t, "alive": net_up}
-
-    cur_p, cur_m = current_model()
-    d["current"] = {"provider": cur_p, "model": cur_m}
-
     if not net_up:
-        tgt = next((c for c in ch if c.get("cmd") == "local"), ch[-1])
-        d.update({"action": "fallback_local", "target": tgt,
+        d.update({"action": "fallback_local", "target": local,
                   "why": "心跳 %.0f 秒没动 + 网络不通 → 保底：切本地模型" % age})
         return d
 
@@ -559,6 +586,10 @@ def plan_tasks():
     return [t for t in (plan().get("tasks") or []) if t.get("name")]
 
 
+SWITCH_TASK = {"local": "SysPersona-DR-Local", "free": "SysPersona-DR-Free",
+               "paid": "SysPersona-DR-Paid"}
+
+
 def action_task(d):
     """判定 → 要触发的任务名（空串表示不用动手）。规则来自配置，不写死。"""
     br = (plan().get("branches") or {}).get(d["action"]) or {}
@@ -587,7 +618,8 @@ def task_info(name):
     info = {}
     try:
         out = subprocess.run(["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"],
-                             capture_output=True, timeout=20)
+                             capture_output=True, timeout=20,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         for ln in (out.stdout or b"").decode("mbcs", "replace").splitlines():
             if ":" in ln:
                 k, v = ln.split(":", 1)
@@ -609,7 +641,8 @@ def export_task(name):
     """
     try:
         r = subprocess.run(["schtasks", "/Query", "/TN", name, "/XML"],
-                           capture_output=True, timeout=25)
+                           capture_output=True, timeout=25,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if r.returncode != 0 or not (r.stdout or b"").strip():
             return False, "导出失败：%s" % (r.stdout or b"").decode("mbcs", "replace")[:80]
         os.makedirs(TASK_DIR, exist_ok=True)
@@ -622,7 +655,7 @@ def export_task(name):
 
 
 def import_task(name):
-    """从 `ops\tasks\<名字>.xml` 把任务装回去（现场兜底用）。"""
+    r"""从 `ops\tasks\<名字>.xml` 把任务装回去（现场兜底用）。"""
     p = os.path.join(TASK_DIR, name + ".xml")
     if not os.path.exists(p):
         return False, "没有 XML：%s" % p
@@ -715,6 +748,39 @@ def enact(what, dry=False):
     return 0 if all(x["ok"] for x in out) else 4
 
 
+def pick(which, dry=False):
+    """手动选一个模型档并执行：cloud（云端免费）/ local（本地）/ paid（云端收费）。
+
+    人 2026-11-10 要的：「在后台程序添加切换云端模型、切换本地模型两个选择，
+    对应不同的配置，我手动选择执行，验证生效了，你再用保底心跳测试。」
+    顺序和容灾一致：先关窗口 → 改配置 → 再拉起。
+    """
+    m = {"cloud": ("free", "云端 · 硅基免费档（Qwen/Qwen2.5-7B-Instruct）"),
+         "local": ("local", "本地 · Herdsman（Qwen3:8B，127.0.0.1:8080）"),
+         "paid": ("paid", "云端主 · DeepSeek 收费（deepseek-flash）")}
+    t = m.get((which or "").strip().lower())
+    if not t:
+        print("用法：python persona_watchdog.py pick cloud | local | paid")
+        print("  cloud = 云端免费档（硅基 Qwen2.5-7B）")
+        print("  local = 本地档（Herdsman Qwen3:8B）")
+        print("  paid  = 云端收费档（DeepSeek deepseek-flash）")
+        return 2
+    cmd, label = t
+    task = SWITCH_TASK.get(cmd) or "SysPersona-DR-%s" % cmd.title()
+    prov, model = current_model()
+    print("当前：%s · %s" % (prov or "?", model or "?"))
+    print("切到：%s" % label)
+    print("步骤：关窗口 → 改配置 → 重新拉起（会话不丢，登录保留）。")
+    if dry:
+        print("会触发：%s（dry，没触发）" % task)
+        return 0
+    if not task_exists(task):
+        install(quiet=True)
+    ok, msg = task_run(task)
+    print("已触发 %s：%s" % (task, msg or ("ok" if ok else "失败")))
+    return 0 if ok else 4
+
+
 def _gate(d):
     """动手前的闸门。返回 (allowed, reason)。阈值来自 dr-plan.json。"""
     if not d.get("switch"):
@@ -792,7 +858,7 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
 def main(argv=None):
     ap = argparse.ArgumentParser(description="看门狗 / 容灾保底（心跳 → 网络 → 模型链 → 动作）")
     ap.add_argument("cmd", nargs="?", default="check",
-                    choices=["check", "dr", "install", "enact", "verify", "tasks"])
+                    choices=["check", "dr", "install", "enact", "pick", "verify", "tasks"])
     ap.add_argument("arg", nargs="?", default="")
     ap.add_argument("--stale", type=float, default=None,
                     help="心跳超过多少秒算死（默认取 dr-plan.json 的 stale_after）")
@@ -821,6 +887,9 @@ def main(argv=None):
 
     if a.cmd == "enact":
         return enact(a.arg, dry=a.dry)
+
+    if a.cmd == "pick":
+        return pick(a.arg, dry=a.dry)
 
     if a.cmd == "verify":
         if not task_exists("SysPersona-DR-Restart"):
