@@ -40,6 +40,9 @@ OPS = os.path.join(ROOT, "ops")
 LOG = os.path.join(OPS, "reloader.jsonl")
 QUEUE = os.path.join(OPS, "reloader-queue.json")
 MAX_CHARS = 1600            # 注入正文上限：重载不是把设定全文灌进去
+STATE = os.path.join(OPS, "reloader.json")
+CTX_FIRST = 150_000         # 第一次重载的水位（注意档）
+CTX_BAND = 100_000          # 之后每涨这么多补一次（不是按时间）
 SETTINGS = [os.path.join(ROOT, "memory", "设定", n) for n in (
     "10-人格与红线.md", "20-交流与要求.md", "30-流程与运维.md")]
 
@@ -134,6 +137,55 @@ def build_text(reason="manual"):
     return text
 
 
+def _load_state():
+    try:
+        return json.load(io.open(STATE, encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(st):
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        tmp = STATE + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(st, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, STATE)
+    except OSError:
+        pass
+
+
+def pressure():
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_gauge as G
+        press, surface, win = G.dsh_pressure()
+        return int(press or 0), int(win or G.LIMIT)
+    except Exception:
+        return 0, 0
+
+
+def band_due(press=None):
+    """该不该因为「记忆开始不集中」重载。
+
+    不是按时间，是按**水位带**：第一次到 150K 补一次，之后每涨 100K 再补一次；
+    压缩后水位回落 → 带自动重置，下次到 150K 再补。理由：记忆散掉跟上下文长短相关，
+    跟"过了几分钟"无关——5 分钟定时在闲置时是白灌，在猛聊时又太稀。
+    """
+    if press is None:
+        press, _ = pressure()
+    st = _load_state()
+    nxt = int(st.get("next_at") or CTX_FIRST)
+    if press and press < CTX_FIRST:        # 压缩/换窗后回落 → 重置
+        if nxt != CTX_FIRST:
+            st["next_at"] = CTX_FIRST
+            _save_state(st)
+        return False, "水位 %dK < %dK" % (press // 1000, CTX_FIRST // 1000), press
+    if press >= nxt:
+        return True, "水位 %dK ≥ 带 %dK" % (press // 1000, nxt // 1000), press
+    return False, "水位 %dK < 带 %dK" % (press // 1000, nxt // 1000), press
+
+
 def load_queue():
     try:
         return json.load(io.open(QUEUE, encoding="utf-8-sig"))
@@ -185,13 +237,15 @@ def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
         try:
             sys.path.insert(0, ROOT)
             import persona_wake as W
-            need, why = W.reread_need()
+            need, need_reason = W.reread_need()
         except Exception:
-            need, why = False, "判定不了"
-        if not need:
-            log({"at": now(), "reason": reason, "action": "skip",
-                 "msg": why or "不需要"})
-            print("跳过：设定没变、也没被标记（%s）" % (why or "不需要"))
+            need, need_reason = False, "判定不了"
+        due, why, press = band_due()
+        if need and not due:
+            due, why = True, "设定变了（%s）" % (need_reason or "hash 不同")
+        if not due:
+            log({"at": now(), "reason": reason, "action": "skip", "msg": why})
+            print("跳过：%s" % why)
             return 0
         print("需要重载：%s" % why)
     text = build_text(reason)
@@ -226,6 +280,12 @@ def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
             W.cmd_reread(argparse.Namespace(ack=True, check=False, auto=False))
         except Exception:
             pass
+        st = _load_state()
+        press, _win = pressure()
+        st["last_pressure"] = press
+        st["last_at"] = now()
+        st["next_at"] = (press + CTX_BAND) if press else CTX_FIRST
+        _save_state(st)
         q = load_queue()
         q.pop(reason, None)
         save_queue(q)
@@ -245,6 +305,11 @@ def main():
     ap.add_argument("--status", action="store_true", help="看队列与最近一次重载")
     a = ap.parse_args()
     if a.status:
+        st = _load_state()
+        press, win = pressure()
+        print("水位 %sK / %sK；下次重载未过带：%sK；上次重载：%s"
+              % (press // 1000, (win or 0) // 1000,
+                 int(st.get("next_at") or CTX_FIRST) // 1000, st.get("last_at") or "（无）"))
         print("队列：%s" % (json.dumps(load_queue(), ensure_ascii=False) or "（空）"))
         try:
             last = [json.loads(l) for l in io.open(LOG, encoding="utf-8") if l.strip()][-3:]

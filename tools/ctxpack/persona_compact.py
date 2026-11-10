@@ -175,6 +175,23 @@ def ensure_mirror(trigger=""):
         return False, "镜像异常：%s" % e
 
 
+def ask_reloader():
+    """顺手问一句设定重载器：要不要因为「记忆开始不集中」补一次。
+
+    重载不是按时间，是按水位带（`persona_constitution_reloader.band_due`）——
+    这里只负责"到了检查的时候"，判不判、注不注由它自己看水位。
+    """
+    try:
+        rl = os.path.join(ROOT, "persona_constitution_reloader.py")
+        if not os.path.exists(rl):
+            return
+        subprocess.Popen([PY, rl, "--reason", "periodic", "--only-if-needed"],
+                         cwd=ROOT, creationflags=NO_WINDOW,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
           do_mirror=True, force_ctx=0, timeout=600):
     ctx, err = measure()
@@ -190,6 +207,7 @@ def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
     if ctx < threshold:
         print("SKIP 水位 %dK < 线 %dK，不压" % (ctx / 1000, threshold / 1000))
         log({"at": now(), "ctx": ctx, "action": "idle"})
+        ask_reloader()
         return 0
     if age < cooldown:
         print("SKIP 水位 %dK 到线了，但 %d 秒前刚压过（冷却 %d 秒）"
