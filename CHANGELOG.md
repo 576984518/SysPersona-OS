@@ -1,5 +1,14 @@
 # 变更记录
 
+## 看图只走 DeepSeek；硅基收费档不用 — 2026-11-10
+
+**人拍的两条**：「既然 DeepSeek 支持图片，为什么不直接用这个识别」「硅基的收费烂，不给结果光扣钱」。
+
+- persona_vision.py 新增 --ds：直接调 DeepSeek 的 chat/completions 送 image_url（实测能准确读出截图里的中文界面），
+  max_tokens 给足，content 为空时取 reasoning 兜底；
+- 本机 OCR 降级为**断网/不想花 token 时的兜底**；
+- 撤掉我加的硅基 VL 档（ision 配置与 Hermes 里的 Qwen3-VL 条目）——付费 VL 出结果不可靠还照扣费。
+
 ## 能力边界写进设定与交接卡：代班不许接带图的活 — 2026-11-10
 
 **人指出的两条硬事实**：「Hermes 用 deepseek 这个模型，他不能识别图片」「硅基流动把我们坑了」。
