@@ -68,9 +68,9 @@ DEFAULT_CFG = {
     # 空闲期例外：队列空、没有到点闹钟、没有未完成任务时，自动切到免费档
     # （自由度高一点没关系——空闲期本来就该它自己安排；人在用时立刻收回最小档）
     "free_when_idle": True,
-    # 最保底：本机有本地模型服务（ollama / LM Studio …）在线就当免费档。
+    # 最保底：本机有本地模型服务（Herdsman 8080 / ollama 11434 …）在线就当免费档。
     # 只探**本机回环**，不出网；断网时它照样是保底那条路。
-    "local_models": ["127.0.0.1:11434"],
+    "local_models": ["127.0.0.1:8080", "127.0.0.1:11434"],
 }
 
 RED_LINES = (
@@ -253,18 +253,42 @@ def _idle(root=None):
 def _local_model_up(cfg):
     """本机有没有本地模型服务在听：只连**回环地址**，不出网，连不上就当没有。
 
-    返回在线的 `host:port`（空串 = 没有）。这是"断网时的最保底"那条路的探针：
-    本地模型在线 → 电费档，联网与否都不影响它继续做事。
+    返回 `host:port`（空串 = 没有），顺带把模型名带出来（读 `/v1/models`，读不到就只报端口）。
+    这是"断网时的最保底"那条路的探针：本地模型在线 → 电费档，联网与否都不影响它继续做事。
+    默认探两个常见口：Herdsman 的 `127.0.0.1:8080`（OpenAI 兼容、无认证）、ollama 的 `11434`。
     """
     for ep in (cfg.get("local_models") or []):
         host, _, port = str(ep).partition(":")
         host = host.strip() or "127.0.0.1"
+        port = port or "8080"
         try:
-            with socket.create_connection((host, int(port or 11434)), timeout=0.4):
-                return "%s:%s" % (host, port or 11434)
+            with socket.create_connection((host, int(port)), timeout=0.4):
+                pass
         except (OSError, ValueError):
             continue
-    return ""
+        name = ""
+        try:                                  # 只读本机 /v1/models，拿模型名（失败不影响判定）
+            import urllib.request
+            with urllib.request.urlopen("http://%s:%s/v1/models" % (host, port),
+                                        timeout=0.8) as r:
+                data = json.loads(r.read(65536).decode("utf-8", "replace"))
+            rows = data.get("data") if isinstance(data, dict) else None
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+                name = str(rows[0].get("id") or "")
+        except Exception:                      # noqa: BLE001（探针失败不挡事）
+            name = ""
+        return ("%s:%s" % (host, port), name)
+    return ("", "")
+
+
+def _fallback_on(root=None):
+    """欠费/断网保底（判定在 persona_fallback）：(是否降级, 原因)。判不了按"没降级"。"""
+    try:
+        import persona_fallback as FB
+        s = FB.state(root=root)
+        return bool(s.get("on")), str(s.get("why") or "")
+    except Exception:                     # noqa: BLE001（判定失败不挡事）
+        return False, ""
 
 
 def current_detail(root=None):
@@ -332,9 +356,13 @@ def profile(root=None, now=None):
     auto_free = bool(cfg.get("auto_free", False))
     free_when_idle = bool(cfg.get("free_when_idle", True))
     idle_now, idle_why = _idle(root)
-    local_up = _local_model_up(cfg)
-    if local_up:
-        tier, why = "free", "本机本地模型在线（%s）——断网也能跑，最保底" % local_up
+    local_ep, local_name = _local_model_up(cfg)
+    fb_on, fb_why = _fallback_on(root)
+    if fb_on:
+        tier, why = "free", "保底模式（%s）——只做本机活" % (fb_why or "已降级")
+    elif local_ep:
+        tier, why = "free", "本机本地模型在线（%s%s）——断网也能跑，最保底" % (
+            local_ep, (" · " + local_name) if local_name else "")
     elif tier_detected == "free" and auto_free:
         tier, why = "free", "识别到免费/本地模型，且 auto_free=on"
     elif free_when_idle and idle_now:
@@ -356,7 +384,8 @@ def profile(root=None, now=None):
             "tier": tier, "tier_detected": tier_detected, "auto_free": auto_free,
             "free_when_idle": free_when_idle, "idle": idle_now,
             "idle_why": idle_why, "tier_reason": why,
-            "local_model": local_up,
+            "local_model": local_ep, "local_model_name": local_name,
+            "fallback": fb_on, "fallback_why": fb_why,
             "tier_label": TIER_LABEL[tier],
             "tier_note": lv.get("note") or TIER_DESC[tier],
             "runs_per_hour": rh, "runs_per_day": rd,

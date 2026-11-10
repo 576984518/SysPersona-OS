@@ -428,6 +428,16 @@ def _autoloop_lines():
                         "⑪ 现在要做的：—"]
 
 
+def _fallback_line():
+    """⛑ 保底：欠费/断网时唤醒自动降级。判定在 persona_fallback，这里只取一行文字。"""
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_fallback as FB
+        return FB.line(root=ROOT)
+    except Exception as e:                     # noqa: BLE001（判定失败不挡唤醒）
+        return "⛑ 保底：（判不出来：%s）" % str(e)[:40]
+
+
 def render_brief(b):
     head = "唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", ""))
     lines = [head]
@@ -436,6 +446,7 @@ def render_brief(b):
                      % (b.get("reread_why") or "被标记"))
     else:
         lines.append("设定已重读（30 分钟内、内容没变）")
+    lines.append(_fallback_line())
     lines += ["",
               "醒后先做三件（顺序不许换）：",
               "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
