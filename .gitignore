@@ -62,3 +62,6 @@ desktop.ini
 *.swp
 
 备份/
+
+# 本机配置（实际路径/间隔），只提交 example
+ops/persona.conf.json

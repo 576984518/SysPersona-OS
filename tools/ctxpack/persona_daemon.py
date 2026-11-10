@@ -24,17 +24,18 @@ r"""persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 
     index      3600s 增量索引 + 一级索引
     ctx        300s  刷新滚动上下文头（--live）
     watermark  900s  算上下文水位，过线写提醒
-    capture    on-demand  抓网页会话（request 文件触发）
+    capture    on-demand  抓网页会话（request 文件触发）；**抓前先 poll 会话表**
+                         （persona_sessions.py：只看侧栏最上面几条，new_top = 新会话，
+                          记 info 不报警 + 排进 ops\web-capture-queue.json）；
+                         落盘按会话分存 sessions\<日期>\deepseek网页\<conv_id>.md，永不合并
+    inject     120s  查「注入是否长期失败」，error 档写一条 ops/alerts.jsonl
+    selfcheck  120s  七项心跳自检 → ops\selfcheck.json（托盘/守护/水位/CDP/注入/队列/成本）
 
-环境变量（缺了只影响对应那件事，日志里写"没配置哪个变量"，不猜机器路径）：
-  SYSPERSONA_ROOT/PERSONA_ROOT  记忆库根；不设就按本脚本目录推导，推不出来直接抛错
-  PERSONA_NODE       node 可执行文件（不设就找 <runtime>\node\bin\node.exe，再找 PATH）
-  PERSONA_CAPTURE    抓取脚本 collect7.js 一类（不设则 capture 任务跳过）
-  PERSONA_HERMES_HOME  Hermes 家目录；不设则 export / hctx / handoff 三项跳过
-  PERSONA_HERDSMAN   herdsman.exe；不设则 8080 挂了也不会自动拉起
-  PERSONA_BACKUP2    第二备份根；不设则 backup2 任务跳过（不往库内凑合写）
-  SYSPERSONA_REPO    代码仓库根（t_scan 要从 impl/launcher 导入 mask_secrets）
-  LOCALAPPDATA       navwatch 心跳/日志的基址（系统变量；缺了 reload / navwatch 两项跳过）
+路径与环境变量
+--------------
+路径一律走 persona_root（node / hermes_home / capture_js / backup_root / herdsman / repo /
+root）。本机独有目录写 ops\persona.conf.json（**不入库**，模板 ops\persona.conf.example.json）；
+环境变量 > persona_root 推导 > 本机配置 > 都没有就**记一条 warn 跳过该任务**，日志写明缺哪个键。
 """
 import argparse, io, json, os, re, subprocess, sys, threading, time, traceback
 
@@ -43,16 +44,8 @@ try:
 except Exception:
     pass
 
-from persona_root import app_local as _app_local
-from persona_root import backup_root as _backup_root
-from persona_root import capture_js as _capture_js
-from persona_root import hermes_home as _hermes_home
-from persona_root import herdsman as _herdsman
-from persona_root import node as _node
-from persona_root import repo as _repo
-from persona_root import root as _persona_root
 
-ROOT = _persona_root()
+ROOT = os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
 LOCK = os.path.join(OPS, "persona.lock")
@@ -61,15 +54,63 @@ LOG = os.path.join(OPS, "persona.log")
 CAPTURE_REQ = os.path.join(OPS, "persona-capture.request")
 EXPORT_LOCK = os.path.join(OPS, "export.lock")
 INDEX_LOCK = os.path.join(OPS, "index.lock")
-BACKUP2 = _backup_root()
+ALERTS = os.path.join(OPS, "alerts.jsonl")
+INJECT_ALERTED = os.path.join(OPS, "inject-alerted.json")
 
 PY = sys.executable
-NODE = _node()
-CAPTURE_JS = _capture_js()
+
+# 路径唯一出口：persona_root（平铺部署时本文件所在目录就是库根）。
+sys.path.insert(0, ROOT)
+from persona_root import (backup_root as _backup_root,   # noqa: E402
+                          capture_js as _capture_js,
+                          hermes_home as _hermes_home,
+                          herdsman as _herdsman,
+                          node as _node,
+                          repo as _repo,
+                          root as _persona_root)
+
+ROOT = _persona_root()
+
+
+def _conf():
+    """ops\\persona.conf.json（本机配置，不入库）：任务间隔 + 本机独有路径。"""
+    try:
+        with open(CONF, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_CONF = _conf()
+
+
+def _pick_path(resolver, key):
+    """persona_root 解析 → ops\\persona.conf.json 的 key → None（调用处记 warn 跳过）。"""
+    try:
+        v = resolver() if resolver else None
+    except Exception:
+        v = None
+    if v:
+        return v
+    v = _CONF.get(key)
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    return None
+
+
+def _missing(what, key):
+    return ("缺 %s：设 PERSONA_* 环境变量，或写 ops\\persona.conf.json 的 \"%s\""
+            "（模板见 ops\\persona.conf.example.json）" % (what, key))
+
+
+BACKUP2 = _pick_path(_backup_root, "backup2_root")
+NODE = _pick_path(_node, "node")
+CAPTURE_JS = _pick_path(_capture_js, "capture_js")
 
 # Hermes 的会话库：变了就立刻导出，不等 30 分钟的周期（2026-11-09）。
 # 不把目录 junction 进库：state.db 带 WAL，被同步软件抓走会拿到半截快照。
-_HERMES = _hermes_home()
+_HERMES = _pick_path(_hermes_home, "hermes_home")
 HERMES_DB = os.environ.get("PERSONA_HERMES_DB") or (
     os.path.join(_HERMES, "state.db") if _HERMES else None)
 DB_QUIET = 3.0   # 连续这么久没写入，才认为这一轮答完了
@@ -78,7 +119,6 @@ DB_QUIET = 3.0   # 连续这么久没写入，才认为这一轮答完了
 HERMES_UI_DB = os.environ.get("PERSONA_HERMES_UI_DB") or (
     os.path.join(_HERMES, "desktop-ui.sqlite") if _HERMES else None)
 # 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import persona_limits as _LIM  # noqa: E402
 HERMES_CTX_MAX = _LIM.LIMIT
 HERMES_CTX_LIMIT = _LIM.CLEAN        # 与 gauge 的"该清理了"同一把尺子
@@ -107,10 +147,12 @@ DEFAULTS = {
     "tasks": 300,
     "observe": 21600,
     "daily": 21600,
+    "inject": 120,
+    "selfcheck": 120,
 }
 
-TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 900,
-                "watermark": 120, "cost": 120}
+TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
+                "watermark": 120, "cost": 120, "selfcheck": 60}
 
 
 def now():
@@ -148,11 +190,11 @@ def t_herdsman():
         pass
     finally:
         s.close()
-    exe = _herdsman()
+    exe = _pick_path(_herdsman, "herdsman_exe")
     if not exe:
-        return False, "没配置 PERSONA_HERDSMAN（找不到 herdsman.exe），8080 不自动拉起"
+        return False, _missing("herdsman.exe", "herdsman_exe")
     if not os.path.exists(exe):
-        return False, "herdsman.exe missing"
+        return False, "herdsman.exe missing：%s" % exe
     subprocess.Popen([exe], cwd=os.path.dirname(exe),
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     for _ in range(20):
@@ -178,9 +220,186 @@ def run(cmd, timeout):
         return False, "timeout"
 
 
+# ── 抓之前先看侧栏最上面几条（2026-11-10 人定的机制）──────────────────
+# 判据唯一权威：persona_sessions.py 的会话表 ops\web-sessions.json。
+# 新会话永远出现在侧栏最上面一条；表里没有的 id = new_top（新会话）。
+SESSIONS = os.path.join(ROOT, "persona_sessions.py")
+SESSION_TABLE = os.path.join(OPS, "web-sessions.json")
+CAPTURE_QUEUE = os.path.join(OPS, "web-capture-queue.json")
+LAST_CAPTURE = os.path.join(OPS, "web-last-capture.json")
+
+
+def _sw_label(conv, title):
+    if not conv and not title:
+        return "（空）"
+    return "%s（%s）" % (("《%s》" % title) if title else "无标题", (conv or "")[:8] or "?")
+
+
+def sessions_poll(timeout=60):
+    """问一句：侧栏最上面几条变没变？返回 (退出码, info)。
+
+    0 = 没有新会话、3 = 有新会话（new_top）、4 = 没选中会话、2 = CDP 不通。
+    （与 persona_sessions.py 的退出码一致。）
+    这一步**绝不抛异常**：抓取链路宁可带着"没查清"往下走，
+    也不能因为查会话把自己搞停——但"没查清"必须写进日志，不许静默。
+    """
+    try:
+        r = subprocess.run([PY, SESSIONS, "poll", "--json"], cwd=ROOT,
+                           capture_output=True, timeout=timeout,
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as e:
+        return 2, {"reason": "会话表 poll 调不起来：%s" % str(e)[:120]}
+    text = (r.stdout or b"").decode("utf-8", "replace")
+    info = {}
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                info = json.loads(line)
+                break
+            except ValueError:
+                continue
+    if not info:
+        detail = (r.stderr or b"").decode("utf-8", "replace").strip()
+        info = {"reason": (detail[:160] or "会话表 poll 没有输出")}
+    return r.returncode, info
+
+
+def load_capture_queue():
+    try:
+        q = json.load(io.open(CAPTURE_QUEUE, encoding="utf-8"))
+        if isinstance(q, dict) and isinstance(q.get("items"), list):
+            return q
+    except (OSError, ValueError):
+        pass
+    return {"items": []}
+
+
+def save_capture_queue(q):
+    q["updated_at"] = now()
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        tmp = CAPTURE_QUEUE + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(q, ensure_ascii=False, indent=1))
+        os.replace(tmp, CAPTURE_QUEUE)
+    except OSError:
+        pass
+
+
+def queue_new_sessions(new_top):
+    """新会话排进抓取队列：**每个会话抓一次，不合并**。返回队列里现有的条数。
+
+    只能抓当前打开的那一个（不点侧栏、不滚动）：没轮到的会话留在队列里，
+    等它被点开、成为当前会话时再抓——那时它还是它自己那份文件。
+    """
+    q = load_capture_queue()
+    have = {x.get("id") for x in q["items"]}
+    for it in new_top or []:
+        cid = it.get("id") or ""
+        if not cid or cid in have:
+            continue
+        q["items"].append({"id": cid, "title": it.get("title") or "",
+                           "pos": it.get("pos") or 0, "queued_at": now()})
+        have.add(cid)
+    save_capture_queue(q)
+    return len(q["items"])
+
+
+def queue_drop(conv_id):
+    """这个会话已经抓过了：从队列里划掉（别的会话不动）。"""
+    q = load_capture_queue()
+    keep = [x for x in q["items"] if x.get("id") != conv_id]
+    if len(keep) != len(q["items"]):
+        q["items"] = keep
+        save_capture_queue(q)
+
+
+def session_table_rows():
+    """读会话表 ops\\web-sessions.json（只读，不写）。"""
+    try:
+        t = json.load(io.open(SESSION_TABLE, encoding="utf-8"))
+        if isinstance(t, dict) and isinstance(t.get("sessions"), dict):
+            return t["sessions"]
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def queue_pending_from_table():
+    """把「基线之后出现、还没抓过」的会话排进队列（每个抓一次，不合并）。
+
+    为什么不能只看本次 poll 的 new_top：readnew 抓之前也会 poll，表是它先更新的，
+    daemon 再 poll 时 new_top 已经空了——只认 new_top 就会漏掉"在别的窗口新建的会话"。
+    所以以表为准：`baseline=false`（基线之后登记的）且 `last_capture` 为空 = 待抓。
+    老表（没有 baseline 字段）一律不算新，避免上线第一轮把整张表都排进队列。
+    """
+    rows = session_table_rows()
+    todo = [{"id": rid, "title": r.get("title") or "", "pos": r.get("pos") or 0}
+            for rid, r in rows.items()
+            if r.get("baseline") is False and not r.get("last_capture")]
+    if todo:
+        queue_new_sessions(todo)
+    return len(todo)
+
+
+def _alert_new_session(it):
+    """新会话的 info 级留痕：**不报警**，只写 ops\\alerts.jsonl。"""
+    cid = it.get("id") or ""
+    if not cid:
+        return False
+    rec = {"at": now(), "level": "info", "kind": "session_new", "src": "sessions",
+           "msg": "新会话：%s（%s，第 %d 位）"
+                  % (it.get("title") or "（无标题）", cid, it.get("pos") or 0),
+           "to": cid, "pos": it.get("pos") or 0}
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(ALERTS, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def _write_last_capture(rec):
+    """把「这次抓的是哪个会话、落在哪个文件」写出来，readnew 据此更新会话表。"""
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        tmp = LAST_CAPTURE + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, indent=1))
+        os.replace(tmp, LAST_CAPTURE)
+    except OSError:
+        pass
+
+
+def _read_capture_head(path):
+    """collect7 写在文件头的「# 标题」「- 消息数：N」。读不到就给 (0, '')。"""
+    title, n = "", 0
+    try:
+        with io.open(path, encoding="utf-8", errors="replace") as f:
+            for _ in range(12):
+                line = f.readline()
+                if not line:
+                    break
+                s = line.strip()
+                if s.startswith("# ") and not title:
+                    title = s[2:].strip()
+                elif "消息数" in s:
+                    m = re.search(r"(\d+)", s)
+                    if m:
+                        n = int(m.group(1))
+    except OSError:
+        pass
+    return n, title
+
+
 def t_export():
     """导出 Hermes 会话。带锁：手动跑、watch 触发、hctx 的镜像触发可能撞车，
     两个进程同时写同一个 .md 会 PermissionError（实测踩过）。"""
+    if not HERMES_DB:
+        return False, _missing("Hermes state.db", "hermes_home")
     if os.path.exists(EXPORT_LOCK):
         try:
             if time.time() - os.stat(EXPORT_LOCK).st_mtime < 600:
@@ -247,27 +466,145 @@ def t_cost():
                TASK_TIMEOUT["cost"])
 
 
-def t_capture():
-    if not NODE:
-        return False, "没配置 PERSONA_NODE（找不到 node：设变量，或把 <runtime>\\node\\bin 放进 PATH）"
-    if not CAPTURE_JS:
-        return False, "没配置 PERSONA_CAPTURE（抓取脚本 collect7.js 一类），跳过抓取"
-    anchor = os.path.join(OPS, "anchor.txt")
-    out = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "deepseek网页",
-                       "capture-%s.md" % time.strftime("%H%M%S"))
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    args = [NODE, CAPTURE_JS, out]
-    if os.path.exists(anchor):
-        args.append(anchor)
-    ok, s = run(args, TASK_TIMEOUT["capture"])
+def t_selfcheck():
+    """心跳自检（2026-11-10 加）：7 项，120 秒一次，正常 < 2 秒。
+
+    只跑 `persona_selfcheck.py --quiet`：它自己把结果写 ops\\selfcheck.json，
+    只在状态**变化**时往 persona.log 追加一行，不每 30 秒刷屏。
+    这里把 summary 带回任务状态，守护面板上直接能看到 7/7。
+    """
+    ok, s = run([PY, os.path.join(ROOT, "persona_selfcheck.py"), "--quiet"],
+                TASK_TIMEOUT["selfcheck"])
+    try:
+        with open(os.path.join(OPS, "selfcheck.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and d.get("summary"):
+            return ok, str(d["summary"])[:160]
+    except (OSError, ValueError):
+        pass
     return ok, s
+
+
+def t_capture():
+    r"""抓网页会话：**按会话分存**，一个会话一份文件，永不合并。
+
+    顺序（2026-11-10 人定的机制）：
+      ① `poll` 会话表：只看侧栏最上面几条的 id+标题。new_top → 记 info（**不报警**）
+         + 排进抓取队列（每个会话抓一次）；
+      ② 抓「当前打开的那个会话」，直接写
+         `sessions\<日期>\deepseek网页\<conv_id>.md`（已存在就覆盖自己那份）；
+         **不再传 anchor**——不再拿别的会话的尾巴当对照，整份快照；
+      ③ 抓完登记会话表（消息数 / 最后抓取时间 / 文件路径）、从队列里划掉这个会话、
+         写 `ops\web-last-capture.json` 给 readnew 看。
+
+    没选中会话（4）或读不到侧栏（2）时，先落 `capture-HHMMSS.md` 临时名，
+    抓完按**抓后的**会话 id 归位到它自己那份——宁可多一步，也不写进别人的文件。
+    """
+    at = now()
+    if not NODE:
+        return False, _missing("node", "node")
+    if not CAPTURE_JS:
+        return False, _missing("抓取脚本 collect7.js", "capture_js")
+    code, info = sessions_poll()
+    conv = (info.get("current") or "") if code != 2 else ""
+    target_file = ""
+
+    if code == 2:
+        log("✗ %s" % (info.get("reason") or "会话表读不到（CDP 不通）"))
+        log("  （抓取照旧：先落临时文件，抓完再按会话 id 归位）")
+    elif code == 4:
+        log("页面没选中会话（地址停在根地址）：按「选第一条，不行第二条」先选上")
+    else:
+        new = info.get("new_top") or []
+        if new:
+            log("新会话 %d 条（info，不报警）：" % len(new))
+            for it in new:
+                log("  %s（%s，第 %d 位）"
+                    % (it.get("title") or "（无标题）", it.get("id") or "", it.get("pos") or 0))
+                _alert_new_session(it)
+            nq = queue_new_sessions(new)
+            log("  已排进抓取队列 %s（队里共 %d 个；每个会话抓一次，不合并）"
+                % (os.path.relpath(CAPTURE_QUEUE, ROOT), nq))
+        else:
+            log("侧栏前 %d 条没变：%s ｜ 第 %d 位 ｜ %d 条消息"
+                % (info.get("top") or 5,
+                   _sw_label(conv, info.get("current_title")),
+                   info.get("current_pos") or 0, info.get("msg_count") or 0))
+        for it in info.get("moved") or []:
+            log("  位置变化：%s 第 %s 位 → 第 %s 位"
+                % (it.get("title") or "?", it.get("from") or 0, it.get("to") or 0))
+        for it in info.get("renamed") or []:
+            log("  标题变化：%s《%s》→《%s》"
+                % (it.get("id") or "", it.get("from_title") or "", it.get("to_title") or ""))
+        if conv:
+            target_file = info.get("current_file") or ""
+            # poll 给的是绝对路径；万一拿到相对路径，按库根解析——否则 cwd 一换就写到别处
+            if target_file and not os.path.isabs(target_file):
+                target_file = os.path.join(ROOT, target_file)
+
+    # 表里还有"新出现过、没抓过"的会话（可能是 readnew 先 poll 掉的）：一起排队。
+    # 放在 if/elif 之外：没选中会话（4）时也要能把表里的新会话排进队列。
+    if code != 2:
+        npend = queue_pending_from_table()
+        if npend:
+            q = load_capture_queue()
+            log("  待抓：表里有 %d 个新会话还没抓，已排进队列（共 %d 个）"
+                % (npend, len(q["items"])))
+
+    if target_file:
+        out = target_file
+    else:
+        out = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "deepseek网页",
+                           "capture-%s.md" % time.strftime("%H%M%S"))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    # 不传 anchor：每个会话整份快照，覆盖自己那份，不跟别人的尾巴比。
+    ok, s = run([NODE, CAPTURE_JS, out], TASK_TIMEOUT["capture"])
+    if not ok:
+        log("抓取失败：%s" % s)
+        _write_last_capture({"at": at, "ok": False, "conv_id": conv,
+                             "file": "", "msg_count": 0, "reason": s})
+        return False, s
+
+    if not target_file:
+        code2, info2 = sessions_poll()
+        conv2 = (info2.get("current") or "") if code2 != 2 else ""
+        dst = info2.get("current_file") or ""
+        if dst and not os.path.isabs(dst):
+            dst = os.path.join(ROOT, dst)
+        if conv2 and dst:
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                os.replace(out, dst)
+                out, conv = dst, conv2
+                log("  已按抓后的会话归位：%s" % os.path.relpath(dst, ROOT))
+            except OSError as e:
+                log("  ✗ 归位失败（临时文件留在 %s）：%s"
+                    % (os.path.relpath(out, ROOT), e))
+
+    n, head_title = _read_capture_head(out)
+    title = info.get("current_title") or head_title
+    marked = False
+    if conv:
+        okm, m = run([PY, SESSIONS, "mark", "--id", conv, "--file", out,
+                      "--msg-count", str(n)], 60)
+        marked = okm
+        if not okm:
+            log("✗ 会话表登记失败：%s" % m)
+        queue_drop(conv)
+    rel_out = os.path.relpath(out, ROOT)
+    _write_last_capture({"at": at, "ok": True, "conv_id": conv, "title": title,
+                         "file": out, "msg_count": n, "marked": marked})
+    if not conv:
+        log("⚠ 抓到了内容，但没认出是哪个会话：先留在 %s（会话表未登记）" % rel_out)
+    return True, "《%s》（%s）→ %s（%d 条）" % (title or "无标题", (conv or "?")[:12],
+                                               rel_out, n)
 
 
 def t_scan():
     """DLP 哨兵：扫入口文件里有没有像密钥的东西（只报，不改）。"""
-    base = _repo()
+    base = _pick_path(_repo, "repo")
     if not base:
-        return True, "没配置 SYSPERSONA_REPO（找不到代码仓库），跳过密钥扫描"
+        return False, _missing("代码仓库（含 impl\\launcher）", "repo")
     sys.path.insert(0, os.path.join(base, "impl", "launcher"))
     try:
         from mask_secrets import mask
@@ -291,7 +628,7 @@ def t_hctx():
     """
     import sqlite3
     if not HERMES_UI_DB:
-        return False, "没配置 PERSONA_HERMES_HOME（找不到 desktop-ui.sqlite），跳过水位"
+        return False, _missing("Hermes desktop-ui.sqlite", "hermes_home")
     con = sqlite3.connect("file:%s?mode=ro" % HERMES_UI_DB.replace("\\", "/"), uri=True)
     try:
         row = con.execute(
@@ -338,15 +675,14 @@ def t_hctx():
 
 
 def t_backup2():
-    """第二份实时备份：落在一块**另一块盘**上（PERSONA_BACKUP2 指哪儿就落哪儿）。
+    """第二份实时备份：主库在 D:，这一份落到 C:，两块盘同时挂的概率极低。
 
     只拷"能重建一切"的东西：当天会话正文、memory\\、几本台账。
     不做镜像删除（不用 /MIR 那种），只增量覆盖——宁可多留，不可误删。
-    没配 PERSONA_BACKUP2 就跳过：第二备份必须真的在第二块盘上，不能在库里面凑合。
     """
     import shutil
     if not BACKUP2:
-        return False, "没配置 PERSONA_BACKUP2（第二备份根），跳过（别拿库内目录当第二份）"
+        return False, _missing("第二备份根", "backup2_root")
     src_root = ROOT
     pairs = []
 
@@ -406,6 +742,8 @@ def t_handoff():
     触发原因没法自动判断（满 / 手动 / 迁移），先写"待补"，人再补一句。
     """
     import sqlite3
+    if not HERMES_DB:
+        return False, _missing("Hermes state.db", "hermes_home")
     try:
         seen = json.load(io.open(HANDOFF_STATE, encoding="utf-8"))
     except Exception:
@@ -413,8 +751,6 @@ def t_handoff():
     last, ids = seen.get("last", 0), set(seen.get("ids", []))
 
     try:
-        if not HERMES_DB:
-            return False, "没配置 PERSONA_HERMES_HOME（找不到 state.db），跳过交接记录"
         con = sqlite3.connect("file:%s?mode=ro" % HERMES_DB.replace("\\", "/"), uri=True)
         rows = list(con.execute(
             "select id, started_at, message_count, input_tokens from sessions "
@@ -453,7 +789,7 @@ def t_handoff():
 
 
 RELOAD_STATE = os.path.join(OPS, "reload-state.json")
-NAVWATCH_LOG = _app_local("navwatch.log")
+NAVWATCH_LOG = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "navwatch.log")
 
 
 def t_reload():
@@ -469,8 +805,6 @@ def t_reload():
     seen = int(st.get("seen", 0))
 
     try:
-        if not NAVWATCH_LOG:
-            return True, "没配置 LOCALAPPDATA，跳过重载证据"
         lines = io.open(NAVWATCH_LOG, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
         return True, "无 navwatch.log"
@@ -509,16 +843,14 @@ def t_reload():
 def t_navwatch():
     """F5 监听器（watch_nav.js）必须常驻。以前只靠开机启动项，掉了没人管；
     这里用心跳文件的时效判断它是否还活着，掉了就按原样拉起来。"""
-    hb = _app_local("navwatch.heartbeat")
-    vbs = _app_local("start_navwatch.vbs")
-    if not hb or not vbs:
-        return False, "没配置 LOCALAPPDATA（找不到 navwatch 心跳与启动脚本），跳过"
+    hb = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "navwatch.heartbeat")
     try:
         age = time.time() - os.stat(hb).st_mtime
     except OSError:
         age = 1e9
     if age < 120:
         return True, "心跳 %.0fs 前" % age
+    vbs = os.path.join(os.environ.get("LOCALAPPDATA", ""), "SysPersona", "start_navwatch.vbs")
     if not os.path.exists(vbs):
         return False, "心跳断了且缺 start_navwatch.vbs"
     subprocess.Popen(["wscript.exe", vbs],
@@ -581,8 +913,6 @@ def t_uiskin():
     """壳的界面注入器必须常驻：壳重启/页面重载后靠它补样式。
     心跳文件 ops/uiskin.heartbeat，超过 30 秒没更新就重新拉起。"""
     beat = os.path.join(OPS, "uiskin.heartbeat")
-    if not NODE:
-        return False, "没配置 PERSONA_NODE（找不到 node），注入器拉不起来"
     try:
         age = time.time() - os.stat(beat).st_mtime
     except OSError:
@@ -592,6 +922,8 @@ def t_uiskin():
     script = os.path.join(ROOT, "persona_uiskin.js")
     if not os.path.exists(script):
         return False, "缺 persona_uiskin.js"
+    if not NODE:
+        return False, _missing("node", "node")
     subprocess.Popen([NODE, script], cwd=ROOT,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -723,6 +1055,60 @@ def t_daily():
     return ok, (msg or "").strip()[:80]
 
 
+def t_inject():
+    """注入告警（2026-11-10 加）：error 档写一条 ops/alerts.jsonl，同一 streak 只记一次。
+
+    判定口径与托盘共用 persona_inject.evaluate_state（三档阈值只定义在那一处）。
+    不重复刷：ops/inject-alerted.json 记已报过的 streak；成功清零后下次再坏还能再报。
+    """
+    try:
+        import persona_inject as inj
+    except Exception as e:
+        return True, "persona_inject 不可用：%s" % e
+    if not hasattr(inj, "evaluate_state"):
+        return True, "persona_inject 是旧版（没有 evaluate_state），跳过注入告警"
+    ev = inj.evaluate_state()
+    try:
+        with io.open(INJECT_ALERTED, encoding="utf-8") as f:
+            last = json.load(f)
+    except Exception:
+        last = {}
+    try:
+        last_streak = int(last.get("streak") or 0)
+    except Exception:
+        last_streak = 0
+
+    if ev["level"] != "error":
+        if last_streak:                      # 恢复了：清掉"报过"标记，下次再坏还能报
+            try:
+                tmp = "%s.%d.tmp" % (INJECT_ALERTED, os.getpid())
+                with io.open(tmp, "w", encoding="utf-8") as f:
+                    json.dump({"streak": 0, "at": now()}, f, ensure_ascii=False)
+                os.replace(tmp, INJECT_ALERTED)
+            except OSError:
+                pass
+        return True, "注入 %s（连续失败 %d）" % (ev["level"], ev["streak"])
+
+    if last_streak == ev["streak"]:
+        return True, "注入 error（连续 %d 次），本档已告警过，不重复刷" % ev["streak"]
+
+    rec = {"at": now(), "level": "error", "kind": "inject_stalled", "src": "inject",
+           "streak": ev["streak"], "since_ok_min": ev["since_min"],
+           "note": ev["text"]}
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(ALERTS, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        tmp = "%s.%d.tmp" % (INJECT_ALERTED, os.getpid())
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"streak": ev["streak"], "at": now()}, f, ensure_ascii=False)
+        os.replace(tmp, INJECT_ALERTED)
+    except OSError as e:
+        return False, "写注入告警失败：%s" % e
+    return True, "已告警：连续 %d 次发不出去（%s 分钟没成功）" % (
+        ev["streak"], ev["since_min"] if ev["since_min"] is not None else "?")
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -730,6 +1116,7 @@ TASKS = {
     "ctx": t_ctx,
     "watermark": t_watermark,
     "cost": t_cost,
+    "selfcheck": t_selfcheck,
     "merge": t_merge,
     "scan": t_scan,
     "navwatch": t_navwatch,
@@ -747,6 +1134,7 @@ TASKS = {
     "daily": t_daily,
     "proxy": t_proxy,
     "todo": t_todo,
+    "inject": t_inject,
 }
 
 
@@ -796,7 +1184,13 @@ class PersonaDaemon:
         self.cfg = dict(DEFAULTS)
         if os.path.exists(CONF):
             try:
-                self.cfg.update(json.load(open(CONF, encoding="utf-8")))
+                data = json.load(open(CONF, encoding="utf-8"))
+                if isinstance(data, dict):
+                    # 只收任务间隔（数值）；路径键（capture_js/backup2_root/...）不许混进 cfg，
+                    # 否则 worker 里 float(self.cfg.get(name)) 会炸（2026-11-10 实测）。
+                    self.cfg.update({k: v for k, v in data.items()
+                                     if k in DEFAULTS and isinstance(v, (int, float))
+                                     and not isinstance(v, bool)})
             except Exception as e:
                 log("配置读取失败，用默认：%s" % e)
         self.state = {k: {"last": 0, "ok": None, "msg": "never", "runs": 0, "busy": False}

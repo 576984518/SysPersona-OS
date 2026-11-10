@@ -1,0 +1,17 @@
+{
+ "_说明": "复制成 ops\\persona.conf.json 后按本机改；实际配置不入库（.gitignore 已忽略）。取值顺序：环境变量 > persona_root 推导 > 本文件 > 都没有就记一条 warn 跳过该任务。",
+ "_说明_herdsman": "任务间隔（秒），0 = 停用。唯一一个不是路径的键。默认 300。",
+ "herdsman": 300,
+ "_说明_capture_js": "抓取脚本 collect7.js 一类。默认 persona_root.capture_js()：PERSONA_CAPTURE 环境变量 → 本机 paths.json；推不出就跳过 capture。",
+ "capture_js": "<collect7.js 的绝对路径>",
+ "_说明_hermes_home": "Hermes 家目录（含 state.db 与 desktop-ui.sqlite）。默认 persona_root.hermes_home()：PERSONA_HERMES_HOME → %ProgramData%\\Hermes Agent CN Desktop\\data\\hermes-home（存在才算）；推不出则 export / hctx / handoff 跳过。",
+ "hermes_home": "<Hermes 家目录的绝对路径>",
+ "_说明_backup2_root": "第二备份根，必须在另一块盘。默认 persona_root.backup_root()：PERSONA_BACKUP2；推不出则 backup2 跳过（不往库内凑合写）。",
+ "backup2_root": "<另一块盘上的备份根>",
+ "_说明_herdsman_exe": "herdsman.exe。默认 persona_root.herdsman()：PERSONA_HERDSMAN → %ProgramData%\\Herdsman\\herdsman.exe（存在才算）；推不出则 8080 挂了也不会自动拉起。",
+ "herdsman_exe": "<herdsman.exe 的绝对路径>",
+ "_说明_repo": "代码仓库根（含 impl\\launcher 与 docs\\）。默认 persona_root.repo()：SYSPERSONA_REPO → 从本文件向上找；推不出则密钥扫描（scan）跳过。",
+ "repo": "<代码仓库根的绝对路径>",
+ "_说明_node": "node 可执行文件。默认 persona_root.node()：PERSONA_NODE → <runtime>\\node\\bin\\node.exe → PATH；推不出则 capture 跳过。一般不用配。",
+ "node": "<node.exe 的绝对路径，可留空不写>"
+}

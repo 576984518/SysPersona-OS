@@ -437,15 +437,23 @@ def cost_over(data):
 
 
 def cost_tip(data):
-    """tooltip 里那一小段：有单价报 ¥，没单价只报 token。"""
+    """tooltip 里那一小段：`今日 ¥31.30 · 3,135 调用 [· 余额 ¥6.54]`。
+
+    金额来自 DSH 官方账本（persona_cost.report_data 的 ledger 口径）；余额读不到就省略那段。
+    """
     if not data:
         return ""
-    if data.get("priced"):
-        return "今日 " + _cost_money(data.get("money"), data.get("currency"))
-    t = data.get("totals") or {}
-    return "今日 %s in / %s out / %s cache" % (
-        _cost_tokens(t.get("uncached")), _cost_tokens(t.get("output")),
-        _cost_tokens(t.get("cache_read")))
+    if not data.get("priced"):
+        t = data.get("totals") or {}
+        return "今日 %s in / %s out / %s cache" % (
+            _cost_tokens(t.get("uncached")), _cost_tokens(t.get("output")),
+            _cost_tokens(t.get("cache_read")))
+    parts = ["今日 " + _cost_money(data.get("money"), data.get("currency"))]
+    if data.get("calls") is not None:
+        parts.append("{:,} 调用".format(int(data["calls"])))
+    if data.get("balance") is not None:
+        parts.append("余额 " + _cost_money(data.get("balance"), data.get("currency")))
+    return " · ".join(parts)
 
 
 def hermes_watermark():
@@ -937,22 +945,18 @@ def _print_menu():
 
 
 def _probe_cost():
-    """自检今日成本：只打印一行读数就退出（不启动托盘、不写任何东西）。"""
+    """自检今日成本：打印与 tooltip 成本行同样的内容就退出（不启动托盘、不写东西）。"""
     d = cost_state(force=True)
     if not d:
         print("[成本] 读不到 persona_cost.py 或 ops 账本")
         return
-    t = d.get("totals") or {}
-    if d.get("priced"):
-        line = "[成本] %s 今日 %s（日线 %s%s）" % (
-            d.get("day"), _cost_money(d.get("money"), d.get("currency")),
-            _cost_money(d.get("daily_warn"), d.get("currency")),
-            "，已超线" if d.get("over_daily") else "")
-    else:
-        line = ("[成本] %s 今日 %s in / %s out / %s cache · 单价未配置（只报 token）· 日线 未设"
-                % (d.get("day"), _cost_tokens(t.get("uncached")),
-                   _cost_tokens(t.get("output")), _cost_tokens(t.get("cache_read"))))
-    print(line)
+    print("[成本] %s %s  [来源] %s"
+          % (d.get("day"), cost_tip(d),
+             "ledger" if d.get("source") == "ledger" else "token折算"))
+    if d.get("over_daily"):
+        print("[成本] 日线已超：%s > %s"
+              % (_cost_money(d.get("money"), d.get("currency")),
+                 _cost_money(d.get("daily_warn"), d.get("currency"))))
 
 
 def _probe_compress():

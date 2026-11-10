@@ -115,6 +115,10 @@ PRICES = os.path.join(OPS, "cost-prices.json")
 ALERT_MARK = os.path.join(OPS, "cost-alert.json")
 ALERTS = os.path.join(OPS, "alerts.jsonl")
 
+# DSH 官方账本（**只读**：open(p, encoding="utf-8")，绝不写壳的目录）。
+# 今日 ¥ / calls / token 三件都以它为准；读不到才退回 token×单价。
+DSH_LEDGER = os.path.join(HOME, ".dsh", "storages", "cost-meter", "ledger.json")
+
 
 # ── 小工具 ───────────────────────────────────────────────────────────
 def _now(t=None):
@@ -209,6 +213,80 @@ def cost_of(totals, prices):
 
 def _warn_line(v):
     return "%s" % (("%.2f" % float(v)) if _is_num(v) else "未设")
+
+
+# ── DSH 官方账本（只读；金额/调用数/今日 token 的唯一权威）─────────────
+def _official_balance(doc):
+    """在 ledger 里找「界面余额」那个数；找不到返回 (None, 原因)。
+
+    实测（2026-11-10）ledger 里**没有存**界面上那个官方余额：
+      - config.balance 只是显示设置（display / refreshMinutes / budgetCap），没有值；
+      - customBalance.enabled=false；goQuota.apiKey 为空；gatewayQuotas.sources=[]；
+      - balanceRef.total（20.37）是**充值/余额参考**，不是界面余额 —— 不许拿它冒充。
+    以后壳若把余额写进 config.officialBalance / config.balance.value / goQuota.balance，
+    这里会自动认；认不出就明写「余额不可读」。
+    """
+    cfg = doc.get("config") if isinstance(doc.get("config"), dict) else {}
+    for get in (lambda: cfg.get("officialBalance"),
+                lambda: cfg.get("balanceValue"),
+                lambda: (cfg.get("balance") or {}).get("value"),
+                lambda: (cfg.get("goQuota") or {}).get("balance")):
+        try:
+            v = get()
+        except (AttributeError, TypeError):
+            continue
+        if _is_num(v):
+            return float(v), ""
+    return None, "不可读（ledger 无官方余额字段）"
+
+
+def read_ledger(day=None):
+    """读壳的官方账本，返回 (今日账 dict, 错误说明)。
+
+    只读：`open(p, encoding="utf-8")`，绝不写 `~/.dsh` 下任何文件。
+    文件缺 / 半截 / JSONDecodeError → 账为 None，由调用方退回 token×单价。
+    """
+    day = day or _today()
+    try:
+        with open(DSH_LEDGER, encoding="utf-8") as f:     # 只读
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        return None, "ledger 读不到：%s" % e
+    if not isinstance(doc, dict):
+        return None, "ledger 不是 JSON 对象"
+    days = doc.get("days") or {}
+    d = days.get(day)
+    if not isinstance(d, dict):
+        return None, "ledger 里没有 %s 的账" % day
+
+    sessions = []
+    for s in d.get("sessions") or []:
+        if not isinstance(s, dict):
+            continue
+        sessions.append({
+            "session": str(s.get("id") or "?"),
+            "in": int(s.get("input") or 0),
+            "out": int(s.get("output") or 0),
+            "cache": int(s.get("cacheRead") or 0) + int(s.get("cacheWrite") or 0),
+            "calls": int(s.get("calls") or 0),
+            "money": float(s.get("costCny") or 0.0),
+        })
+    sessions.sort(key=lambda x: -x["money"])
+    bal, bnote = _official_balance(doc)
+    return {
+        "day": day,
+        "input": int(d.get("input") or 0),
+        "output": int(d.get("output") or 0),
+        "cache_read": int(d.get("cacheRead") or 0),
+        "cache_write": int(d.get("cacheWrite") or 0),
+        "calls": int(d.get("calls") or 0),
+        "money": float(d.get("costCny") or 0.0),
+        "api_money": float(d.get("apiCostCny") or 0.0),
+        "sessions": sessions,
+        "balance": bal,
+        "balance_note": bnote,
+        "at": _now(),
+    }, ""
 
 
 # ── 读壳的会话（只读） ───────────────────────────────────────────────
@@ -409,8 +487,8 @@ def report_data(now=None):
     rows = read_rows()
     day = _today(now)
     todays = [r for r in rows if str(r.get("at") or "")[:10] == day]
-    totals = _sum_rows(todays)
-    money = cost_of(totals, prices)
+    sampled = _sum_rows(todays)
+    led, lerr = read_ledger(day)
 
     cut = now - 3600
     hour_rows = []
@@ -419,74 +497,125 @@ def report_data(now=None):
         if e is not None and e >= cut:
             hour_rows.append(r)
     hour = _sum_rows(hour_rows)
-    money_hour = cost_of(hour, prices)
-
-    sess = {}
-    for r in todays:
-        sid = str(r.get("session") or "?")
-        s = sess.setdefault(sid, {"session": sid, "in": 0, "out": 0,
-                                  "cache": 0, "turn": 0, "step": 0})
-        s["in"] += int(r.get("d_uncached") or 0)
-        s["out"] += int(r.get("d_output") or 0)
-        s["cache"] += int(r.get("d_cache_read") or 0) + int(r.get("d_cache_write") or 0)
-        s["turn"] = int(r.get("turn") or 0)
-        s["step"] = int(r.get("step") or 0)
-    sessions = sorted(sess.values(), key=lambda x: -(x["cache"] + x["in"]))
     d_turn, d_step = _turn_deltas(todays)
+
+    if led:
+        # 官方账本优先：今日 ¥ / calls / token 三件都来自它，比 token 折算权威。
+        source = "ledger"
+        totals = {"uncached": led["input"], "output": led["output"],
+                  "cache_read": led["cache_read"], "cache_write": led["cache_write"]}
+        money, priced, price_error = led["money"], True, ""
+        calls, sessions = led["calls"], led["sessions"]
+        balance, balance_note = led["balance"], led["balance_note"]
+        hour_money = None          # 账本没有逐小时金额；不拿 token 反推
+        ledger_error = ""
+    else:
+        # 账本读不到：退回原来的 token×单价；金额仍可能为 None（单价未配置）。
+        source = "token"
+        totals = sampled
+        money = cost_of(totals, prices)
+        priced = money is not None
+        price_error = perr
+        calls, balance, balance_note = None, None, lerr or "ledger 不可用"
+        hour_money = cost_of(hour, prices)
+        ledger_error = lerr
+        sess = {}
+        for r in todays:
+            sid = str(r.get("session") or "?")
+            s = sess.setdefault(sid, {"session": sid, "in": 0, "out": 0,
+                                      "cache": 0, "turn": 0, "step": 0})
+            s["in"] += int(r.get("d_uncached") or 0)
+            s["out"] += int(r.get("d_output") or 0)
+            s["cache"] += int(r.get("d_cache_read") or 0) + int(r.get("d_cache_write") or 0)
+            s["turn"] = int(r.get("turn") or 0)
+            s["step"] = int(r.get("step") or 0)
+        sessions = sorted(sess.values(), key=lambda x: -(x["cache"] + x["in"]))
 
     daily_warn = prices.get("daily_warn")
     hourly_warn = prices.get("hourly_warn")
     return {
         "day": day,
+        "source": source,
         "totals": totals,
         "money": money,
         "currency": currency,
-        "priced": money is not None,
+        "priced": priced,
+        "calls": calls,
+        "balance": balance,
+        "balance_note": balance_note,
+        "ledger_error": ledger_error,
         "per_mtok": (prices.get("per_mtok") or {}),
         "daily_warn": daily_warn if _is_num(daily_warn) else None,
         "hourly_warn": hourly_warn if _is_num(hourly_warn) else None,
         "over_daily": money is not None and _is_num(daily_warn) and money > float(daily_warn),
-        "over_hourly": (money_hour is not None and _is_num(hourly_warn)
-                        and money_hour > float(hourly_warn)),
-        "hour": {"totals": hour, "money": money_hour},
+        "over_hourly": (hour_money is not None and _is_num(hourly_warn)
+                        and hour_money > float(hourly_warn)),
+        "hour": {"totals": hour, "money": hour_money},
         "sessions": sessions,
         "samples": len(todays),
         "turn_delta": d_turn,
         "step_delta": d_step,
-        "price_error": perr,
+        "price_error": price_error,
     }
+
+
+def _src_tag(d):
+    return "[来源] " + ("ledger" if d.get("source") == "ledger" else "token折算")
+
+
+def _calls(n):
+    return "{:,}".format(int(n)) if n is not None else "—"
 
 
 def report_text(d):
     t = d["totals"]
-    out = ["成本尺子 · 今日 %s" % d["day"]]
+    out = ["成本尺子 · 今日 %s  %s" % (d["day"], _src_tag(d))]
     out.append("  今日：in %s · out %s · cache_read %s · cache_write %s"
                % (_human(t["uncached"]), _human(t["output"]),
                   _human(t["cache_read"]), _human(t["cache_write"])))
     if d["priced"]:
-        out.append("  金额：%s（日线 %s%s）"
-                   % (_money(d["money"], d["currency"]), _money(d["daily_warn"], d["currency"]),
+        extra = " · %s 次调用" % _calls(d.get("calls")) if d.get("calls") is not None else ""
+        out.append("  金额：%s%s（日线 %s%s）"
+                   % (_money(d["money"], d["currency"]), extra,
+                      _money(d["daily_warn"], d["currency"]),
                       "，已超线" if d["over_daily"] else ""))
     else:
-        why = d.get("price_error") or "per_mtok 四个单价有 null"
-        out.append("  金额：单价未配置（%s）→ 只报 token，不判金额、不告警" % why)
-    h = d["hour"]["totals"]
-    out.append("  近 1 小时：in %s · out %s · cache %s · 金额 %s%s"
-               % (_human(h["uncached"]), _human(h["output"]), _human(h["cache_read"]),
-                  _money(d["hour"]["money"], d["currency"]),
-                  "（已超小时线）" if d["over_hourly"] else ""))
-    out.append("  采样：%d 行 · Δturn %d · Δstep %d"
+        why = d.get("price_error") or d.get("ledger_error") or "per_mtok 四个单价有 null"
+        out.append("  金额：单价未配置且账本读不到（%s）→ 只报 token" % why)
+    if d.get("source") == "ledger":
+        if d.get("balance") is not None:
+            out.append("  余额：%s（ledger）" % _money(d["balance"], d["currency"]))
+        else:
+            out.append("  余额：%s；balanceRef 是充值参考，不冒充界面余额"
+                       % (d.get("balance_note") or "余额不可读"))
+        out.append("  近 1 小时：in %s · out %s · cache %s（账本没有小时金额，token 采样仅参考）"
+                   % (_human(d["hour"]["totals"]["uncached"]), _human(d["hour"]["totals"]["output"]),
+                      _human(d["hour"]["totals"]["cache_read"])))
+    else:
+        h = d["hour"]["totals"]
+        out.append("  近 1 小时：in %s · out %s · cache %s · 金额 %s%s"
+                   % (_human(h["uncached"]), _human(h["output"]), _human(h["cache_read"]),
+                      _money(d["hour"]["money"], d["currency"]),
+                      "（已超小时线）" if d["over_hourly"] else ""))
+    out.append("  采样：%d 行 · Δturn %d · Δstep %d（逐会话增量，不再用来推金额）"
                % (d["samples"], d["turn_delta"], d["step_delta"]))
     if d["sessions"]:
-        out.append("  会话（今日，按 cache 降序）：")
+        out.append("  会话（今日，按%s降序）：" % ("金额" if d["source"] == "ledger" else "cache"))
         for s in d["sessions"][:8]:
-            out.append("    %-12s in %-8s out %-8s cache %-8s turn %d/step %d"
-                       % (s["session"][:12], _human(s["in"]), _human(s["out"]),
-                          _human(s["cache"]), s["turn"], s["step"]))
+            if d["source"] == "ledger":
+                out.append("    %-14s %8s · calls %-5d in %-7s out %-7s cache %-7s"
+                           % (s["session"][-14:], _money(s["money"], d["currency"]),
+                              s["calls"], _human(s["in"]), _human(s["out"]), _human(s["cache"])))
+            else:
+                out.append("    %-12s in %-8s out %-8s cache %-8s turn %d/step %d"
+                           % (s["session"][:12], _human(s["in"]), _human(s["out"]),
+                              _human(s["cache"]), s["turn"], s["step"]))
         if len(d["sessions"]) > 8:
             out.append("    …还有 %d 个会话" % (len(d["sessions"]) - 8))
     else:
         out.append("  会话：（今天还没有采样到增量）")
+    if d.get("source") != "ledger" and d.get("ledger_error"):
+        out.append("  （账本不可用，已退回 token×单价：%s）" % d["ledger_error"])
     return "\n".join(out)
 
 
@@ -555,9 +684,15 @@ def check_warn(d=None):
 # ── CLI ──────────────────────────────────────────────────────────────
 def _final_line(d):
     t = d["totals"]
-    money = _money(d["money"], d["currency"]) if d["priced"] else "¥—（单价未配置）"
-    return ("[成本] 今日 in %s · out %s · cache %s · %s"
-            % (_human(t["uncached"]), _human(t["output"]), _human(t["cache_read"]), money))
+    if d["priced"]:
+        head = "[成本] 今日 %s" % _money(d["money"], d["currency"])
+        if d.get("calls") is not None:
+            head += " · %s 调用" % _calls(d["calls"])
+    else:
+        head = "[成本] 今日 ¥—（单价未配置）"
+    return ("%s · in %s · out %s · cache %s  %s"
+            % (head, _human(t["uncached"]), _human(t["output"]),
+               _human(t["cache_read"]), _src_tag(d)))
 
 
 def main(argv):
