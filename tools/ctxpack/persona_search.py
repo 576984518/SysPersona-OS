@@ -7,9 +7,17 @@
 融合：Reciprocal Rank Fusion，取 Top-K（默认 30，宁可塞垃圾不漏线索）
 兜底：两路都空时，按时间倒序拉当天最近 N 块原文
 
+引擎（--engine，默认 auto，全部路径都保留）：
+  auto      有向量走原混合；向量不可用优先 FTS；FTS 也没有回落关键词
+  fts / fts-char / fts-jieba   纯 FTS（零模型；fts.db 由 persona_fts.py --build 生成）
+  keyword   原 IDF 关键词路（--no-vector 的老行为）
+  vector    纯向量路
+  hybrid    FTS + 关键词两路 RRF（不碰向量）
+
 用法：
   python persona_search.py "防止舔狗化的惩罚规则" --k 30
   python persona_search.py "960 显卡" --k 10 --no-vector
+  python persona_search.py "上下文压缩" --engine fts-char --k 20
 """
 import argparse
 import datetime
@@ -27,11 +35,15 @@ try:
 except Exception:
     pass
 
+try:
+    import persona_fts as _fts  # 零模型 FTS5 路；缺这个文件时自动回落关键词
+except Exception:
+    _fts = None
+
 import tempfile
 import time
 
-import numpy as np
-
+# numpy 只在向量路用；FTS/关键词路不该因为没装 numpy 就起不来。
 # 输出编码：GBK 控制台遇到 emoji（🔧）会抛 UnicodeEncodeError，统一转 UTF-8。
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -47,6 +59,10 @@ import persona_avatar as av
 ROOT = _find_root()
 ARCHIVE = os.path.join(ROOT, 'archive')
 INDEX = os.path.join(ROOT, 'index')
+
+# 全引擎：不替使用者删路径。auto 只在向量路不可用时改走 FTS，其余行为保持原样。
+ENGINES = ('auto', 'fts', 'fts-char', 'fts-jieba', 'keyword', 'vector', 'hybrid')
+FTS_DB = os.environ.get('PERSONA_FTS_DB') or os.path.join(INDEX, 'fts.db')
 
 SEP_BLOCK = re.compile(r'\n\n---\n\n')
 MSG_HEAD = re.compile(r'##\s*(用户|助手)\s*\n(.*)', re.S)
@@ -225,13 +241,29 @@ def keyword_rank(q, bl, df, topn=60, allow=None):
     return [(i, s) for s, i in scored[:topn]]
 
 
-def vector_rank(q, topn=60):
-    try:
-        vpath = os.path.join(INDEX, 'vectors.npy')
-        mpath = os.path.join(INDEX, 'meta.jsonl')
+_VEC = {}
+
+
+def _load_vectors():
+    """向量矩阵与 meta 只读一次；同一进程里反复查询不再重读 231 MB .npy。
+    文件被重建（mtime/size 变）时缓存自动作废，不会拿旧矩阵配新 meta。"""
+    vpath = os.path.join(INDEX, 'vectors.npy')
+    mpath = os.path.join(INDEX, 'meta.jsonl')
+    import numpy as np
+    st = (os.stat(vpath).st_mtime_ns, os.stat(vpath).st_size,
+          os.stat(mpath).st_mtime_ns, os.stat(mpath).st_size)
+    if _VEC.get('sig') != st:
         vecs = np.load(vpath)
         vecs = vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
         metas = [json.loads(l) for l in io.open(mpath, encoding='utf-8') if l.strip()]
+        _VEC.update({'sig': st, 'vecs': vecs, 'metas': metas})
+    return _VEC['vecs'], _VEC['metas']
+
+
+def vector_rank(q, topn=60):
+    try:
+        import numpy as np
+        vecs, metas = _load_vectors()
         sys.path.insert(0, ROOT)
         import vs
         qv = vs.embed([q])[0]
@@ -337,29 +369,223 @@ def _dedupe(rows):
     return out
 
 
+def _fts_db_for(engine):
+    if engine == 'fts-char':
+        return os.environ.get('PERSONA_FTS_DB_CHAR') or os.path.join(INDEX, 'fts-char.db')
+    if engine == 'fts-jieba':
+        return os.environ.get('PERSONA_FTS_DB_JIEBA') or os.path.join(INDEX, 'fts-jieba.db')
+    return FTS_DB
+
+
+def fts_rank(q, topn=60, engine='fts', rerank=False):
+    """FTS 路。任何失败都只返回 [] 并给一句可执行提示，绝不抛到调用方。"""
+    if _fts is None:
+        print('[warn] 找不到 persona_fts.py，FTS 路不可用', file=sys.stderr)
+        return []
+    db = _fts_db_for(engine)
+    if not os.path.exists(db) and engine in ('fts-char', 'fts-jieba'):
+        # 只建了一个默认库时，单一库也能被 fts-char/fts-jieba 用；分词模式由库内记录决定。
+        alt = FTS_DB if os.path.exists(FTS_DB) else ''
+        if alt:
+            db = alt
+    if not os.path.exists(db):
+        print('[warn] fts.db 不存在：%s；先运行 python persona_fts.py --build' % db, file=sys.stderr)
+        return []
+    try:
+        return _fts.search(q, db=db, k=topn, rerank=rerank)
+    except Exception as e:
+        print('[warn] FTS 路不可用（回落关键词）：%s' % e, file=sys.stderr)
+        return []
+
+
+def _bl_lookup(bl):
+    d = {}
+    for i, b in enumerate(bl):
+        d.setdefault((b[0], b[3], b[4]), i)
+    return d
+
+
+def _fts_items(rows, bl=None, allow=None, rerank=False):
+    out = []
+    lookup = _bl_lookup(bl) if bl is not None else None
+    for r in rows:
+        item = {'file': r['file'], 'day': r.get('day', ''), 'source': r.get('source', ''),
+                'role': r.get('role', ''), 'text': r['text'],
+                'device': r.get('device', ''), 'model': r.get('model', ''),
+                'avatar': r.get('avatar', ''), 'score': r.get('score', 0.0),
+                'why': 'fts+rerank' if rerank else 'fts'}
+        if not item['avatar']:
+            item['avatar'] = av.of(item['device'], item['model'], item['source'])
+        if lookup is not None:
+            i = lookup.get((r['file'], r.get('role', ''), r['text']))
+            if i is None:
+                # meta 与 archive 的切块边界可能差几个字符：退回文件+角色+前 40 字。
+                for j, b in enumerate(bl):
+                    if b[0] == r['file'] and b[3] == r.get('role', '') and b[4][:40] == r['text'][:40]:
+                        i = j
+                        break
+            if i is not None:
+                b = bl[i]
+                item.update({'day': b[1], 'source': b[2], 'role': b[3], 'text': b[4],
+                             'device': b[5], 'model': b[6], 'avatar': b[7] if len(b) > 7 else ''})
+            if allow is not None:
+                if i is None or i not in allow:
+                    continue
+        elif allow is not None:
+            continue
+        out.append(item)
+    return out
+
+
+def _vector_items(vr, bl, allow):
+    out = []
+    lookup = _bl_lookup(bl)
+    for f, r, t, sc in vr:
+        i = lookup.get((f, r, t))
+        if i is None and t:
+            for j, b in enumerate(bl):
+                if b[0] == f and b[3] == r and b[4][:40] == t[:40]:
+                    i = j
+                    break
+        if allow is not None and (i is None or i not in allow):
+            continue
+        if i is None:
+            out.append({'file': f, 'day': '', 'source': '', 'role': r, 'text': t,
+                        'device': '', 'model': '', 'avatar': '', 'score': sc, 'why': 'vec'})
+        else:
+            b = bl[i]
+            out.append({'file': b[0], 'day': b[1], 'source': b[2], 'role': b[3], 'text': b[4],
+                        'device': b[5], 'model': b[6], 'avatar': b[7] if len(b) > 7 else '',
+                        'score': sc, 'why': 'vec'})
+    return out
+
+
+def _kw_items(kr, bl):
+    out = []
+    for rank, (i, sc) in enumerate(kr):
+        b = bl[i]
+        out.append({'file': b[0], 'day': b[1], 'source': b[2], 'role': b[3], 'text': b[4],
+                    'device': b[5], 'model': b[6], 'avatar': b[7] if len(b) > 7 else '',
+                    'score': sc, 'why': 'kw#%d(%.1f)' % (rank + 1, sc)})
+    return out
+
+
+def _fuse_rrf(lists, k):
+    """把若干已排序的 item 列表做加权 RRF。lists = [(name, items[, weight]), ...]。
+
+    FTS 权重 1.0、关键词 0.8：标识符查询里 FTS 的 Top-10 足以压过关键词的 Top-1，
+    不会被关键词的“persona / search”拆词结果把精确命中挤下去；模糊查询里关键词
+    仍能把它独有的候选带进来。
+    """
+    fused, why, first = {}, {}, {}
+    for spec in lists:
+        name, items = spec[0], spec[1]
+        weight = spec[2] if len(spec) > 2 else 1.0
+        for rank, it in enumerate(items):
+            key = (it['file'], it['role'], it['text'][:80])
+            fused[key] = fused.get(key, 0.0) + weight / (60 + rank)
+            why.setdefault(key, []).append('%s#%d' % (name, rank + 1))
+            first.setdefault(key, it)
+    out = []
+    for key, sc in sorted(fused.items(), key=lambda x: -x[1]):
+        it = dict(first[key])
+        it['score'] = sc
+        it['why'] = ','.join(why[key])
+        out.append(it)
+    return out[:k]
+
+
+def _finish(out, q, k, weighted, keep_tools, recent_days, bl):
+    if not keep_tools:
+        out = [it for it in out if not _is_tool_noise(it['text'])]
+    out = _dedupe(out)
+    if weighted:
+        for it in out:
+            it['score'] = it['score'] * (0.8 + 0.4 * importance(it['role'], it['text']))
+        out.sort(key=lambda x: -x['score'])
+    out = recent_boost(out, bl, recent_days)
+    return out[:k]
+
+
 def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=False,
-           keep_tools=False, recent_days=0, device=None, model=None, avatar=None):
-    """两路合并后的结果，给 persona_pack.py --hybrid 等调用方用。
+           keep_tools=False, recent_days=0, device=None, model=None, avatar=None, engine='auto'):
+    """全引擎检索：auto / fts / fts-char / fts-jieba / keyword / vector / hybrid。
 
     返回 [{file, day, source, role, text, device, model, score, why}, ...]
+    auto：有向量走原混合路；向量不可用时优先 FTS；FTS 也没有才回落关键词。
     device / model：按分身字段过滤（B11e），None = 不过滤。
     recent_days：最近 N 天优先（B11c），0 = 关。
     """
-    bl = blocks()
-    df = idf(bl)
+    engine = (engine or 'auto').lower()
+    if engine not in ENGINES:
+        engine = 'auto'
+    filters = bool(device or model or avatar)
 
-    # 分身/设备/底座过滤必须在**取候选之前**做：先在 60 名里挑再过滤，
-    # 会出现“206 条 dsh 命中，却因为前 60 名全是网页而报 0 条”。实测踩过。
+    # 纯 FTS：不需要 blocks()/idf()（冷启动建块要一二十秒，FTS 的意义就是不等它）。
+    # device/model/avatar 在建库时已写进 chunks，过滤也在这里做，不回头读 archive。
+    if engine in ('fts', 'fts-char', 'fts-jieba'):
+        rr = fts_rank(q, topn=max(k * 3, 60), engine=engine, rerank=use_rerank)
+        items = _fts_items(rr)
+        if filters:
+            items = [it for it in items
+                     if (not device or it['device'] == device)
+                     and (not model or it['model'] == model)
+                     and (not avatar or it['avatar'] == avatar)]
+        return _finish(items, q, k, weighted, keep_tools, recent_days, [])
+
+    auto_vr = None
+    if engine == 'auto':
+        auto_vr = vector_rank(q) if use_vector else []
+        if not auto_vr:
+            fr = fts_rank(q, topn=max(k * 3, 60), rerank=use_rerank)
+            if fr:
+                items = _fts_items(fr)
+                if filters:
+                    items = [it for it in items
+                             if (not device or it['device'] == device)
+                             and (not model or it['model'] == model)
+                             and (not avatar or it['avatar'] == avatar)]
+                print('[info] 向量路不可用，已切 FTS（%s）'
+                      % os.path.basename(_fts_db_for('fts')), file=sys.stderr)
+                return _finish(items, q, k, weighted, keep_tools, recent_days, [])
+            print('[info] 向量与 FTS 都不可用，回落关键词', file=sys.stderr)
+            engine = 'keyword'
+
+    bl = blocks()
+    df = idf(bl) if engine != 'vector' else {}
     allow = None
-    if device or model or avatar:
+    if filters:
         allow = set(i for i, b in enumerate(bl)
                     if (not device or b[5] == device)
                     and (not model or b[6] == model)
                     and (not avatar or b[7] == avatar))
         if not allow:
             return []
+
+    if engine == 'vector':
+        vr = vector_rank(q) if use_vector else []
+        return _finish(_vector_items(vr, bl, allow), q, k, weighted, keep_tools, recent_days, bl)
+
+    if engine == 'keyword':
+        kr = keyword_rank(q, bl, df, allow=allow)
+        return _finish(_kw_items(kr, bl), q, k, weighted, keep_tools, recent_days, bl)
+
+    if engine == 'hybrid':
+        kr = keyword_rank(q, bl, df, allow=allow)
+        fr = fts_rank(q, topn=max(k, 60), rerank=use_rerank)
+        fi = _fts_items(fr)
+        if filters:
+            fi = [it for it in fi
+                  if (not device or it['device'] == device)
+                  and (not model or it['model'] == model)
+                  and (not avatar or it['avatar'] == avatar)]
+        out = _fuse_rrf([('fts', fi, 1.0), ('kw', _kw_items(kr, bl), 0.8)], k * 3)
+        return _finish(out, q, k, weighted, keep_tools, recent_days, bl)
+
+    # ---- auto：只有向量路拿到了候选才走到这里（没向量时上面已经切 FTS/关键词）----
     kr = keyword_rank(q, bl, df, allow=allow)
-    vr = vector_rank(q) if use_vector else []
+    vr = auto_vr or []
+
     if allow is not None and vr:
         ok_files = set(bl[i][0] for i in allow)
         vr = [t for t in vr if t[0] in ok_files]
@@ -375,8 +601,6 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
         why.setdefault(key, []).append('vec#%d(%.3f)' % (rank + 1, sc))
 
     out = []
-    # 不在这里截断：先按 device/model 过滤再取前 k，否则过滤只能从 3 个候选里挑，
-    # 明明有 50 条网页命中，却因为前 3 名都是电脑会话而显得"网页里没有"。
     for key, sc in sorted(fused.items(), key=lambda x: -x[1]):
         if key[0] == 'b':
             f, day, src, role, text, dev, mod, row_avatar = bl[key[1]]
@@ -390,30 +614,24 @@ def merged(q, k=100, use_vector=True, use_rerank=True, rerank_top=40, weighted=F
                     'text': text, 'device': dev, 'model': mod, 'avatar': row_avatar,
                     'score': sc, 'why': ','.join(why[key])})
 
-    # 先剔噪声与重复，再重排：省算力，也别让副本把 Top-K 稀释。
     if not keep_tools:
         out = [it for it in out if not _is_tool_noise(it['text'])]
     out = _dedupe(out)
-
-    # 分身字段过滤：放在重排之前，省得为一个注定被滤掉的块去调 cross-encoder。
-    if device or model or avatar:
+    if filters:
         out = [it for it in out
                if (not device or it.get('device') == device)
                and (not model or it.get('model') == model)
                and (not avatar or it.get('avatar') == avatar)]
-
     if weighted:
         for it in out:
             it['score'] = it['score'] * (0.8 + 0.4 * importance(it['role'], it['text']))
         out.sort(key=lambda x: -x['score'])
-
     if use_rerank and len(out) > 1:
         rr = rerank_all(q, out, topn=rerank_top)
         if rr is not None:
             for it in rr:
                 it['why'] = (it.get('why', '') + ',rerank').strip(',')
             out = rr
-
     out = recent_boost(out, bl, recent_days)
     return out[:k]
 
@@ -459,11 +677,13 @@ def run_job(jid, q, k, deep, **kw):
     io.open(_job_path(jid), 'w', encoding='utf-8').write(json.dumps(data, ensure_ascii=False))
 
 
-def start_async(q, k, deep, recent=0, device=None, model=None, keep_tools=False):
+def start_async(q, k, deep, recent=0, device=None, model=None, keep_tools=False, engine='auto'):
     """立刻返回 job id；真正的检索在 detached 子进程里跑，结果写 index/jobs/<id>.json。"""
     os.makedirs(JOBS, exist_ok=True)
     jid = time.strftime('%Y%m%d-%H%M%S') + '-%d' % os.getpid()
     cmd = [sys.executable, os.path.abspath(__file__), '--run-job', jid, q, '--k', str(k)]
+    if engine and engine != 'auto':
+        cmd += ['--engine', engine]
     if deep:
         cmd.append('--deep')
     if recent:
@@ -485,6 +705,9 @@ def main():
     ap.add_argument('--k', type=int, default=100)
     ap.add_argument('--no-vector', action='store_true')
     ap.add_argument('--no-rerank', action='store_true')
+    ap.add_argument('--engine', choices=ENGINES, default='auto',
+                    help='auto=有向量走混合/无向量优先 FTS；fts/fts-char/fts-jieba=纯 FTS；'
+                         'keyword=原关键词；vector=纯向量；hybrid=FTS+关键词二路融合')
     ap.add_argument('--deep', action='store_true', help='重排池放到 100：更准但慢约 6 倍')
     ap.add_argument('--keep-tools', action='store_true', dest='keep_tools',
                     help='保留工具调用流水（🔧 edit {...}）；默认过滤')
@@ -507,7 +730,8 @@ def main():
 
     if a.context:
         a.show_source = True
-    kw = dict(recent_days=a.recent, device=a.device, model=a.model, avatar=a.avatar)
+    kw = dict(recent_days=a.recent, device=a.device, model=a.model, avatar=a.avatar,
+              engine=a.engine)
 
     if a.run_job:
         run_job(a.run_job, a.query, a.k, a.deep, **kw)
@@ -532,7 +756,8 @@ def main():
     if a.async_:
         if not a.query:
             ap.error('--async 需要查询词')
-        print(start_async(a.query, a.k, a.deep, a.recent, a.device, a.model, a.keep_tools))
+        print(start_async(a.query, a.k, a.deep, a.recent, a.device, a.model,
+                          a.keep_tools, a.engine))
         return 0
 
     t0 = time.time()
@@ -541,11 +766,11 @@ def main():
     out = merged(a.query, k=a.k, use_vector=not a.no_vector, use_rerank=not a.no_rerank,
                  rerank_top=(100 if a.deep else 40), weighted=a.weighted,
                  keep_tools=a.keep_tools, **kw)
-    if not out and not (a.device or a.model or a.avatar):
+    if not out and not (a.device or a.model or a.avatar) and a.engine in ('auto', 'keyword'):
         recent = sorted(bl, key=lambda b: b[1], reverse=True)[:a.k]
         out = [{'file': b[0], 'role': b[3], 'text': b[4], 'score': 0.0, 'why': 'timeline-fallback',
                 'avatar': b[7] if len(b) > 7 else ''} for b in recent]
-    elif not out:
+    elif not out and (a.device or a.model or a.avatar):
         print('（该 设备/底座/分身 下没有命中；去掉 --device/--model/--avatar 再试）', file=sys.stderr)
 
     cache = {}
