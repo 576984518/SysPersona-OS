@@ -1,4 +1,4 @@
-# SysPersona
+﻿# SysPersona
 
 **Separating an AI's persona and memory from its model — making them portable, versioned, encrypted data assets.**
 
@@ -6,6 +6,23 @@
 > What makes "it" who it is: a persona file and a memory database.
 
 [中文说明](README.md) · [Architecture](README.md#3-总体架构) · [State machine](docs/STATE-MACHINE.md) · [Metaphors](docs/METAPHORS.md)
+
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
 
 ---
 
@@ -20,6 +37,23 @@ Three failure modes follow:
 3. **Lock-in** — the transcript lives on the vendor's side; you cannot audit, export, or move it.
 
 All three share one cause: **persona and memory are not treated as data assets; they are parasitic on the model and the platform.**
+
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
 
 ---
 
@@ -57,6 +91,23 @@ Three consequences: persona files should stay short — they are distillates, no
 
 One boundary: same substrate, not interchangeable. Persona is low-entropy and slow-moving; memory is high-entropy and fast-moving. Merging them into a single pool loses both stability and retrievability — a common failure mode of memory plugins.
 
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
+
 ---
 
 ## Architecture
@@ -72,6 +123,23 @@ Vault         UUID / key derivation / encrypted container / device binding / rec
 ```
 
 See [State machine](docs/STATE-MACHINE.md) for the lifecycle, the weight-evolution loop, and a wake-up sequence.
+
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
 
 ---
 
@@ -92,6 +160,23 @@ See [State machine](docs/STATE-MACHINE.md) for the lifecycle, the weight-evoluti
 
 **State (ephemeral):** today's mood and fatigue; decays back to baseline by half-life.
 
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
+
 ---
 
 ## Memory
@@ -110,6 +195,23 @@ Retrieval blends tags, vector similarity, time decay, importance, and user feedb
 
 Forgetting is a feature: discard, compress, preserve, or never-auto-delete — decided by rule, logged, and recoverable.
 
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
+
 ---
 
 ## Lifecycle
@@ -119,6 +221,23 @@ Forgetting is a feature: discard, compress, preserve, or never-auto-delete — d
 - **Sleep:** triggered by context threshold, explicit instruction, or idleness. Consolidate, index, update profile, snapshot, clear working memory.
 - **Wake:** reload persona, retrieve recent summaries, resume open threads.
 - **Migrate:** compatibility check → sandboxed trial → night-time atomic switch → rollback on failure.
+
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
 
 ---
 
@@ -130,6 +249,23 @@ Forgetting is a feature: discard, compress, preserve, or never-auto-delete — d
 
 Roughly: drift governs the *speed* of change, anti-rigidity governs the *inertia* of not changing. Neither may touch the kernel.
 
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
+
 ---
 
 ## Identity and security
@@ -140,6 +276,23 @@ Roughly: drift governs the *speed* of change, anti-rigidity governs the *inertia
 - **Public/private data domains**, decided at write time.
 - **Recovery**: mnemonic phrase, escrowed email recovery, offline backups — three complementary paths, none assumed infallible.
 - **Cloud zero-knowledge**: only de-identified instructions and necessary fragments leave the device; results are re-encrypted locally.
+
+## This is not a program package — it is something that can be landed
+
+**Nothing runnable is shipped**: no installer, no binaries, no `setup.exe`.
+
+The reason is simple — this system grew onto one specific machine: a notification area, scheduled
+tasks, a local browser, one particular chat shell, a memory directory on one drive. On another
+machine the paths, accounts, shell version and permissions all differ. **Shipping "a program that
+just runs" would be a false promise.**
+
+What ships instead is the **design and its acceptance criteria**. There is one way to use it:
+
+> Hand the repository to an AI agent that can read/write files and execute commands, and let it
+> build and verify the implementation for your environment.
+
+Prompt template, environment inventory, the seven-step acceptance list and common misconceptions:
+[`docs/USAGE.en.md`](docs/USAGE.en.md) (Chinese: [`docs/USAGE.md`](docs/USAGE.md)).
 
 ---
 
