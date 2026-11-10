@@ -14,7 +14,8 @@ r"""persona_tray.py — 托盘状态灯：多客户端并列显示 + 实时水�
 启动：
   <runtime>\python\pythonw.exe persona_tray.py      # 或 $env:PERSONA_PY
 自检：
-  同上 --probe 只打印一帧状态然后退出（不进托盘）。
+  同上 --probe（或 --status）只打印一帧状态、菜单项和当前图标颜色，然后退出（不进托盘）；
+  --probe-compress 自检「立即压缩一次」：跳过确认框、子进程加 --dry-run（不注入）。
 
 环境变量：SYSPERSONA_ROOT（旧名 PERSONA_ROOT / MEM / SYSPERSONA_MEM 也认）指记忆库根；
 不设就按脚本自身目录向上找含 ops\ 与 sessions\ 的目录，再找不到直接报错——不再写死盘符。
@@ -29,12 +30,32 @@ import time
 import pystray
 from PIL import Image, ImageDraw
 
-try:
-    from persona_root import root as _persona_root
-except ImportError:   # 仓库布局：tools\tray\ → tools\ctxpack\
-    sys.path.insert(0, os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ctxpack"))
-    from persona_root import root as _persona_root
+def _load_persona_root():
+    """记忆库根的最后一道兜底：仓库那份是 `root(strict=False)`，记忆库里那份只有 `find_root()`。
+
+    两个都拿不到就返回 None——托盘靠环境变量/向上找目录也能活，不该因为这一句 import 起不来
+    （2026-11-10 踩：把托盘拷回记忆库目录后 `from persona_root import root` 直接 ImportError）。
+    """
+    try:
+        from persona_root import root as _r
+        return lambda: _r(strict=False)
+    except ImportError:
+        pass
+    try:
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ctxpack"))
+        from persona_root import root as _r
+        return lambda: _r(strict=False)
+    except ImportError:
+        pass
+    try:
+        from persona_root import find_root as _f
+        return lambda: _f()
+    except ImportError:
+        return None
+
+
+_PERSONA_ROOT = _load_persona_root()
 
 
 # ── 路径：以记忆库为准（托盘在代码仓库里，ops\ 在记忆库） ──────────────
@@ -48,9 +69,13 @@ def _resolve_root():
         if os.path.isdir(os.path.join(cur, "ops")) and os.path.isdir(os.path.join(cur, "sessions")):
             return cur
         cur = os.path.dirname(cur)
-    found = _persona_root(strict=False)
-    if found:
-        return found
+    if _PERSONA_ROOT is not None:
+        try:
+            found = _PERSONA_ROOT()
+        except Exception:
+            found = None
+        if found:
+            return found
     raise SystemExit("找不到记忆库根：请设 SYSPERSONA_ROOT（或 MEM）指向记忆库目录；"
                      "托盘不再退回某台机器的路径。")
 
@@ -62,6 +87,7 @@ HCTX = os.path.join(OPS, "hctx.json")
 LOG = os.path.join(OPS, "persona.log")
 PY = os.path.join(os.path.dirname(sys.executable), "python.exe")
 GAUGE = os.path.join(ROOT, "persona_gauge.py")
+COMPACT = os.path.join(ROOT, "persona_compact.py")     # 菜单「立即压缩一次」跑的脚本
 
 # 注入告警（2026-11-10）：状态/三档判定/提示音都在记忆库的 persona_inject.py 里，
 # 托盘只读它，阈值不在这里复制一份。
@@ -107,6 +133,14 @@ CLIENTS = [
 _PROC = {"at": 0.0, "counts": {}}
 _DSH = {"at": 0.0, "ctx": None, "max": None, "pct": None, "note": ""}
 _LOCK = threading.Lock()
+
+# 手动压缩（2026-11-10 加）：托盘点一下 → 子进程 `persona_compact.py check --force`。
+# 压缩期间图标整块变黄、tooltip 写「正在压缩…」；失败原因在 tooltip 留 60 秒。
+_BUSY = {"on": False, "note": "", "until": 0.0}
+_LAST_COMPRESS = {"rc": None, "out": ""}     # 自检用：最近一次子进程输出
+BUSY_COLOR = (230, 170, 40)                  # 黄（与水位"注意"同色）
+BUSY_TITLE = "SysPersona · 正在压缩…（先镜像再发 /compact，期间别打字）"
+BUSY_KEEP = 60                               # 失败原因在 tooltip 留多久（秒）
 
 
 # ── 小工具 ───────────────────────────────────────────────────────────
@@ -156,6 +190,47 @@ def color_of(pct):
     if pct >= 35:
         return (230, 170, 40)
     return (60, 170, 90)
+
+
+# ── 手动压缩的状态灯（2026-11-10 加）────────────────────────────────
+def busy_state():
+    """当前压缩状态 → (是否进行中, 提示语)。失败原因留 `BUSY_KEEP` 秒后自动清掉。"""
+    with _LOCK:
+        on, note, until = bool(_BUSY["on"]), _BUSY["note"], _BUSY["until"]
+    if not on and note and time.time() > until:
+        with _LOCK:
+            if not _BUSY["on"] and _BUSY["note"] == note:
+                _BUSY["note"] = ""
+        note = ""
+    return on, note
+
+
+def set_busy(on, note=""):
+    with _LOCK:
+        _BUSY["on"] = bool(on)
+        _BUSY["note"] = note
+        _BUSY["until"] = 0.0 if on else time.time() + BUSY_KEEP
+
+
+def icon_color_name(s=None):
+    """当前图标会用的底色名（--probe 用它验证「压缩时变黄、完事恢复」）。"""
+    on, _note = busy_state()
+    if on:
+        return "黄（压缩中）"
+    s = snapshot() if s is None else s
+    inj = s.get("inject") or {}
+    if inj.get("level") == "error":
+        return "红（注入告警）"
+    if inj.get("level") == "warn":
+        return "黄（注入告警）"
+    if not s["bars"]:
+        return "灰（没有客户端）"
+    colors = [b[0] for b in s["bars"]]
+    if (220, 60, 60) in colors:
+        return "红"
+    if (230, 170, 40) in colors:
+        return "黄"
+    return "绿"
 
 
 # ── 进程表 ───────────────────────────────────────────────────────────
@@ -267,10 +342,10 @@ def dsh_watermark(force=False):
     else:
         press, mx, pct = _legacy_dsh()   # 降级：旧读法，明标
         note = " (旧读法)"
+        if mx is None:
+            mx = WIN_FALLBACK            # 旧读法也拿不到：窗口仍按 1.1M 显示，不许 ?/?
         if press is None:
             note += " 读数不可用"
-        elif mx is None:
-            mx = WIN_FALLBACK
     with _LOCK:
         _DSH.update({"at": now, "ctx": press, "max": mx, "pct": pct, "note": note})
         return dict(_DSH)
@@ -418,6 +493,17 @@ def make_icon(bars, alarm="ok"):
     return img
 
 
+def make_busy_icon():
+    """压缩进行中：整块黄底 + 三道深色横杠（不画水位，一眼看出"在干活"）。"""
+    S = 64
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, S - 1, S - 1), fill=BUSY_COLOR + (255,))
+    for y in (21, 30, 39):
+        d.rectangle((16, y, S - 17, y + 4), fill=(70, 52, 8, 255))
+    return img
+
+
 # ── 弹窗：详细状态 ───────────────────────────────────────────────────
 def detail_text(s):
     out = [s["title"], ""]
@@ -500,11 +586,17 @@ def quit_app(icon, item=None):
 def refresh(icon):
     while True:
         try:
-            s = snapshot()
-            icon.icon = make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok"))
-            icon.title = s["title"][:120]
-            if INJ:
-                INJ.check_alert()      # 上升沿才响；marker 落盘，不会每轮都响
+            on, note = busy_state()
+            if on:
+                # 压缩中：整块黄 + 固定提示，水位先不画（子进程在导出/镜像/等空闲）
+                icon.icon = make_busy_icon()
+                icon.title = BUSY_TITLE[:120]
+            else:
+                s = snapshot()
+                icon.icon = make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok"))
+                icon.title = (s["title"] if not note else "SysPersona · " + note)[:120]
+                if INJ and not note:
+                    INJ.check_alert()  # 上升沿才响；marker 落盘，不会每轮都响
         except Exception:
             pass
         time.sleep(TICK)
@@ -521,6 +613,85 @@ def retry_inject(icon=None, item=None):
     except Exception as e:
         msg = "探针失败：%s" % e
     _dialog(msg[:800], "立即重试一次注入（只探测，不发内容）")
+
+
+# ── 菜单「立即压缩一次」（2026-11-10 加）────────────────────────────
+CONFIRM_COMPACT = ("立即压缩一次？\n\n"
+                   "会先把当前会话原文导出、镜像并校验 sha256，再等壳空闲后注入 /compact。\n"
+                   "可能需要一两分钟，期间别打字、别切窗口（会抢一次前台焦点）。\n"
+                   "镜像失败就不压。继续吗？")
+
+
+def _confirm(text, title="SysPersona"):
+    """原生「是/否」框：和 _dialog 一样走 Win32（tkinter 在 pythonw 下会卡死）。"""
+    import ctypes
+    try:
+        flags = 0x04 | 0x20 | 0x40000 | 0x10000      # YESNO|QUESTION|TOPMOST|SETFOREGROUND
+        return ctypes.windll.user32.MessageBoxW(0, text, title, flags) == 6   # IDYES
+    except Exception:
+        return False
+
+
+def _fail_reason(out, rc):
+    """把子进程输出压成一句人话，写进 tooltip。"""
+    txt = out or ""
+    if "镜像没落盘" in txt or "镜像校验失败" in txt or "镜像异常" in txt:
+        return "镜像失败"
+    if "前台焦点" in txt:
+        return "没抢到前台焦点"
+    if "壳一直在动" in txt:
+        return "壳一直在动，没等到空闲"
+    if "冷却" in txt:
+        return "冷却中（刚压过，防连点）"
+    for line in txt.splitlines():
+        line = line.strip()
+        if line.startswith("FAIL"):
+            body = line[4:].strip()
+            if body:
+                return body[:40]
+    return "exit %d" % rc
+
+
+def _compress_worker(ask=True, extra=()):
+    """真正干活的那层：确认 → 子进程 `check --force`（不阻塞托盘）。
+
+    图标/提示由 refresh 循环按 `_BUSY` 画：执行中整块黄 + 「正在压缩…」，
+    完成恢复；失败把原因留在 tooltip（`BUSY_KEEP` 秒）。
+    """
+    def run():
+        if ask and not _confirm(CONFIRM_COMPACT, "SysPersona · 立即压缩一次"):
+            return
+        set_busy(True)
+        try:
+            env = dict(os.environ, PYTHONIOENCODING="utf-8")
+            r = subprocess.run([PY, COMPACT, "check", "--force", "--source", "tray"]
+                               + list(extra),
+                               cwd=ROOT, capture_output=True, timeout=900,
+                               encoding="utf-8", errors="replace",
+                               creationflags=NO_WINDOW, env=env)
+            out = ((r.stdout or "") + (r.stderr or "")).strip()
+            with _LOCK:
+                _LAST_COMPRESS["rc"], _LAST_COMPRESS["out"] = r.returncode, out
+            if r.returncode == 0 and ("OK " in out or "DRY" in out):
+                set_busy(False)                 # 成功：立刻恢复常规图标/提示
+            else:
+                set_busy(False, "压缩失败：" + _fail_reason(out, r.returncode))
+        except subprocess.TimeoutExpired:
+            set_busy(False, "压缩失败：超时（15 分钟没结束）")
+        except Exception as e:
+            set_busy(False, "压缩失败：%s" % str(e)[:60])
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def compress_once(icon=None, item=None):
+    """菜单「立即压缩一次」的回调入口。
+
+    pystray 只接受 0/1/2 个参数的回调，参数超过 2 个会抛 `ValueError(action)`
+    （2026-11-10 踩：`compress_once(icon, item, ask, extra)` 四参 → 托盘启动即崩、
+    开机自启静默失败，看上去像「托盘没起来」）。带参数的那层叫 `_compress_worker`。
+    """
+    _compress_worker()
 
 
 
@@ -615,8 +786,63 @@ def submit_task(icon=None, item=None):
     _dialog(msg, "派活")
 
 
+def _menu_items():
+    """托盘菜单的唯一出处：main 建菜单、--probe/--status 打印菜单项都读它。"""
+    return [
+        ("状态", show_status, True),
+        ("立即压缩一次", compress_once, False),
+        ("立即重试一次注入", retry_inject, False),
+        ("任务池（只读）", show_pool, False),
+        ("派一条…", submit_task, False),
+        ("打开日志", open_log, False),
+        ("打开记忆库", open_mem, False),
+        (None, None, False),                     # 分隔线
+        ("退出托盘", quit_app, False),
+    ]
+
+
+def build_menu():
+    items = []
+    for label, fn, default in _menu_items():
+        if label is None:
+            items.append(pystray.Menu.SEPARATOR)
+        else:
+            items.append(pystray.MenuItem(label, fn, default=default))
+    return pystray.Menu(*items)
+
+
+def _print_menu():
+    print("[菜单]")
+    for label, _fn, default in _menu_items():
+        print("  %s %s" % ("*" if default else " ", label or "—— 分隔线 ——"))
+
+
+def _probe_compress():
+    """自检「立即压缩一次」：跳过确认框，子进程加 --dry-run，只验证走位与着色。"""
+    s = snapshot()
+    print("[自检] 手动压缩：跳过确认框；子进程加 --dry-run（不注入、不落盘原文）")
+    print("[图标] 压缩前颜色=%s" % icon_color_name(s))
+    set_busy(True)
+    print("[图标] 压缩中颜色=%s（tooltip=%s）" % (icon_color_name(s), BUSY_TITLE))
+    _compress_worker(ask=False, extra=("--dry-run",))
+    t0 = time.time()
+    while time.time() - t0 < 120:
+        on, _note = busy_state()
+        if not on:
+            break
+        time.sleep(0.2)
+    with _LOCK:
+        rc, out = _LAST_COMPRESS["rc"], _LAST_COMPRESS["out"]
+    print("[压缩子进程] rc=%s" % rc)
+    for line in (out or "").splitlines():
+        print("  " + line)
+    _on, note = busy_state()
+    print("[图标] 压缩后颜色=%s%s"
+          % (icon_color_name(), ("（tooltip：%s）" % note) if note else "（已恢复）"))
+
+
 def main():
-    if "--probe" in sys.argv:
+    if "--probe" in sys.argv or "--status" in sys.argv:
         s = snapshot()
         ev = INJ.check_alert() if INJ else None
         if ev:
@@ -634,22 +860,21 @@ def main():
             else:
                 print("[提示音] 不响（当前 %s 与上次已报的 %s 同档，只响一次）" % (
                     ev.get("level"), ev.get("prev")))
+        _print_menu()
+        on, note = busy_state()
+        print("[托盘] 压缩状态=%s；图标颜色=%s；提示=%s"
+              % ("进行中" if on else "空闲", icon_color_name(s),
+                 BUSY_TITLE if on else (note or "（正常，按水位上色）")))
+        return
+    if "--probe-compress" in sys.argv:
+        _probe_compress()
         return
     s = snapshot()
     icon = pystray.Icon(
         "SysPersona",
         icon=make_icon(s["bars"], (s.get("inject") or {}).get("level", "ok")),
         title=s["title"][:120],
-        menu=pystray.Menu(
-            pystray.MenuItem("状态", show_status, default=True),
-            pystray.MenuItem("立即重试一次注入", retry_inject),
-            pystray.MenuItem("任务池（只读）", show_pool),
-            pystray.MenuItem("派一条…", submit_task),
-            pystray.MenuItem("打开日志", open_log),
-            pystray.MenuItem("打开记忆库", open_mem),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出托盘", quit_app),
-        ),
+        menu=build_menu(),
     )
     threading.Thread(target=refresh, args=(icon,), daemon=True).start()
     icon.run()
