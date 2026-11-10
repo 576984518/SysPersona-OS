@@ -5,7 +5,7 @@
 ## 先读这三处
 
 1. [模型不构成人格](README.md#它解决什么)：公理与「人格」这个词的准确用法。
-2. [5.4 权重演化](docs/ARCHITECTURE-v0.1.md#54-人格平滑演化机制smooth-weight-evolution)：变化速度有界。
+2. [5.4 权重演化](docs/ARCHITECTURE-v0.1.md#54-权重演化机制smooth-weight-evolution)：变化速度有界。
 3. [5.5 抗僵化](docs/ARCHITECTURE-v0.1.md#55-数字衰老与抗僵化anti-rigidity)：不变惯性有界。
 
 后面的所有设计都从这三处推出。提 PR 前，先确认你的改动没有和它们冲突。
