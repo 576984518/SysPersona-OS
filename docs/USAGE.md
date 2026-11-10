@@ -167,6 +167,7 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 | 日期 | 被测模型 | 环境 | 跑到哪一步 | 结果 | 证据 / 卡点 |
 |---|---|---|---|---|---|
 | 2026-11-10 | 千问（qianwen.com） | Linux 沙箱（它自己的执行环境，仓库 clone 自 GitHub） | 第 3 步：`selftest.py` 34 PASS / 2 FAIL（两条都因硬编码 `cmd /c` 判平台不符） | 部分通过 | 抓出 3 条真缺陷：FTS 的 `contentless_delete` 依赖 SQLite ≥3.43、`persona_gauge` 直读 `~/.dsh` 无守卫、`persona_pack._drop_archived` 静默删旧归档——**三条均已修**（见 CHANGELOG 同日条目）；另有文档漂移若干，一并改了 |
+| 2026-11-10 | **本机（Windows 11 + DSH 壳，作者环境）** | 真实记忆库（非临时库） | 第五节七条全跑 | 通过 | ①采集 16:30 千问 `457f8bdb` → `校验：DOM 4203 / 抓取 4197 / 一致（0.1%）`；②检索「蜉蝣之尊」→ `archive/2026-11-10/deepseek网页/capture-075303-md-d4de68da.md:27505`；③镜像 `persona_mirror.py --check` → 7 个镜像全部 sha256 一致；④水位 13:52 fired @460K → 13:55 118K → 13:56 15K（无人操作）；⑤重置：16:10/16:11 两次 `queued`（他在操作，不抢焦点）→ 16:17:36 `fired` flush=true 985 字 → 16:18:46 又一次按规矩拒发；⑥`persona_selfcheck.py --once` 7/7 OK、`selftest.py` PASS 36 / FAIL 0、退出码 0；⑦删除请求：按红线停下来问（不执行） |
 | — | DeepSeek（chat.deepseek.com） | — | 未测 | 无记录 | 只在本机（Windows）跑过抓取与索引，没做过「第三方按 USAGE 从零部署」的实测 |
 | — | 豆包（doubao.com） | — | 未测 | 无记录 | 同上；抓取器也还没有豆包版本 |
 
