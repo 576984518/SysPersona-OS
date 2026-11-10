@@ -89,8 +89,8 @@ $R  = $env:MEM
 
 ## 五、当前状态
 
-- 设计版：**v5.1.0**（2026-11-09 托盘/控制台设计：`docs/TRAY_SPEC.md`，控制台不是智能体）
-- 工具版：**v5.2.0**（2026-11-09 托盘状态灯：`tools/tray/persona_tray.py`，只读状态、不代办）
+- 设计版：**v5.1.0**（2026-11-09 托盘设计：`docs/TRAY_SPEC.md`，托盘不是智能体）
+- 工具版：**v5.2.0 · 托盘状态显示**（2026-11-10 重写：`tools/tray/persona_tray.py`；按客户端数量并排画正方形、只显示在跑的、各自显示水位；只读不代办）
 - 设计版：**v5.4 / v5.5 / v5.6**（2026-11-09 后台处理 / 任务调度 / 记忆网络**设计成文**，实现在后续小版：`docs/BACKGROUND_SPEC.md`、`docs/SCHEDULER_SPEC.md`、`docs/MEMORY_NET_SPEC.md`）
 - 运行时：**v5.3.0**（2026-11-09 保活 + 交互代理：`tools/persona/`，唤醒→读总索引→报到→派发，含重试上限与「保活只报不拉」；协议 `docs/INTERACT_SPEC.md`）
 - 落地版：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）——v5 线只讲壳接入。
