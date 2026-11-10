@@ -186,6 +186,42 @@ def last_input_age():
     return max(0.0, (k.GetTickCount() - li.dwTime) / 1000.0)
 
 
+def wait_shell_idle(stable=15.0, timeout=900.0, poll=2.0):
+    """等**壳自己**空下来（2026-11-10 踩：注入撞上正在生成的那一轮，回车被吞）。
+
+    判据很土但有效：DSH 正在干活时，会话文件一直在长；停下来就不动了。
+    `stable` 秒内 mtime 没变 = 空闲。返回 (ok, 等了多久, 说明)。
+    """
+    import glob
+    import os
+    import time as _t
+    home = os.path.expanduser("~")
+
+    def newest():
+        best, bt = "", 0.0
+        for f in glob.glob(os.path.join(home, ".dsh", "sessions", "*", "*",
+                                        "session.v4.jsonl.zstd")):
+            try:
+                t = os.path.getmtime(f)
+            except OSError:
+                continue
+            if t > bt:
+                best, bt = f, t
+        return bt
+
+    t0 = _t.time()
+    last, since = newest(), _t.time()
+    while _t.time() - t0 < timeout:
+        _t.sleep(poll)
+        cur = newest()
+        if cur != last:
+            last, since = cur, _t.time()
+            continue
+        if _t.time() - since >= stable:
+            return True, _t.time() - t0, "壳已空闲 %.0f 秒" % (_t.time() - since)
+    return False, _t.time() - t0, "等了 %.0f 秒壳还在动" % (_t.time() - t0)
+
+
 def focus_window(hwnd):
     """把窗口拿到前台，但**不改他的窗口状态**（最大化就保持最大化）。
 

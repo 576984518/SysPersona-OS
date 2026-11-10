@@ -176,7 +176,7 @@ def ensure_mirror(trigger=""):
 
 
 def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
-          do_mirror=True, force_ctx=0):
+          do_mirror=True, force_ctx=0, timeout=600):
     ctx, err = measure()
     if force_ctx:                      # 极限实测用：不改真实文件，只假装量到了这个数
         ctx, err = int(force_ctx), ""
@@ -212,6 +212,13 @@ def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
     except Exception as e:
         print("FAIL 导入注入模块失败：%s" % e)
         return 2
+    # 先等**壳**空下来再敲：10:15 那次撞上正在生成的那一轮，回车被吞。
+    iok, waited, imsg = pi.wait_shell_idle(stable=15, timeout=timeout)
+    print("等待：%s（%.0f 秒）" % (imsg, waited))
+    if not iok:
+        log({"at": now(), "ctx": ctx, "action": "busy", "msg": imsg})
+        print("FAIL 壳一直在动，这轮不压（下一轮再来）")
+        return 1
     ok, msg = pi.inject("/compact", wait_idle=5)
     st["last_fire"] = time.time()
     st["last_ctx"] = ctx
