@@ -74,6 +74,7 @@ REQ = os.path.join(OPS, "switch-request.json")     # 切档请求（谁都能写
 REQ_LOG = os.path.join(OPS, "switch-requests.jsonl")  # 谁下的、什么时候、成没成
 INTENT = os.path.join(OPS, "client-intent.json")     # 「这个窗口应该活着」的持久意图
 GIVEUP = os.path.join(OPS, "client-giveup.json")     # 连续拉不起才写，写给人看
+PROXY = os.path.join(OPS, "hermes-proxy.json")       # Hermes 代班中（断网时 DSH 不动）
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -82,6 +83,11 @@ CLIENT_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or "", "Programs",
                           "DeepSeek Harness")
 CLIENT_EXE = os.path.join(CLIENT_DIR, "DeepSeek Harness.exe")
 CLIENT_IMG = os.path.basename(CLIENT_EXE)
+
+# Hermes 客户端（另一条命：它的模型写在 config.yaml 里，改文件就生效）
+HERMES_EXE = os.environ.get("SYSPERSONA_HERMES_EXE") or \
+    r"D:\ProgramData\Hermes Agent CN Desktop\hermes-agent-cn-desktop.exe"
+HERMES_IMG = os.path.basename(HERMES_EXE)
 
 DEFAULT_CHAIN = [
     {"id": "deepseek", "label": "云端主（DeepSeek 收费）", "cmd": "paid",
@@ -281,6 +287,31 @@ def daemon_alive():
     return bool(pid) and _pid_alive(pid)
 
 
+def hermes_alive():
+    return any(n == HERMES_IMG.lower() for _, n in proc_table())
+
+
+def launch_hermes(wait=30.0):
+    """拉起 Hermes（若已在跑就什么都不做）。"""
+    if hermes_alive():
+        return True, "Hermes 本来就在跑"
+    if not os.path.exists(HERMES_EXE):
+        return False, "找不到 Hermes：%s" % HERMES_EXE
+    try:
+        subprocess.Popen([HERMES_EXE], cwd=os.path.dirname(HERMES_EXE),
+                         close_fds=True, creationflags=0x00000008,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception as e:                 # noqa: BLE001
+        return False, "拉起失败：%s" % e
+    t0 = time.time()
+    while time.time() - t0 < wait:
+        if hermes_alive():
+            return True, "已拉起（%.0f 秒）" % (time.time() - t0)
+        time.sleep(1.0)
+    return False, "起了但 %0.f 秒内没看到进程" % wait
+
+
 def client_alive():
     rows = proc_table()
     if not rows:                           # tasklist 没跑起来：判不了就别当成「客户端没了」
@@ -339,6 +370,8 @@ def default_plan():
              "note": "切硅基免费档再重启"},
             {"name": T["paid"], "args": "enact paid",
              "note": "切回 DeepSeek 收费档再重启"},
+            {"name": "SysPersona-DR-Hermes", "args": "enact hermes",
+             "note": "拉起 Hermes 客户端接活（它换模型只改配置）"},
         ],
     }
 
@@ -457,13 +490,16 @@ def decide(stale=None, net_override=None, prov_override=None):
     d["daemon_alive"] = daemon_alive()
     d["client_alive"] = client_alive()
 
+    if not net_up and proxy_active():
+        d.update({"action": "ok",
+                  "why": "断网中，Hermes 正在代班 → DSH 保持不动"})
+        return d
+
     if not net_up:
-        if is_local:
-            d.update({"action": "ok",
-                      "why": "心跳 %.0f 秒没动 + 网络不通，但本来就是本地档 → 不重复动手" % age})
-            return d
         d.update({"action": "fallback_local", "target": local,
-                  "why": "心跳 %.0f 秒没动 + 网络不通 → 保底：切本地模型" % age})
+                  "why": "心跳 %.0f 秒没动 + 网络不通 → %s"
+                         % (age, ((plan().get("branches") or {}).get("fallback_local") or {}).get("why")
+                            or "保底：切本地模型")})
         return d
 
     # 有网：按链找「下一个可用」。
@@ -804,7 +840,10 @@ def enact(what, dry=False):
             "free": [("杀客户端", "kill"), ("改配置 → 硅基免费档", "switch"),
                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
             "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
-                      ("移走本会话缓存", "session"), ("拉起客户端", "launch")]}.get(what)
+                      ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
+            "hermes": [("把 Hermes 切到本地档", "hconf"),
+                       ("拉起 Hermes", "hermes"),
+                       ("记录 Hermes 代班", "proxy")]}.get(what)
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
         return 2
@@ -833,6 +872,13 @@ def enact(what, dry=False):
                 msg = "%s；回滚到 %s：%s" % (msg, prev, "ok" if ok2 else msg2)
         elif kind == "session":
             ok, msg = session_cache_drop()       # 不致命
+        elif kind == "hconf":
+            ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use", "local"])
+        elif kind == "hermes":
+            ok, msg = _try(launch_hermes, tries=2, wait=5)
+        elif kind == "proxy":
+            proxy_on("断网：DSH 不动，Hermes 顶上")
+            ok, msg = True, "已记代班（网络恢复后唤醒 DSH）"
         else:
             time.sleep(1.0)
             ok, msg = _try(launch_client, tries=2, wait=3)
@@ -1154,6 +1200,21 @@ def ensure_client_up():
     return "第 %d 次重试仍失败：%s" % (n + 1, msg)
 
 
+def proxy_on(why="断网"):
+    _write_json(PROXY, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "why": why})
+
+
+def proxy_active():
+    return os.path.exists(PROXY)
+
+
+def proxy_clear():
+    try:
+        os.remove(PROXY)
+    except OSError:
+        pass
+
+
 def _gate(d):
     """动手前的闸门。返回 (allowed, reason)。阈值来自 dr-plan.json。"""
     if not d.get("switch"):
@@ -1185,11 +1246,14 @@ def execute(d, dry=False):
     人 2026-11-10 定「全部走一个通道」：判定侧不再直接 schtasks /Run，
     而是和「你下命令」「我下命令」一样往队列里放一条请求，由同一个 fulfill_request() 受理。
     """
-    to = {"restart_client": "restart", "revive_daemon": "daemon",
-          "fallback_local": "local"}.get(d["action"])
-    if d["action"] == "switch_backup_cloud":
-        to = {"local": "local", "free": "cloud", "paid": "paid"}.get(
-            (d.get("target") or {}).get("cmd") or "free", "cloud")
+    TASK2REQ = {"SysPersona-DR-Free": "cloud", "SysPersona-DR-Local": "local",
+                "SysPersona-DR-Paid": "paid", "SysPersona-DR-Restart": "restart",
+                "SysPersona-DR-Daemon": "daemon", "SysPersona-DR-Hermes": "hermes"}
+    name = action_task(d)                     # 触发哪个任务，由 dr-plan.json 的 branches 决定
+    to = TASK2REQ.get(name)
+    if not to:
+        to = {"restart_client": "restart", "revive_daemon": "daemon",
+              "fallback_local": "local"}.get(d["action"])
     if not to:
         return []
     if dry:
@@ -1225,6 +1289,18 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
             pass
         return d
 
+    # 网络恢复 → 唤醒 DSH（代班结束）
+    woke = ""
+    if proxy_active():
+        _net_t, _net_up = probe(cfg().get("offline_targets") or ["223.5.5.5:443"])
+        if _net_up:
+            if not client_alive():
+                ok, msg = _try(launch_client, tries=2, wait=3)
+                woke = "网络恢复 → 唤醒 DSH：%s" % msg
+            else:
+                woke = "网络恢复 → DSH 本来就在"
+            proxy_clear()
+
     retry = ensure_client_up()      # 「应该活着」的意图还挂着，就继续拉（不依赖上一次动作）
     d = decide(stale, net_override=net_override, prov_override=prov_override)
     acted = []
@@ -1232,6 +1308,8 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
         acted.append({"step": "手动请求", "ok": True, "msg": manual})
     if retry:
         acted.append({"step": "重试拉起", "ok": True, "msg": retry})
+    if woke:
+        acted.append({"step": "唤醒 DSH", "ok": True, "msg": woke})
     if act and d["action"] != "ok":
         if dry:                            # 演练不动手，就不看冷却
             acted = execute(d, dry=True)

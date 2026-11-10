@@ -1,5 +1,25 @@
 # 变更记录
 
+## 断网不动 DSH，改由 Hermes 代班 — 2026-11-10
+
+**人定的口径**：「这个断网，保持不动，用另外一个本地容灾，网络恢复，后台在唤醒这个。」
+
+DSH 把会话模型藏在自己的数据库里，硬改要动 leveldb（不去碰）。换条路：**断网时不动它**。
+
+| 场景 | 动作 |
+|---|---|
+| 断网 | 不杀、不改 DSH；把 Hermes 切到本地档并拉起；写 ops\\hermes-proxy.json 记「代班中」 |
+| 断网期间 | 判定直接 ok：「Hermes 正在代班 → DSH 保持不动」，不反复动手 |
+| 网络恢复 | 后台探测到网络通 → 若 DSH 不在就拉起，清掉代班标记，日志写「网络恢复 → 唤醒 DSH」 |
+
+新东西：
+- persona_hermes.py：Hermes 的模型写在 config.yaml 的 model: 块里，改文件即生效
+  （use paid|cloud|local），原子写 + 回读校验，不留备份；
+- 计划任务 SysPersona-DR-Hermes（enact hermes = 切 Hermes 到本地 → 拉起 → 记代班）；
+- 
+equest hermes 可从人/我/容灾三处下单；dr-plan.json 的 ranches.fallback_local
+  已指向 Hermes（改一行就能换回 DSH 本地档）。
+
 ## 拉起失败会被「跨拍重试」，不依赖某一次动作活着 — 2026-11-10
 
 **人担心的**：「不是会重复，怕的是拉起失败，然后没有拉第二次。」
