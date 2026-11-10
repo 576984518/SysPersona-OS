@@ -223,7 +223,7 @@ $gh = $env:GH_EXE
 | 技能 | 域 | 管什么 |
 |---|---|---|
 | `session-recall` | 运行 | 唤醒顺序、一级索引、zsearch 检索 |
-| `ctxguard-ops` | 运行 | 水位、800K 交接、剪贴板、定时任务核对 |
+| `ctxguard-ops` | 运行 | 水位、到线交接与自动压缩、剪贴板、定时任务核对 |
 | `capture-pipeline` | 运行 | F5 抓取、read_watch、导出、残缺快照防护 |
 | `release-ops` | 代码 | 发版判定、CHANGELOG、tag、Release、台账回写 |
 | `ctxpack-tools` | 代码 | 索引、检索、eval 回归、排障 |
