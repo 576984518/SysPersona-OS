@@ -16,6 +16,7 @@ r"""persona_hermes.py — 换 Hermes 客户端的模型（它是文件驱动的�
 不含备份：Hermes 自己已经堆了一堆 .bak，我们按原子替换写，写完回读校验，失败零写入。
 """
 import io
+import json
 import os
 import sys
 import time
@@ -26,6 +27,9 @@ CONF = os.environ.get("SYSPERSONA_HERMES_CONF") or os.path.join(
     "config.yaml")
 
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "profiles-hermes")
+DB = os.path.join(os.path.dirname(CONF), "desktop-ui.sqlite")
+UI_KEY = os.environ.get("SYSPERSONA_HERMES_UI_KEY") or \
+    "hermes:last-used-model:managed:http%3A%2F%2F127.0.0.1%3A9120:default"
 
 PROFILES = {
     "paid": {"provider": "deepseek", "default": "deepseek-flash",
@@ -129,6 +133,34 @@ def versions():
     return 0
 
 
+def set_ui_model(provider, model):
+    r"""UI 自己也记着「上次用的模型」（desktop-ui.sqlite 的 ui_kv），config.yaml 只是初始值。
+
+    不改它的话：状态栏显示本地档，输入框上的模型选择器还是 deepseek——2026-11-10 实测。
+    这是正经 SQLite，一行 update 就够，比 DSH 的 leveldb 好办太多。
+    """
+    import sqlite3
+    if not os.path.exists(DB):
+        return False, "没有 desktop-ui.sqlite"
+    try:
+        con = sqlite3.connect(DB, timeout=10)
+        cur = con.cursor()
+        row = cur.execute("select value_json from ui_kv where key=?", (UI_KEY,)).fetchone()
+        if not row:
+            return False, "ui_kv 里没有这条（键名变了？）"
+        old = json.loads(row[0]) if row[0] else {}
+        old.setdefault("selection", {})
+        old["selection"].update({"provider": provider, "model": model})
+        old["ts"] = int(time.time() * 1000)
+        cur.execute("update ui_kv set value_json=?, updated_at=? where key=?",
+                    (json.dumps(old, ensure_ascii=False), int(time.time() * 1000), UI_KEY))
+        con.commit()
+        con.close()
+        return True, "UI 记录已改：%s / %s" % (provider, model)
+    except Exception as e:                 # noqa: BLE001
+        return False, str(e)[:120]
+
+
 def use_copy(name):
     """整份替换 config.yaml（和 DSH 一样：改文字会被写回去，整份换最稳）。"""
     src = os.path.join(PROFILE_DIR, name + ".yaml")
@@ -142,10 +174,12 @@ def use_copy(name):
         print("版本文件本身不对，拒绝：%s" % got)
         return 1
     write(raw)
+    ok_ui, msg_ui = set_ui_model(want["provider"], want["default"])
     now = get_model(read())
     ok = (now.get("provider"), now.get("default")) == (want["provider"], want["default"])
     print("已套用 Hermes 配置 %-6s → %s / %s%s" % (name, now.get("provider"),
           now.get("default"), "" if ok else "（回读不一致！）"))
+    print("UI 记录：%s" % msg_ui)
     return 0 if ok else 1
 
 

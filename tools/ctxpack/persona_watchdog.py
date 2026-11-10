@@ -298,7 +298,8 @@ def launch_hermes(wait=30.0):
     if not os.path.exists(HERMES_EXE):
         return False, "找不到 Hermes：%s" % HERMES_EXE
     try:
-        subprocess.Popen([HERMES_EXE], cwd=os.path.dirname(HERMES_EXE),
+        subprocess.Popen([HERMES_EXE, "--remote-debugging-port=9333"],
+                         cwd=os.path.dirname(HERMES_EXE),
                          close_fds=True, creationflags=0x00000008,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
@@ -939,6 +940,7 @@ def enact(what, dry=False):
             "hermes": [("写交接卡给 Hermes", "relay"),
                        ("把 Hermes 切到本地档", "hconf"),
                        ("拉起 Hermes", "hermes"),
+                       ("让它自己读卡", "poke"),
                        ("记录 Hermes 代班", "proxy")]}.get(what)
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
@@ -974,8 +976,14 @@ def enact(what, dry=False):
             ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use-copy", "local"])
         elif kind == "hermes":
             ok, msg = _try(restart_hermes, tries=2, wait=5)
+        elif kind == "poke":
+            time.sleep(8)                      # 等界面渲染完
+            ok, msg = _try(lambda: _run([PY_EXE, os.path.join(ROOT, "persona_hermes_poke.py")],
+                                        timeout=90), tries=2, wait=10)
         elif kind == "proxy":
-            proxy_on("断网：DSH 不动，Hermes 顶上")
+            _t, _up = probe(cfg().get("offline_targets") or ["223.5.5.5:443"])
+            proxy_on("断网：DSH 不动，Hermes 顶上" if not _up else "手动代班测试",
+                     net_down=not _up)
             ok, msg = True, "已记代班（网络恢复后唤醒 DSH）"
         else:
             time.sleep(1.0)
@@ -1299,8 +1307,9 @@ def ensure_client_up():
     return "第 %d 次重试仍失败：%s" % (n + 1, msg)
 
 
-def proxy_on(why="断网"):
-    _write_json(PROXY, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "why": why})
+def proxy_on(why="断网", net_down=True):
+    _write_json(PROXY, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "why": why,
+                        "net_down": bool(net_down)})
 
 
 def proxy_active():
@@ -1398,8 +1407,9 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
                 woke = "网络恢复 → 唤醒 DSH：%s" % msg
             else:
                 woke = "网络恢复 → DSH 本来就在"
+            if (_read_json(PROXY, {}) or {}).get("net_down"):
+                relay_remove()
             proxy_clear()
-            relay_remove()
 
     retry = ensure_client_up()      # 「应该活着」的意图还挂着，就继续拉（不依赖上一次动作）
     d = decide(stale, net_override=net_override, prov_override=prov_override)

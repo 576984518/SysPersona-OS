@@ -1,5 +1,21 @@
 # 变更记录
 
+## Hermes 能自动「开口」了：CDP 注入 + 模型显示对齐 — 2026-11-10
+
+**人指出的两个问题**：「Hermes 没有输入卡片」「模型显示也不对」，后来实测都已解决。
+
+**1) 模型显示对不上**：Hermes 的 UI 自己也记「上次用的模型」，存在 desktop-ui.sqlite 的 ui_kv
+（键 hermes:last-used-model:managed:http://127.0.0.1:9120:default），config.yaml 只是初始值——
+和 DSH 一个毛病，但这边是正经 SQLite，一行 update 就改完。use-copy 现在同时改配置文件和这条记录。
+
+**2) 让它自己读卡**：它的 HTTP API 除 /api/health 全要鉴权（401，token 在运行时生成）。
+但渲染进程能连：**带 --remote-debugging-port=9333 启动 → CDP → 往输入框塞字 + 回车**。
+persona_hermes_poke.py 干这事，代班流程变成五步：写卡 → 切档 → 重启 → **自己开口读卡** → 记代班。
+
+实测（
+equest hermes，by agent）：五步全 ok，Hermes 输入框里自动出现「读一下 …hermes-relay.md」并发送成功，
+模型选择器显示 Qwen3.5_4b，与配置一致。
+
 ## 交接卡塞进 Hermes 的记忆文件，不再靠人开口 — 2026-11-10
 
 **人指出的问题**：「但是 Hermes 没有输入卡片。」——只写 ops\\hermes-relay.md，它不会主动去读。
