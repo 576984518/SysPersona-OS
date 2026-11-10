@@ -312,6 +312,18 @@ def launch_hermes(wait=30.0):
     return False, "起了但 %0.f 秒内没看到进程" % wait
 
 
+def restart_hermes(wait=40.0):
+    """关掉 Hermes 再拉起：它换配置要重启内核才吃（档案页也写着「约 20-30 秒」）。"""
+    if hermes_alive():
+        _run(["taskkill", "/F", "/T", "/IM", HERMES_IMG], timeout=40)
+        t0 = time.time()
+        while time.time() - t0 < 20 and hermes_alive():
+            time.sleep(0.5)
+        if hermes_alive():
+            return False, "Hermes 关不掉，放弃重启（避免开两份）"
+    return launch_hermes(wait)
+
+
 def client_alive():
     rows = proc_table()
     if not rows:                           # tasklist 没跑起来：判不了就别当成「客户端没了」
@@ -920,7 +932,7 @@ def enact(what, dry=False):
         elif kind == "hconf":
             ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use-copy", "local"])
         elif kind == "hermes":
-            ok, msg = _try(launch_hermes, tries=2, wait=5)
+            ok, msg = _try(restart_hermes, tries=2, wait=5)
         elif kind == "proxy":
             proxy_on("断网：DSH 不动，Hermes 顶上")
             ok, msg = True, "已记代班（网络恢复后唤醒 DSH）"
