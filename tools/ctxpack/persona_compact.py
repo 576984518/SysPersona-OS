@@ -215,13 +215,18 @@ def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
     save_state(st)
     pi.log({"at": now(), "len": 8, "dry": False, "ok": ok, "msg": msg, "src": "compact"})
     log({"at": now(), "ctx": ctx, "action": "fired" if ok else "fail", "msg": msg})
-    # 压缩之后必须重读设定（2026-11-10 定）：摘要里被压掉的那部分设定，只能回文件读。
+    # 压缩之后由**独立的**设定重载器把宪法装回来（2026-11-10 定）：
+    # 不是塞进心跳，而是另起一个进程——它卡住也不影响心跳，反之亦然。
     if ok:
         try:
-            import persona_wake as _w
-            _w.mark_reread("刚压缩过（%dK → 摘要）" % (ctx // 1000))
-        except Exception:
-            pass
+            reloader = os.path.join(ROOT, "persona_constitution_reloader.py")
+            if os.path.exists(reloader):
+                subprocess.Popen([PY, reloader, "--reason", "compact"],
+                                 cwd=ROOT, creationflags=NO_WINDOW,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("已叫设定重载器（--reason compact）")
+        except Exception as e:
+            print("（重载器没叫起来：%s）" % str(e)[:80])
     print(("OK   " if ok else "FAIL ") + "水位 %dK → 发送 /compact：%s" % (ctx / 1000, msg))
     return 0 if ok else 1
 

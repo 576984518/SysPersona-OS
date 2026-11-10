@@ -23,6 +23,11 @@ import io
 import json
 import os
 import subprocess
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import sys
 import time
 
@@ -37,7 +42,7 @@ PY = sys.executable
 def newest():
     """归档 + 会话两处都看。
 
-    抓取先落 `sessions\\网页对话\\capture-*.md`，再由导出同步进 `archive\\`；
+    抓取先落 `sessions\\deepseek网页\\capture-*.md`，再由导出同步进 `archive\\`；
     只看 archive 会漏掉刚抓下来的内容（2026-11-09 踩过：抓了 3 次都判「没刷到」）。
     """
     out = []
@@ -45,6 +50,10 @@ def newest():
         for dp, _, fns in os.walk(base):
             for fn in fns:
                 if not fn.endswith(".md"):
+                    continue
+                # `续接前-*.md` 是 gauge 出包时顺手导出的**本机会话**，不是外部新内容；
+                # 不排除的话，每次出包都会把它自己判成「有新内容」（2026-11-09 踩过）。
+                if fn.startswith("续接前-"):
                     continue
                 p = os.path.join(dp, fn)
                 try:
@@ -87,6 +96,29 @@ def tail(path, n):
     return "\n".join(io.open(path, encoding="utf-8", errors="replace").read().splitlines()[-n:])
 
 
+NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
+RELOAD_JS = os.path.join(ROOT, "reload_page.js")
+
+
+def force_reload():
+    """CDP 强制刷新网页会话——**不指望他按 F5**（2026-11-10 读会话铁律第 3 条）。"""
+    if not os.path.exists(RELOAD_JS):
+        return False, "没有 reload_page.js"
+    try:
+        r = subprocess.run([NODE, RELOAD_JS], capture_output=True, timeout=30,
+                           cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = (r.stdout or b"")
+        for enc in ("utf-8", "gbk"):
+            try:
+                out = out.decode(enc)
+                break
+            except UnicodeDecodeError:
+                out = out.decode("utf-8", "replace")
+        return r.returncode == 0, (out or "").strip()[:160]
+    except Exception as e:
+        return False, str(e)[:120]
+
+
 def capture():
     """跑一次抓取，返回 (ok, 摘要)。"""
     cmd = [PY, os.path.join(ROOT, "persona_daemon.py"), "--once", "capture"]
@@ -105,6 +137,7 @@ def main():
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--lines", type=int, default=60)
     ap.add_argument("--no-capture", action="store_true")
+    ap.add_argument("--settle", type=float, default=6.0, help="刷新后等几秒再抓（默认 6）")
     ap.add_argument("--mark", action="store_true")
     a = ap.parse_args()
 
@@ -126,7 +159,12 @@ def main():
     tries = 0
     while files[0][0] < since and tries < a.retries and not a.no_capture:
         tries += 1
-        print("→ 归档比你说的时间旧，判定**没刷到**。第 %d/%d 次抓取…" % (tries, a.retries))
+        print("→ 归档比你说的时间旧，判定**没刷到**。第 %d/%d 次：先强制刷新页面，再抓取…"
+              % (tries, a.retries))
+        rok, rmsg = force_reload()
+        print("  刷新%s：%s" % ("成功" if rok else "失败", rmsg))
+        if rok:
+            time.sleep(a.settle)
         ok, msg = capture()
         print("  抓取%s：%s" % ("成功" if ok else "失败", msg))
         if not ok:
