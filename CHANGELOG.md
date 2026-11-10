@@ -1,5 +1,35 @@
 # 变更记录
 
+## 容灾改成「配置驱动 + 预建任务」— 2026-11-10
+
+**范围**：	ools/ctxpack/persona_watchdog.py、	ools/ctxpack/persona_daemon.py。不发版。
+
+**人定的口径**（一晚上钉了三遍）：「计划任务不同的脚本，你要提前创建好，然后后台程序去执行，因为如果断网，你就没法执行。」
+「最好是，提前写好配置文件给后台程序，读，条件到了，自动运行。」「我们设计的后台程序就是做这个的。」
+
+于是把上一版（开关 + 判定）改成三件东西：
+
+| 东西 | 在哪 | 作用 |
+|---|---|---|
+| 计划配置 | ops\\dr-plan.json | 开关、stale_after、冷却、模型链、条件→任务、任务清单，全在一个文件里 |
+| 预建任务 | 6 个计划任务 + ops\\tasks\\*.xml | 现场只 schtasks /Run；XML 提前落盘，任务被删能从 XML 装回 |
+| 执行者 | 守护的 dr 任务（60 秒） + SysPersona-Watchdog（1 分钟） | 同一个入口 
+un_once()，共享冷却，不重复动手 |
+
+**为什么两层**：守护是心跳的来源，它卡住时救不了自己；外层每分钟的任务是最后一道网。断网时这两层都能跑
+（本地 python + 本地计划任务，不依赖云端模型回话——那是断网时根本叫不动的）。
+
+**修掉三个实测出来的坑**：
+1. Win11 24H2 已无 wmic.exe：用它判守护永远走异常分支（当活着）→ 等于没判。改用 ctypes 的 OpenProcess +
+   GetExitCodeProcess。
+2. --once 跑一拍会把 persona-status.json 的 pid 顶成那个短命进程 → 看门狗误判「守护没了」，起了**第二个守护**。
+   现在 status() 只报常驻那个 pid（_resident_pid()），看门狗判 pid 时也先认 persona.lock。
+3. subprocess.run 起守护会一直等它退出 → 计划任务挂死（实测 Last Result 267009 一直 running）。拉守护改成
+   Popen + DETACHED_PROCESS。
+
+**本地档补全**（上一版遗留）：herdsman-local 路由用 piKeyEnv: HERDSMAN_API_KEY 指向非密钥占位串
+local-placeholder；模型从本机 /v1/models 现取（Qwen3:8B、Qwen3.5_9b、Qwen3.5_4b），不写死。
+
 ## 容灾保底：一个显式开关，打开后才自动动手 — 2026-11-10
 
 **范围**：新增 	ools/ctxpack/persona_watchdog.py；persona_model_switch.py 增加本地档；persona_wake.py 简讯加一行。不发版。

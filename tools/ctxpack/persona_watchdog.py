@@ -5,17 +5,19 @@ r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打�
   「如果心跳没有了，网络是通的，这个时候要干什么？去 ping 一下当前使用模型的服务器
     是否连通。然后切换下一个可用的模型；当网络不通时才会触发保底。」
   「这个是容灾保底，需要的是一个显式的开关，打开后，容灾自动进行。」
+  「计划任务不同的脚本，你要提前创建好，然后后台程序去执行，因为如果断网，你就没法执行。」
 
-两条线分清楚：
+三条线分清楚：
   * **判定**（check）：心跳 → 网络 → 当前模型服务器 → 决定动作。永远只读，不碰系统。
-  * **执行**（容灾）：只有开关打开（`ops\dr-switch.json` 里 `on: true`）才动手，
-    动手就是三步里的若干步：改配置（persona_model_switch.py）→ 杀客户端 → 重新拉起。
+  * **开关**（dr on/off）：`ops\dr-switch.json` 里的 `on`。默认关，关着只判定。
+  * **执行**（enact）：每个动作都是一个**提前建好的计划任务**，现场只 `schtasks /Run`。
+    断网时云端模型叫不动，所以现场这一步不能依赖任何联网或云端回话的东西。
 
-    心跳还在？ ── 是 ──→ OK（什么都不做）
+    心跳还在？ ── 是 ──→ OK（什么都不做）；但客户端进程都没了 → 拉起客户端
         │
         否
         ↓
-    守护进程在吗？ ── 否 ──→ 先拉起守护（不碰客户端），下一拍再看
+    守护进程在吗？ ── 否 ──→ 只拉起守护（不碰客户端），下一拍再看
         │ 在
         ↓
     网络通吗？
@@ -28,22 +30,20 @@ r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打�
              └─ 一个都不通 ──→ ① 保底：切本地
              当前那格就通 ──→ ③ 只是本地卡死：只重启，配置不动
 
-开关怎么用（就三条命令）：
-  python persona_watchdog.py dr on      # 打开：从这一刻起容灾自动进行
-  python persona_watchdog.py dr off     # 关掉：只判定不执行
-  python persona_watchdog.py dr status  # 现在是开还是关
-
-手动判定（不动手）：
-  python persona_watchdog.py check
-  python persona_watchdog.py check --act          # 开关开着才会真动手
-  python persona_watchdog.py check --act --dry    # 只打印「会做哪几步」，不执行
-  python persona_watchdog.py check --stale 0 --net 192.0.2.1:9   # 测试用：伪造断网
+命令：
+  python persona_watchdog.py install     # 一次性：把 6 个任务全建好（可反复跑）
+  python persona_watchdog.py tasks       # 看这 6 个任务的状态 / 上次结果
+  python persona_watchdog.py dr on|off|status
+  python persona_watchdog.py check [--act] [--dry]
+  python persona_watchdog.py verify      # 真实演练一次「杀 + 拉起」（会断窗口几秒）
+  python persona_watchdog.py enact local|free|paid|restart|daemon [--dry]
+                                         # 分支本体，平时只由计划任务调用
 
 安全闸（都在，且写进日志）：
   * 默认关；开关文件不存在也按「关」处理；
   * `ops\dr-hold` 文件存在 → 一律不动手（人按住它做实验时用）；
   * 冷却 600 秒、每小时最多 3 次，防止「反复杀 / 反复起」；
-  * 心跳 = `ops\persona.log` 的 mtime（守护每拍都写），阈值默认 180 秒（六拍）；
+  * 心跳 = `persona.log` mtime 与 `persona-status.json` 的 at 取**较新**者，阈值 300 秒；
   * 客户端进程名 / 安装路径都从环境变量推，不写死（见 CLIENT_* 常量）。
 """
 import argparse
@@ -62,9 +62,11 @@ OPS = os.path.join(ROOT, "ops")
 LOG = os.path.join(OPS, "persona.log")
 OUT = os.path.join(OPS, "watchdog.jsonl")
 FB_CFG = os.path.join(OPS, "fallback.json")
-SWITCH = os.path.join(OPS, "dr-switch.json")      # 显式开关（就这一个文件）
+SWITCH = os.path.join(OPS, "dr-switch.json")      # 开关的镜像（兼容读它的老代码）
+PLAN = os.path.join(OPS, "dr-plan.json")          # **计划配置文件**：后台程序读它
 STATE = os.path.join(OPS, "dr-state.json")        # 执行台账（冷却 / 次数）
 HOLD = os.path.join(OPS, "dr-hold")               # 蹲住闸：有它就绝不动手
+TASK_DIR = os.path.join(OPS, "tasks")             # 计划任务的 XML 配置（提前落盘）
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -195,42 +197,148 @@ def proc_table(force=False):
     return rows
 
 
-def daemon_pid():
-    """守护的 pid：优先 persona-status.json（每拍刷），退而取 persona.lock。"""
-    st = _read_json(os.path.join(OPS, "persona-status.json"), {}) or {}
-    pid = st.get("pid")
-    if isinstance(pid, int) and pid > 0:
-        return pid, st.get("at") or ""
+def _pid_alive(pid):
+    """进程还在吗：ctypes 直问内核，不依赖 tasklist / wmic（后者在计划任务里不一定可用）。"""
     try:
-        return int(io.open(os.path.join(OPS, "persona.lock")).read().strip()), ""
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+        if not h:
+            return False
+        code = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(h)
+        return bool(ok) and code.value == 259
+    except Exception:                      # noqa: BLE001
+        return False
+
+
+def daemon_pid():
+    """守护的 pid：先看 persona.lock（常驻进程启动时写），再看 persona-status.json。
+
+    两个都看，是因为 `--once` 跑一拍时 status.json 里的 pid 会被那个短命进程顶掉。
+    """
+    at = ""
+    st = _read_json(os.path.join(OPS, "persona-status.json"), {}) or {}
+    at = st.get("at") or ""
+    cands = []
+    try:
+        cands.append(int(io.open(os.path.join(OPS, "persona.lock")).read().strip()))
     except (OSError, ValueError):
-        return 0, ""
+        pass
+    if isinstance(st.get("pid"), int):
+        cands.append(st["pid"])
+    for pid in cands:
+        if _pid_alive(pid):
+            return pid, at
+    return (cands[0] if cands else 0), at
 
 
 def daemon_alive():
     """进程在 = 活着（在但心跳不动 = 卡住了，这两种要分开）。"""
     pid, _ = daemon_pid()
-    if not pid:
-        return False
-    return any(p == pid for p, _ in proc_table())
+    return bool(pid) and _pid_alive(pid)
 
 
 def client_alive():
-    return any(n == CLIENT_IMG.lower() for _, n in proc_table())
+    rows = proc_table()
+    if not rows:                           # tasklist 没跑起来：判不了就别当成「客户端没了」
+        return True
+    return any(n == CLIENT_IMG.lower() for _, n in rows)
+
+
+# ------------------------------------------------- 计划配置（提前写好，后台读它执行）
+# 人 2026-11-10 定：「最好是，提前写好配置文件给后台程序，读，条件到了，自动运行。」
+# 所以：**一份 `ops\dr-plan.json` 就是全部规则**——开关、阈值、模型链、每个条件对应触发哪个任务、
+# 以及要预建的任务清单本身。后台程序（计划任务，每分钟）读它；条件到了只做 `schtasks /Run`。
+# 改规则 = 改这一份文件，不用改代码、不用我（云端）在场。
+def default_plan():
+    T = {
+        "watchdog": "SysPersona-Watchdog",
+        "restart": "SysPersona-DR-Restart",
+        "daemon": "SysPersona-DR-Daemon",
+        "local": "SysPersona-DR-Local",
+        "free": "SysPersona-DR-Free",
+        "paid": "SysPersona-DR-Paid",
+    }
+    return {
+        "note": "容灾计划：后台程序每分钟读这一份；条件到了按 task 触发（任务要先用 install 建好）。"
+                "改这里不用改代码。",
+        "enabled": False,                  # 总开关；dr on / dr off 就是改这一行
+        "stale_after": 300,                # 心跳多少秒没动算死
+        "cooldown": 600,                   # 两次动手之间最少隔多少秒
+        "max_per_hour": 3,                 # 每小时最多动手几次
+        "hold_file": "ops/dr-hold",        # 有这个文件就一律不动手
+        "chain": DEFAULT_CHAIN,            # 模型链：当前模型挂了往下一格找
+        "branches": {                      # 判定结果 → 触发哪个（预建好的）任务
+            "revive_daemon": {"task": T["daemon"],
+                              "why": "守护没了：只拉守护，不碰窗口"},
+            "fallback_local": {"task": T["local"],
+                               "why": "网络不通：保底切本地模型"},
+            "restart_client": {"task": T["restart"],
+                               "why": "只是本地卡死：重启客户端，配置不动"},
+            "switch_backup_cloud": {"task_by_target": {"local": T["local"],
+                                                       "free": T["free"],
+                                                       "paid": T["paid"]},
+                                    "why": "当前服务器不通：切链上下一个可用"},
+        },
+        "tasks": [                         # 要预建的任务（install 按这张表建 + 落 XML）
+            {"name": T["watchdog"], "args": "check --act",
+             "schedule": ["/SC", "MINUTE", "/MO", "1"],
+             "note": "每 1 分钟判定一次；开关开着才动手"},
+            {"name": T["restart"], "args": "enact restart",
+             "note": "只重启客户端（配置不动）"},
+            {"name": T["daemon"], "args": "enact daemon",
+             "note": "只拉起守护，不碰窗口"},
+            {"name": T["local"], "args": "enact local",
+             "note": "切本地模型（127.0.0.1:8080）再重启"},
+            {"name": T["free"], "args": "enact free",
+             "note": "切硅基免费档再重启"},
+            {"name": T["paid"], "args": "enact paid",
+             "note": "切回 DeepSeek 收费档再重启"},
+        ],
+    }
+
+
+def plan():
+    """读计划文件；缺的键用默认值补齐（老的配置文件也能用）。"""
+    d = _read_json(PLAN, None)
+    base = default_plan()
+    if not isinstance(d, dict):
+        return base
+    for k, v in base.items():
+        if k not in d:
+            d[k] = v
+    return d
+
+
+def save_plan(d):
+    _write_json(PLAN, d)
+
+
+def ensure_plan():
+    """发现没有计划文件就写一份默认的（install 时调）。"""
+    if not os.path.exists(PLAN):
+        save_plan(default_plan())
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- 显式开关
 def switch():
-    d = _read_json(SWITCH, {}) or {}
-    return {"on": bool(d.get("on")), "at": d.get("at") or "", "by": d.get("by") or "",
-            "note": d.get("note") or ""}
+    d = plan()
+    return {"on": bool(d.get("enabled")), "at": d.get("at") or "",
+            "by": d.get("by") or "", "note": d.get("note") or ""}
 
 
 def set_switch(on, by="cli"):
-    d = {"on": bool(on), "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": by,
-         "note": ("打开：心跳死 + 判定成立时自动改配置 / 重启客户端"
-                  if on else "关闭：只判定，不动手")}
-    _write_json(SWITCH, d)
+    d = plan()
+    d["enabled"] = bool(on)
+    d["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    d["by"] = by
+    save_plan(d)
+    # 镜像一份，给还在读 dr-switch.json 的旧代码（唤醒简讯）
+    _write_json(SWITCH, {"on": bool(on), "at": d["at"], "by": by,
+                         "note": "镜像：真开关在 ops\\dr-plan.json 的 enabled"})
     return d
 
 
@@ -260,14 +368,16 @@ def current_model():
     return prov, model
 
 
-def decide(stale=300.0, net_override=None, prov_override=None):
-    """返回 dict：{action, why, ...}。只读，不动手。
+def decide(stale=None, net_override=None, prov_override=None):
+    """返回 dict：{action, why, ...}。只读，不动手。阈值取自 dr-plan.json。
 
     action ∈ ok | revive_daemon | fallback_local | switch_backup_cloud |
              restart_client
     """
     ch = chain()
     age = heartbeat_age()
+    if stale is None:
+        stale = float(plan().get("stale_after", 300))
     d = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "heartbeat_age": round(age, 1),
          "stale_after": stale, "switch": switch()["on"]}
     if age <= stale:
@@ -351,9 +461,24 @@ def switch_model(cmd, model=""):
 
 
 def revive_daemon():
+    """把守护拉起来。用 Popen 起（`subprocess.run` 会一直等守护退出 → 任务挂住）。"""
     if daemon_alive():
         return True, "守护本来就在"
-    return _run([PYW, os.path.join(ROOT, "persona_daemon.py"), "--daemon"])
+    env = dict(os.environ)
+    env.setdefault("SYSPERSONA_ROOT", ROOT)
+    try:
+        subprocess.Popen([PYW, os.path.join(ROOT, "persona_daemon.py"), "--daemon"],
+                         cwd=ROOT, env=env, close_fds=True,
+                         creationflags=0x00000008,      # DETACHED_PROCESS
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except Exception as e:                 # noqa: BLE001
+        return False, "拉起失败：%s" % e
+    for _ in range(20):
+        time.sleep(1.0)
+        if daemon_alive():
+            return True, "已拉起"
+    return False, "起了但 20 秒内没看到守护"
 
 
 def restart_client(wait=25.0):
@@ -384,54 +509,175 @@ def restart_client(wait=25.0):
     return False, "已启动但 %0.f 秒内没看到进程" % wait
 
 
-DR_TASK = "SysPersona-DR-Restart"          # 专门用来「杀+拉起」的计划任务（按需触发）
-_ONCE_ST = "04:00"                          # 建任务用的一次性时间（2099 年，永不自动跑）
+# ------------------------------------------------------- 计划任务（提前建好，现场只触发）
+# 人 2026-11-10 定：「计划任务不同的脚本，你要提前创建好，然后后台程序去执行，
+# 因为如果断网，你就没法执行。」「最好是，提前写好配置文件给后台程序，读，条件到了，自动运行。」
+# 所以：任务清单本身在 `ops\dr-plan.json` 的 `tasks` 里，条件与动作的对应在 `branches` 里；
+# 代码只负责两件事——按表建任务（install），按 branches 触发（execute）。
+_ONCE_ST = "04:00"                          # 手动任务用的一次性时间（2099 年，永不自动跑）
 _ONCE_SD = "2099/01/01"
 
 
-def spawn_detached(extra=(), wait=0.0):
-    r"""把「杀客户端 + 重新拉起」交给**任务计划**去跑。
-
-    为什么不用 wmic：本机（Win11 24H2）已经没有 wmic 了；也不直接 Popen——
-    从客户端窗口里起的进程是它的子孙，`taskkill /T` 会把它一起杀掉，
-    结果就是「杀了，但没拉起来」。Task Scheduler 起的进程父级是服务，杀不到。
-    教训记在 memory\设定\30-流程与运维.md §十。
-    """
-    tr = '"%s" "%s" _restart %s' % (PYW, os.path.abspath(__file__), " ".join(extra))
-    ok_c, msg_c = _run(["schtasks", "/Create", "/TN", DR_TASK, "/TR", tr,
-                        "/SC", "ONCE", "/ST", _ONCE_ST, "/SD", _ONCE_SD, "/F"], timeout=40)
-    if not ok_c:
-        return False, "建任务失败：%s" % msg_c
-    ok_r, msg_r = _run(["schtasks", "/Run", "/TN", DR_TASK], timeout=40)
-    if not ok_r:
-        return False, "触发任务失败：%s" % msg_r
-    if wait:
-        time.sleep(wait)
-    return True, "已交给计划任务 %s（不在客户端进程树里）" % DR_TASK
+def plan_tasks():
+    return [t for t in (plan().get("tasks") or []) if t.get("name")]
 
 
-def do_restart(delay=2.0):
-    """真正的「杀 + 拉起」，只由独立进程调用（见 spawn_detached）。"""
-    time.sleep(delay)                      # 让调动我们的人先退干净
-    ok, msg = restart_client()
+def action_task(d):
+    """判定 → 要触发的任务名（空串表示不用动手）。规则来自配置，不写死。"""
+    br = (plan().get("branches") or {}).get(d["action"]) or {}
+    if d["action"] == "switch_backup_cloud":
+        cmd = (d.get("target") or {}).get("cmd") or "free"
+        return ((br.get("task_by_target") or {}).get(cmd)) or br.get("task") or ""
+    return br.get("task") or ""
+
+
+def _task_cmdline(args):
+    return '"%s" "%s" %s' % (PYW, os.path.abspath(__file__), args)
+
+
+def task_exists(name):
+    ok, _ = _run(["schtasks", "/Query", "/TN", name], timeout=20)
+    return ok
+
+
+def task_run(name):
+    return _run(["schtasks", "/Run", "/TN", name], timeout=30)
+
+
+def task_info(name):
+    """(状态, 上次运行, 上次结果)，读不到就空。"""
+    ok, _ = _run(["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"], timeout=20)
+    info = {}
     try:
-        with io.open(os.path.join(OPS, "dr-restart.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "ok": ok, "msg": msg}, ensure_ascii=False) + "\n")
+        out = subprocess.run(["schtasks", "/Query", "/TN", name, "/V", "/FO", "LIST"],
+                             capture_output=True, timeout=20)
+        for ln in (out.stdout or b"").decode("mbcs", "replace").splitlines():
+            if ":" in ln:
+                k, v = ln.split(":", 1)
+                info[k.strip()] = v.strip()
+    except Exception:                      # noqa: BLE001
+        pass
+    return (info.get("状态") or info.get("Status") or ("已建" if ok else "缺失"),
+            info.get("上次运行时间") or info.get("Last Run Time") or "",
+            info.get("上次结果") or info.get("Last Result") or "")
+
+
+def export_task(name):
+    r"""把已建好的任务导出成 `ops\tasks\<名字>.xml`（提前落盘，现场可 `/XML` 导入）。
+
+    人 2026-11-10 说：「或者提取创建好计划任务的配置文件，需要拉起时，
+    后台程序把配置加入，然后执行。」——XML 就是那份「配置」。
+    它比 `schtasks /Create` 那串命令行更耐久：任务被删、机器换人、脚本挪了位置，
+    后台程序只要 `schtasks /Create /TN <名> /XML <那份>` 就能把任务原样装回去。
+    """
+    try:
+        r = subprocess.run(["schtasks", "/Query", "/TN", name, "/XML"],
+                           capture_output=True, timeout=25)
+        if r.returncode != 0 or not (r.stdout or b"").strip():
+            return False, "导出失败：%s" % (r.stdout or b"").decode("mbcs", "replace")[:80]
+        os.makedirs(TASK_DIR, exist_ok=True)
+        p = os.path.join(TASK_DIR, name + ".xml")
+        with open(p, "wb") as f:            # schtasks 的 XML 是 UTF-16，原样落盘才能原样导入
+            f.write(r.stdout)
+        return True, p
+    except Exception as e:                 # noqa: BLE001
+        return False, str(e)[:120]
+
+
+def import_task(name):
+    """从 `ops\tasks\<名字>.xml` 把任务装回去（现场兜底用）。"""
+    p = os.path.join(TASK_DIR, name + ".xml")
+    if not os.path.exists(p):
+        return False, "没有 XML：%s" % p
+    return _run(["schtasks", "/Create", "/TN", name, "/XML", p, "/F"], timeout=40)
+
+
+def install(quiet=False):
+    """按 `dr-plan.json` 的 tasks 表把任务全建好，并把 XML 一起导出（幂等）。"""
+    rows = []
+    if ensure_plan() and not quiet:
+        print("没有计划文件，已写一份默认的：%s" % PLAN)
+    for t in plan_tasks():
+        name, args = t["name"], t.get("args") or ""
+        sched, note = t.get("schedule"), t.get("note") or ""
+        cmd = ["schtasks", "/Create", "/TN", name, "/TR", _task_cmdline(args), "/F"]
+        cmd += sched if sched else ["/SC", "ONCE", "/ST", _ONCE_ST, "/SD", _ONCE_SD]
+        ok, msg = _run(cmd, timeout=40)
+        ok = ok and task_exists(name)
+        xml_ok, _ = (export_task(name) if ok else (False, "-"))
+        rows.append((name, ok and xml_ok, note if ok else msg))
+        if not quiet:
+            print("%s %-28s %s%s" % ("✔" if (ok and xml_ok) else "✘", name,
+                                     note if ok else msg,
+                                     (" ｜ XML 已落盘" if xml_ok else " ｜ XML 缺失")))
+    return rows
+
+
+def ensure_tasks():
+    """现场兜底：任务被人删了，就先从 XML 装回来；XML 也没有才重建。"""
+    fixed = []
+    for t in plan_tasks():
+        name = t["name"]
+        if task_exists(name):
+            continue
+        ok, _ = import_task(name)
+        if not ok:
+            install(quiet=True)
+        fixed.append(name)
+    return fixed
+
+
+def enact(what, dry=False):
+    """分支本体：由计划任务调用，自带「改配置 → 杀 → 拉起」全流程。
+
+    这里是**唯一**真动手的地方；看门狗只负责判定 + 触发任务。
+    """
+    todo = {"daemon": [("拉起守护", "daemon")],
+            "restart": [("重启客户端", "restart")],
+            "local": [("改配置 → 本地档", "switch"), ("重启客户端", "restart")],
+            "free": [("改配置 → 硅基免费档", "switch"), ("重启客户端", "restart")],
+            "paid": [("改配置 → DeepSeek 收费档", "switch"), ("重启客户端", "restart")]}.get(what)
+    if todo is None:
+        print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
+        return 2
+    out = []
+    for label, kind in todo:
+        if dry:
+            out.append({"step": label, "ok": None, "msg": "（dry：没执行）"})
+            continue
+        if kind == "daemon":
+            ok, msg = revive_daemon()
+        elif kind == "switch":
+            ok, msg = switch_model(what)
+        else:
+            time.sleep(1.5)                # 让触发我们的人先退干净
+            ok, msg = restart_client()
+        out.append({"step": label, "ok": ok, "msg": msg})
+        if not ok:
+            break
+    try:
+        with io.open(os.path.join(OPS, "dr-actions.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "what": what,
+                                "steps": out}, ensure_ascii=False) + "\n")
     except OSError:
         pass
-    return ok, msg
+    for x in out:
+        print("%s：%s" % (x["step"], x["msg"] or ("ok" if x["ok"] else "失败")))
+    if dry:
+        return 0
+    return 0 if all(x["ok"] for x in out) else 4
 
 
 def _gate(d):
-    """动手前的闸门。返回 (allowed, reason)。"""
+    """动手前的闸门。返回 (allowed, reason)。阈值来自 dr-plan.json。"""
     if not d.get("switch"):
         return False, "开关关着（dr off）→ 只判定不动手"
     if os.path.exists(HOLD):
         return False, "有 ops\\dr-hold 蹲住闸 → 不动手"
+    p = plan()
     st = _read_json(STATE, {}) or {}
-    cool = float((cfg().get("dr") or {}).get("cooldown", 600))
-    cap = int((cfg().get("dr") or {}).get("max_per_hour", 3))
+    cool = float(p.get("cooldown", 600))
+    cap = int(p.get("max_per_hour", 3))
     hist = st.get("history") or []
     now = time.time()
     if hist and now - float(hist[-1].get("ts", 0)) < cool:
@@ -443,42 +689,66 @@ def _gate(d):
 
 
 def execute(d, dry=False):
-    """按判定执行；返回执行记录（list）。dry=True 只列步骤。"""
-    steps = []
-    tgt = d.get("target") or {}
-    need_switch = d["action"] in ("switch_backup_cloud", "fallback_local")
-    need_restart = d["action"] in ("switch_backup_cloud", "fallback_local", "restart_client")
+    """判定 → 触发一个**先建好的**计划任务。返回执行记录（list）。
 
-    if d["action"] == "revive_daemon":
-        steps.append(("拉起守护", "daemon", None, None))
-    if need_switch and tgt.get("cmd"):
-        steps.append(("改配置 → %s" % tgt.get("label"), "switch",
-                      tgt.get("cmd"), tgt.get("model")))
-    if need_restart:
-        steps.append(("重启客户端", "restart", None, None))
-    if dry or not steps:
-        return [{"step": s[0], "ok": None, "msg": "（dry：没执行）"} for s in steps]
+    这里刻意只说一句 `schtasks /Run`：不建任务、不写配置、不联网、不等模型回话。
+    """
+    name = action_task(d)
+    if not name:
+        return []
+    if dry:
+        return [{"step": "触发 %s" % name, "ok": None, "msg": "（dry：没触发）"}]
+    if not task_exists(name):
+        ensure_tasks()                     # 任务被人删了就重建（正常不该发生）
+    ok, msg = task_run(name)
+    return [{"step": "触发 %s" % name, "ok": ok, "msg": msg or "已触发"}]
 
-    done = []
-    for label, kind, cmd, model in steps:
-        if kind == "daemon":
-            ok, msg = revive_daemon()
-        elif kind == "switch":
-            ok, msg = switch_model(cmd, model if cmd == "local" else "")
+
+def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=None):
+    """跑一拍：判定 → 过闸 → 触发任务 → 记账。返回判定 dict。
+
+    后台程序（persona_daemon 的 `dr` 任务、计划任务 SysPersona-Watchdog）都只调这一个入口，
+    所以「什么时候动手」只有一处实现，不会两边打架（冷却看同一份 dr-state.json）。
+    """
+    d = decide(stale, net_override=net_override, prov_override=prov_override)
+    acted = []
+    if act and d["action"] != "ok":
+        if dry:                            # 演练不动手，就不看冷却
+            acted = execute(d, dry=True)
         else:
-            ok, msg = spawn_detached()   # 不在这里杀：交给计划任务去杀，免得把自己带走
-        done.append({"step": label, "ok": ok, "msg": msg})
-        if not ok:
-            break
-    return done
+            allowed, why = _gate(d)
+            if not allowed:
+                acted = [{"step": "不执行", "ok": False, "msg": why}]
+            else:
+                acted = execute(d, dry=False)
+                if any(x.get("ok") for x in acted):
+                    st = _read_json(STATE, {}) or {}
+                    st.setdefault("history", []).append(
+                        {"ts": time.time(), "at": d["at"], "action": d["action"],
+                         "steps": acted})
+                    st["history"] = st["history"][-50:]
+                    _write_json(STATE, st)
+    elif act and d["action"] == "ok":
+        if not daemon_alive():
+            ok, msg = revive_daemon()
+            acted = [{"step": "守护没在跑 → 拉起", "ok": ok, "msg": msg}]
+    d["acted"] = acted
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(OUT, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return d
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="看门狗 / 容灾保底（心跳 → 网络 → 模型链 → 动作）")
     ap.add_argument("cmd", nargs="?", default="check",
-                    choices=["check", "dr", "verify", "_restart"])
-    ap.add_argument("arg", nargs="?", default="", choices=["", "on", "off", "status"])
-    ap.add_argument("--stale", type=float, default=300.0, help="心跳超过多少秒算死（默认 300：给长任务留余量，别在它跑大活时误杀）")
+                    choices=["check", "dr", "install", "enact", "verify", "tasks"])
+    ap.add_argument("arg", nargs="?", default="")
+    ap.add_argument("--stale", type=float, default=None,
+                    help="心跳超过多少秒算死（默认取 dr-plan.json 的 stale_after）")
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--act", action="store_true", help="开关开着时真执行")
     ap.add_argument("--dry", action="store_true", help="只打印会做哪几步，不执行")
@@ -488,15 +758,29 @@ def main(argv=None):
     ap.add_argument("--prov", default="", help="测试用：覆盖模型点探针目标")
     a = ap.parse_args(argv)
 
-    if a.cmd == "_restart":
-        ok, msg = do_restart()
-        print("%s ｜ %s" % ("ok" if ok else "失败", msg))
-        return 0 if ok else 4
+    if a.cmd == "install":
+        print("建/更新任务（幂等）：")
+        rows = install()
+        bad = [r for r in rows if not r[1]]
+        print("结果：%d 个就绪，%d 个失败" % (len(rows) - len(bad), len(bad)))
+        return 0 if not bad else 4
+
+    if a.cmd == "tasks":
+        for t in plan_tasks():
+            st, last, res = task_info(t["name"])
+            print("%-28s %-6s 上次 %s 结果 %s ｜ %s"
+                  % (t["name"], st, last or "-", res or "-", t.get("note") or ""))
+        return 0
+
+    if a.cmd == "enact":
+        return enact(a.arg, dry=a.dry)
 
     if a.cmd == "verify":
-        ok, msg = spawn_detached(wait=1.0)
+        if not task_exists("SysPersona-DR-Restart"):
+            install(quiet=True)
+        ok, msg = task_run("SysPersona-DR-Restart")
         print("真实演练：%s\n窗口会在几秒内关掉再打开（会话不丢，登录状态保留）。\n"
-              "结果记在 ops\\dr-restart.jsonl。" % msg)
+              "结果记在 ops\\dr-actions.jsonl。" % (msg or "已触发"))
         return 0 if ok else 4
 
     if a.cmd == "dr":
@@ -512,38 +796,16 @@ def main(argv=None):
         s = switch()
         print("容灾开关：%s%s" % ("**开**" if s["on"] else "关", ("（%s 由 %s）" % (s["at"], s["by"])) if s["at"] else ""))
         print("蹲住闸：%s" % ("有 ops\\dr-hold（不会动手）" if os.path.exists(HOLD) else "无"))
-        print("开关文件：%s" % SWITCH)
+        print("计划配置：%s" % PLAN)
+        names = [t["name"] for t in plan_tasks()]
+        miss = [n for n in names if not task_exists(n)]
+        print("计划任务：%d/%d 就绪%s" % (len(names) - len(miss), len(names),
+                                     ("（缺：%s，跑 install）" % "、".join(miss)) if miss else ""))
         return 0
 
-    d = decide(a.stale, net_override=a.net or None, prov_override=a.prov or None)
-
-    acted = []
-    if a.act and d["action"] != "ok":
-        allowed, why = _gate(d)
-        if not allowed:
-            acted = [{"step": "不执行", "ok": False, "msg": why}]
-        else:
-            acted = execute(d, dry=a.dry)
-            if not a.dry and any(x.get("ok") for x in acted):
-                st = _read_json(STATE, {}) or {}
-                st.setdefault("history", []).append(
-                    {"ts": time.time(), "at": d["at"], "action": d["action"],
-                     "steps": acted})
-                st["history"] = st["history"][-50:]
-                _write_json(STATE, st)
-    elif a.act and d["action"] == "ok":
-        if not daemon_alive():
-            ok, msg = revive_daemon()
-            acted = [{"step": "守护没在跑 → 拉起", "ok": ok, "msg": msg}]
-
-    d["acted"] = acted
-
-    try:
-        os.makedirs(OPS, exist_ok=True)
-        with io.open(OUT, "a", encoding="utf-8") as f:
-            f.write(json.dumps(d, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
+    d = run_once(act=a.act, dry=a.dry, stale=a.stale,
+                 net_override=a.net or None, prov_override=a.prov or None)
+    acted = d.get("acted") or []
 
     if a.as_json:
         print(json.dumps(d, ensure_ascii=False, indent=1))

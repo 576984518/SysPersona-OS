@@ -155,10 +155,13 @@ DEFAULTS = {
     "inject": 120,
     "selfcheck": 120,
     "sfbalance": 21600,          # 硅基余额快照：6 小时一班（脚本自己还有 6 小时闸门，重复调用不重复抓）
+    "dsbalance": 1800,           # DeepSeek 余额：官方接口，半小时一次（不花 token，只防见底）
+    "dr": 60,                    # 容灾：每分钟读一次 dr-plan.json，条件到了触发预建任务
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
-                "watermark": 120, "cost": 120, "selfcheck": 60, "sfbalance": 240}
+                "watermark": 120, "cost": 120, "selfcheck": 60, "sfbalance": 240,
+                "dsbalance": 120, "dr": 90}
 
 
 def now():
@@ -1141,6 +1144,38 @@ def t_inject():
         ev["streak"], ev["since_min"] if ev["since_min"] is not None else "?")
 
 
+def t_dsbalance():
+    r"""DeepSeek 余额（2026-11-10 加）：官方接口 `GET /user/balance`，半小时一次。
+
+    客户端里那个数字不是实时的（高消耗时会从"还有一块多"直接欠费），
+    所以走官方接口、用 `DEEPSEEK_API_KEY`（守护进程开机起，读不到后加的变量——
+    `persona_fallback._key_of` 会退到用户级注册表）。
+    只读、不花 token；产物 `ops\ds-balance.json` 给降级判定用（低于 ¥5 就保底）。
+    """
+    try:
+        r = subprocess.run([PY, os.path.join(ROOT, "persona_fallback.py"),
+                            "balance", "--fetch"],
+                           cwd=ROOT, capture_output=True,
+                           timeout=TASK_TIMEOUT["dsbalance"],
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ok = r.returncode == 0
+        tail = ((r.stdout or b"").decode("utf-8", "replace").strip().splitlines() or [""])[-1]
+        err = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        if not ok and err:
+            tail = "%s｜stderr: %s" % (tail[:90], err[-1][:90])
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    try:
+        with open(os.path.join(OPS, "ds-balance.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and d.get("balance") is not None:
+            return ok, "余额 ¥%s（%s）%s" % (
+                d["balance"], d.get("at", ""), "" if ok else "｜" + tail[:120])
+    except (OSError, ValueError):
+        pass
+    return ok, tail
+
+
 def t_sfbalance():
     r"""硅基流动余额快照（2026-11-10 加）：读登录态页面，落 `ops\sf-balance.json`。
 
@@ -1159,6 +1194,22 @@ def t_sfbalance():
     except (OSError, ValueError):
         pass
     return ok, s
+
+
+def t_dr():
+    r"""容灾保底（2026-11-10 加）：每分钟读 `ops\dr-plan.json`，条件到了触发预建任务。
+
+    人定的口径：判定的规则和「条件→动作」的对应关系都在配置里，后台程序只负责读它；
+    开关（plan 的 enabled）关着就只判定、只记账，不动手。
+    为什么放在守护里：守护本来就是「一直转着」的那个程序；它是本地的，
+    断网时也在跑。计划任务 `SysPersona-Watchdog` 是同一套逻辑的外围网（守护自己挂掉时用），
+    两条线共享 `ops\dr-state.json` 的冷却，不会重复动手。
+    """
+    sys.path.insert(0, ROOT)
+    import persona_watchdog as W
+    d = W.run_once(act=True)
+    why = (d.get("why") or "").strip()
+    return d.get("action") == "ok", "%s ｜ %s" % (d.get("action"), why[:60])
 
 
 TASKS = {
@@ -1188,6 +1239,8 @@ TASKS = {
     "todo": t_todo,
     "inject": t_inject,
     "sfbalance": t_sfbalance,
+    "dsbalance": t_dsbalance,
+    "dr": t_dr,
 }
 
 
@@ -1257,7 +1310,9 @@ class PersonaDaemon:
         d = {
             "at": now(),
             "uptime_s": int(time.time() - self.started),
-            "pid": os.getpid(),
+            # pid 只报「真正常驻的那个」：--once 跑一拍时不能把守护的 pid 顶掉——
+            # 看门狗靠这个 pid 判守护死活，2026-11-10 实测被顶掉过（误判 → 起了第二个守护）。
+            "pid": _resident_pid(),
             "tasks": {k: dict(v, next_in=int(max(0, self.next_due[k] - time.time())))
                       for k, v in self.state.items()},
         }
@@ -1364,6 +1419,46 @@ class PersonaDaemon:
         return 0 if self.state[name]["ok"] else 1
 
 
+_IS_DAEMON = False          # 常驻分支里置 True；--once 时保持 False
+
+
+def _pid_alive(pid):
+    """进程还在吗（ctypes 直问内核，不依赖 tasklist / wmic）。"""
+    try:
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED
+        if not h:
+            return False
+        code = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(h)
+        return bool(ok) and code.value == 259      # STILL_ACTIVE
+    except Exception:                              # noqa: BLE001
+        return False
+
+
+def _resident_pid():
+    """status 里该报哪个 pid：常驻守护的，不是「跑一拍就退」的那个。"""
+    if _IS_DAEMON:
+        return os.getpid()
+    cands = []
+    try:
+        cands.append(int(open(LOCK).read().strip()))
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(STATUS, encoding="utf-8") as f:
+            p = json.load(f).get("pid")
+        if isinstance(p, int):
+            cands.append(p)
+    except (OSError, ValueError, AttributeError):
+        pass
+    for pid in cands:
+        if _pid_alive(pid):
+            return pid
+    return os.getpid()
+
+
 def single_instance():
     os.makedirs(OPS, exist_ok=True)
     if os.path.exists(LOCK):
@@ -1412,6 +1507,7 @@ if __name__ == "__main__":
     if not single_instance():
         print("已有实例在跑（见 %s）" % LOCK)
         sys.exit(2)
+    globals()["_IS_DAEMON"] = True          # status() 里据此报「本进程就是守护」
     try:
         k.loop()
     except KeyboardInterrupt:
