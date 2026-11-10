@@ -45,15 +45,30 @@ def now():
 
 
 def measure():
-    """跑 gauge 拿当前水位（K 为单位换算成 token）。"""
+    """跑 gauge 拿当前水位（K 为单位换算成 token）。
+
+    编码坑（2026-11-10 踩）：gauge 子进程在计划任务里按 **GBK** 吐中文，
+    按 utf-8 硬解会得到一串 U+FFFD，`[上下文]` 就对不上、误报「没有输出水位」。
+    所以：**收字节，两种编码都试**；正则也不依赖中文，认第一个方括号后的数字。
+    """
     try:
-        r = subprocess.run([PY, GAUGE], capture_output=True, text=True, timeout=120,
-                           encoding="utf-8", errors="replace", cwd=ROOT,
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        r = subprocess.run([PY, GAUGE], capture_output=True, timeout=180,
+                           cwd=ROOT, env=env,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        out = r.stdout or ""
-        m = re.search(r"\[上下文\]\s*~?([\d.]+)([KM]?)", out)
+        raw = r.stdout or b""
+        out = ""
+        for enc in ("utf-8", "gbk"):
+            try:
+                out = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not out:
+            out = raw.decode("utf-8", "replace")
+        m = re.search(r"\[[^\]\r\n]*\]\s*~?([\d.]+)\s*([KM]?)", out)
         if not m:
-            return 0, "gauge 没有输出水位"
+            return 0, "gauge 没有输出水位（原始输出 %d 字节）" % len(raw)
         val = float(m.group(1))
         unit = m.group(2)
         tok = val * (1_000_000 if unit == "M" else 1000 if unit == "K" else 1)

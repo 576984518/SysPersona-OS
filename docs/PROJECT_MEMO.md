@@ -81,7 +81,8 @@ $R  = $env:MEM
 
 | 任务 | 周期 | 干什么 |
 |---|---|---|
-| `SysPersona-CtxGuard` | 10 分钟 | 测水位；≥800K 交接（先镜像再出包）；到线由 `persona_limits.py` 一处定义 |
+| `SysPersona-CtxGuard` | 10 分钟 | 测水位；到线交接（先镜像再出包）；阈值只在 `persona_limits.py` 一处定义（现行 150/250/300/1M） |
+| `SysPersona-Compact` | **5 分钟** | **量水位 → 到 350K 且冷却已过 → 敲 `/compact` 让壳自己压**（`pythonw` 无窗，`ops/compact.jsonl` 留痕） |
 | `SysPersona-Handoff-Refresh` | 30 分钟 | **覆盖** `续接\接续包-最新.md`（防丢） |
 | `SysPersona-DeepSeek-LiveWatch` | 每天 03:30 | 整页重载一次，防积压 |
 | `SysPersona-DeepSeek-FullSweep` | 每周日 21:00 | 全量巡检 |
@@ -92,7 +93,8 @@ $R  = $env:MEM
 
 - 设计版：**v5.1.0**（2026-11-09 托盘设计：`docs/TRAY_SPEC.md`，托盘不是智能体）
 - 工具版：**v5.2.0 · 托盘状态显示**（2026-11-10 重写：`tools/tray/persona_tray.py`；按客户端数量并排画正方形、只显示在跑的、各自显示水位；只读不代办）
-- 设计版：**v5.4 / v5.5 / v5.6**（2026-11-09 后台处理 / 任务调度 / 记忆网络**设计成文**，实现在后续小版：`docs/BACKGROUND_SPEC.md`、`docs/SCHEDULER_SPEC.md`、`docs/MEMORY_NET_SPEC.md`）
+- 后台版：**v5.4.0 · 后台处理**（2026-11-10 交付：`docs/BACKGROUND_SPEC.md` v1.4 + `persona_compact.py`；水位 350K 由系统计划任务每 5 分钟量一次，到线自己敲 `/compact` 让壳压——实测 377K → 18K；镜像线 300K 早于压缩线）
+- 设计版：**v5.5 / v5.6**（2026-11-09 任务调度 / 记忆网络**设计成文**，实现在后续小版：`docs/SCHEDULER_SPEC.md`、`docs/MEMORY_NET_SPEC.md`）
 - 运行时：**v5.3.0**（2026-11-09 保活 + 交互代理：`tools/persona/`，唤醒→读总索引→报到→派发，含重试上限与「保活只报不拉」；协议 `docs/INTERACT_SPEC.md`）
 - 落地版：**v5.0.0**（2026-11-09 寄生在开源壳上的记忆层：`docs/SHELL_ADOPTION.md`）——v5 线只讲壳接入。
 - 设计版：**v4.4.0**（2026-11-09 画像 / 全局索引 / 技能**设计成文**，未落地：`docs/PROFILE.md`、`docs/GLOBAL_INDEX.md`、`docs/SKILLS.md`；脚本统一 `persona_` 前缀），属 v4 记忆工具线的延续。
