@@ -71,6 +71,11 @@ from persona_root import (backup_root as _backup_root,   # noqa: E402
 
 ROOT = _persona_root()
 
+try:
+    import persona_sched as _sched   # 闹钟/守护优先级仲裁；缺了就退化为互不跳过
+except Exception:
+    _sched = None
+
 
 def _conf():
     """ops\\persona.conf.json（本机配置，不入库）：任务间隔 + 本机独有路径。"""
@@ -798,6 +803,20 @@ def t_reload():
     这些行不是运维日志，是**证据**：证明"窗口里的只是缓存，写下来的才是记忆"。
     数据源是 watch_nav.js 自己写的 navwatch.log，成对取"触发抓取 → 抓取结束"。
     """
+    # 优先级仲裁：reload 与闹钟的 compact-check 是同一件事，闹钟优先、守护让位。
+    # 放在函数最前面：直接调用 t_reload() 的入口（--once / 自检）也走同一条判据。
+    if _sched:
+        try:
+            job = _sched.job_for_task("reload", root=ROOT)
+            if job:
+                skip, reason = _sched.should_skip(job, "daemon", root=ROOT)
+                if skip:
+                    return True, reason
+                # 开跑前先请求抢占：正在跑的低优先级任务（如空闲循环）会让位。
+                _sched.request_preempt(job, _sched.priority(job, "daemon", root=ROOT),
+                                       owner="daemon", root=ROOT)
+        except Exception:
+            pass
     try:
         st = json.load(io.open(RELOAD_STATE, encoding="utf-8"))
     except Exception:
@@ -961,7 +980,19 @@ def t_wake():
         return False, "导入 persona_wake 失败：%s" % str(e)[:60]
     n = persona_wake.fire_due()
     kick = _kick_recapture()
-    return True, ((("触发 %d 个闹钟" % n) if n else "无到点闹钟") + " | " + kick)
+    # 空闲循环：只在队列空时跑（有活先干活）。闹钟已经先发完，优先级不受影响。
+    auto = ""
+    try:
+        import persona_autoloop as _AL
+        free, why = _AL.idle(root=ROOT)
+        if free:
+            r = _AL.tick(root=ROOT)
+            auto = " | 空闲循环：%s" % (r.get("msg") or r.get("id") or "")
+        else:
+            auto = " | 空闲循环：有活（%s）" % why
+    except Exception as e:
+        auto = " | 空闲循环：跳过（%s）" % str(e)[:40]
+    return True, ((("触发 %d 个闹钟" % n) if n else "无到点闹钟") + " | " + kick + auto)
 
 
 def t_agent():
@@ -1219,6 +1250,32 @@ class PersonaDaemon:
         fn = TASKS[name]
         self.state[name]["busy"] = True
         t0 = time.time()
+        # 优先级仲裁：登记为 job 的任务，动手前先看闹钟有没有占位。
+        # 让位也照常推进 next_due（任务频率不变），日志里能看到「让位给闹钟：…」。
+        job = None
+        if _sched:
+            try:
+                job = _sched.job_for_task(name, root=ROOT)
+            except Exception:
+                job = None
+        if job:
+            try:
+                skip, reason = _sched.should_skip(job, "daemon", root=ROOT)
+            except Exception:
+                skip, reason = False, ""
+            if skip:
+                dt = time.time() - t0
+                self.state[name].update(last=time.time(), ok=True, msg=reason, busy=False,
+                                        runs=self.state[name]["runs"] + 1)
+                self.next_due[name] = time.time() + float(self.cfg.get(name, 3600))
+                log("TASK %-9s %-4s %5.1fs  %s" % (name, "OK", dt, reason))
+                return
+            try:
+                # 开跑前请求抢占：更低优先级的运行中任务（空闲循环）下一轮询让位。
+                _sched.request_preempt(job, _sched.priority(job, "daemon", root=ROOT),
+                                       owner="daemon", root=ROOT)
+            except Exception:
+                pass
         try:
             ok, msg = fn()
         except Exception:
@@ -1227,6 +1284,14 @@ class PersonaDaemon:
         self.state[name].update(last=time.time(), ok=ok, msg=msg, busy=False,
                                 runs=self.state[name]["runs"] + 1)
         self.next_due[name] = time.time() + float(self.cfg.get(name, 3600))
+        # 反向不占位：守护跑完只写一条租约供 status 观察；优先级低，闹钟侧天然不受阻。
+        if job and ok:
+            try:
+                ttl = float(self.cfg.get(name, 3600))
+                _sched.claim(job, "daemon", ttl=ttl,
+                             next_due=time.time() + ttl, root=ROOT)
+            except Exception:
+                pass
         log("TASK %-9s %-4s %5.1fs  %s" % (name, "OK" if ok else "FAIL", dt, msg))
 
     def loop(self):

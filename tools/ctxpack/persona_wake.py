@@ -18,6 +18,11 @@ r"""persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
     再执行 purpose、写触发记录、替 agent 报到（已读索引），然后才交给调用方；
   * 三种来源：定时（人设）/ 任务（智能体自设）/ 事件（调度器直接写记录）。
 
+唤醒简讯在「醒后三件」之后还带三行（都只读，**都不执行任务**）：
+  ⑦ 在办：`ops\inflight.json` 里没收尾的活，最多 3 项（persona_inflight.py 维护）；
+  ⑧ 现在能做：auto / needs_human / needs_external / blocked 分类（persona_nextstep.py）；
+  ⑨ 已自动开工：只认 `working: true`（`persona_inflight.py start` 写下的事实），不拿 ⑧ 冒充。
+
 用法：
   python persona_wake.py add --in 90 "检查抓取结果" [--every 3600] [--agent hermes-v4]
   python persona_wake.py add --at 18:30 "跑一次索引"
@@ -48,6 +53,7 @@ ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.abspath(__file_
 OPS = os.path.join(ROOT, "ops")
 REG = os.path.join(OPS, "wake.json")
 FIRES = os.path.join(OPS, "wake-fires.jsonl")
+EVENTS = os.path.join(OPS, "wake-events.jsonl")
 BRIEF = os.path.join(OPS, "wake-brief.json")
 BRIEF_HIST = os.path.join(OPS, "wake-brief.jsonl")
 
@@ -91,6 +97,58 @@ def cmd_add(a):
     save(items)
     print("已登记 %s：%s（%s）" % (wid, rec["purpose"],
                                 time.strftime("%m-%d %H:%M", time.localtime(due))))
+    return 0
+
+
+def event(agent, purpose, delay=5, source="dispatch"):
+    """事件唤醒（B74）：不是「到点了」，是「有事了」。
+
+    由派发口直接调用——任务池里出现了一条给 A 的活，就在 `delay` 秒后给 A 排一个闹钟，
+    不再等它下一次自己想起来。守护进程的 wake 任务本来 30 秒扫一次，到点就摘简讯。
+
+    为什么仍算「心跳唤醒」：决定什么时候醒的还是**守护进程**，只是触发条件从"到点"
+    改成"有事件"。三类唤醒的界线（谁决定）没有变，所以不多立第四类。
+    """
+    now = time.time()
+    purpose = (purpose or "").strip() or "事件唤醒"
+    agent = agent or ""
+    items = load()
+    # 同一个分身已经有没到点的事件闹钟 → 合并，不堆一串（一堆同一秒的闹钟只会连着吵）
+    for r in items:
+        if (r.get("enabled", True) and r.get("source") == "event"
+                and r.get("agent", "") == agent and r.get("due", 0) > now):
+            r["purpose"] = purpose
+            r["due"] = now + max(0, delay)
+            r["events"] = int(r.get("events", 1)) + 1
+            save(items)
+            _log_event({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "agent": agent,
+                        "purpose": purpose, "merged_into": r["id"], "source": source})
+            print("已合并到 %s：%s（%d 秒后）" % (r["id"], purpose, delay))
+            return r["id"], False
+    wid = "e%d" % (int(now * 1000) % 100000000)
+    rec = {"id": wid, "due": now + max(0, delay), "every": 0, "purpose": purpose,
+           "agent": agent, "run": "", "enabled": True, "source": "event", "events": 1,
+           "created": time.strftime("%Y-%m-%d %H:%M:%S"), "last_run": 0}
+    items.append(rec)
+    save(items)
+    _log_event({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "agent": agent,
+                "purpose": purpose, "id": wid, "source": source,
+                "due_in": max(0, delay)})
+    print("已登记事件唤醒 %s：%s（%d 秒后）" % (wid, purpose, delay))
+    return wid, True
+
+
+def _log_event(rec):
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(EVENTS, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def cmd_event(a):
+    event(a.agent, a.purpose, a.delay, a.source)
     return 0
 
 
@@ -145,9 +203,238 @@ def write_brief(rec, k=8):
     return body
 
 
+REREAD = os.path.join(OPS, "reread.json")
+REREAD_LOG = os.path.join(OPS, "reread.jsonl")
+REREAD_EVERY = 300          # 重读提醒的节流：5 分钟（心跳扫描仍是 30 秒，事件唤醒要快）
+REREAD_MAX_AGE = 1800       # 距上次重读超过 30 分钟就再提醒一次
+
+SETTINGS = ["memory\\设定\\00-索引.md", "memory\\设定\\10-人格与红线.md",
+            "memory\\设定\\20-交流与要求.md", "memory\\设定\\30-流程与运维.md",
+            "memory\\设定\\40-事实与现状.md"]
+
+
+def _sha(path):
+    try:
+        import hashlib
+        return hashlib.sha256(io.open(path, "rb").read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def reread_state():
+    try:
+        return json.load(io.open(REREAD, encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+
+
+def reread_save(st):
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        tmp = REREAD + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(st, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, REREAD)
+    except OSError:
+        pass
+
+
+def reread_need():
+    """该不该重读设定。返回 (bool, 原因)。
+
+    三条触发（2026-11-10 定）：
+      ① 设定文件内容变了（hash 不同）——改了规则却还按旧的办事，最危险；
+      ② 距上次重读超过 30 分钟——防止长会话里慢慢漂；
+      ③ 刚压缩过——压缩把上下文换成摘要，摘要里没有的那部分设定，只能回文件读。
+    """
+    st = reread_state()
+    if st.get("need"):
+        return True, st.get("reason") or "被标记"
+    for rel in SETTINGS:
+        p = os.path.join(ROOT, rel)
+        h = _sha(p)
+        if h and h != (st.get("files") or {}).get(rel):
+            return True, "设定有变：%s" % os.path.basename(rel)
+    last = float(st.get("last_read") or 0)
+    if last and time.time() - last > REREAD_MAX_AGE:
+        return True, "距上次重读 %d 分钟" % int((time.time() - last) / 60)
+    if not last:
+        return True, "从未重读过"
+    return False, ""
+
+
+def mark_reread(reason):
+    """外部喊一声「待会儿记得重读」——压缩之后由 persona_compact 调用。"""
+    st = reread_state()
+    st["need"] = True
+    st["reason"] = reason
+    st["marked"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    reread_save(st)
+
+
+def cmd_reread(a):
+    """--auto：闹钟每 5 分钟调；只**标记**，不刷屏（真正读文件的是 AI）。
+       --check：exit 0 = 不用读，exit 1 = 该读了（把原因打出来）
+       --ack  ：AI 真读完之后调用，清标记并记下文件 hash
+    """
+    if a.ack:
+        st = reread_state()
+        st["need"] = False
+        st["reason"] = ""
+        st["last_read"] = time.time()
+        st["last_read_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        st["files"] = {rel: _sha(os.path.join(ROOT, rel)) for rel in SETTINGS}
+        reread_save(st)
+        try:
+            with io.open(REREAD_LOG, "a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps({"at": st["last_read_at"], "action": "read",
+                                    "files": len(st["files"])}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        print("已记下重读：%d 份设定（%s）" % (len(st["files"]), st["last_read_at"]))
+        return 0
+    need, why = reread_need()
+    if a.check:
+        print(("该重读了：%s" % why) if need else "不用重读（设定没变、且在 30 分钟内）")
+        return 1 if need else 0
+    if a.auto:
+        st = reread_state()
+        last_mark = float(st.get("marked_ts") or 0)
+        if need and time.time() - last_mark >= REREAD_EVERY:
+            mark_reread(why)
+            st = reread_state()
+            st["marked_ts"] = time.time()
+            reread_save(st)
+            try:
+                with io.open(REREAD_LOG, "a", encoding="utf-8", newline="\n") as f:
+                    f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "action": "mark", "why": why},
+                                       ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+            print("已标记重读：%s" % why)
+        else:
+            print("跳过（%s）" % (why or "不需要"))
+        return 0
+    print("用法：reread --auto | --check | --ack")
+    return 0
+
+
+def write_brief(rec, k=8):
+    """写一份唤醒简讯：醒来第一眼看的就是它。"""
+    body = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "wake_id": rec.get("id", ""), "purpose": rec.get("purpose", ""),
+            "agent": rec.get("agent", ""), "source": rec.get("source", "alarm")}
+    need, why = reread_need()
+    body["reread_need"] = need
+    body["reread_why"] = why
+    body.update(index_brief(k))
+    try:                       # 简讯文件也留一份当时的 ⑦⑧⑨⑩⑪ 快照（命令行 brief 会现算，不用它）
+        body["inflight"] = [_inflight_line()] + _nextstep_lines()
+        body["autoloop"] = _autoloop_lines()
+    except Exception:
+        pass
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(BRIEF, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(body, f, ensure_ascii=False, indent=1)
+        with io.open(BRIEF_HIST, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(body, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return body
+
+
+def _pack_line():
+    """交接包那一行：醒后也该重读，但得让人一眼看出它新不新（过期了读它等于读旧世界）。"""
+    p = os.path.join(ROOT, "续接", "接续包-最新.md")
+    try:
+        age = (time.time() - os.path.getmtime(p)) / 60.0
+    except OSError:
+        return "④ 交接包：还没生成（先跑 persona_gauge.py --prepare --canonical --no-clip）"
+    if age > 60:
+        return "④ 交接包：续接\\接续包-最新.md（**已过期 %d 分钟**，先刷再读）" % int(age)
+    return "④ 交接包：续接\\接续包-最新.md（%d 分钟前生成，可读）" % int(age)
+
+
+def _inflight_line(limit=3):
+    """⑦ 在办：台账里还没收尾的活。只读，不执行；最多 3 项——简讯要短。
+
+    这是"醒来看得见还有活"，不是任务清单全文：全文在 `python persona_inflight.py list`。
+    """
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_inflight as IF
+        items = IF.open_items()
+    except Exception:
+        items = []
+
+    def one(it):
+        st = it.get("status") or "running"
+        what = (it.get("what") or it.get("id") or "").strip()
+        step = (it.get("step") or "").strip()
+        if st in ("blocked", "waiting") and step:
+            desc = "%s：%s" % (st, step)
+        elif step:
+            desc = "停在：%s" % step
+        else:
+            desc = ""
+        s = ("%s（%s）" % (what, desc)) if desc else what
+        return s if len(s) <= 44 else s[:43] + "…"
+
+    if not items:
+        return "⑦ 在办：无（都收尾了）"
+    shown = [one(x) for x in items[:limit]]
+    line = "⑦ 在办：" + "｜".join(shown)
+    if len(items) > len(shown):
+        line += "（…另 %d 项）" % (len(items) - len(shown))
+    return line + "  共 %d 项" % len(items)
+
+
+def _nextstep_lines():
+    """⑧ 现在能做 / ⑨ 已自动开工：只读判定，**绝不在简讯里执行任务**。"""
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_nextstep as NS
+        return NS.wake_lines()
+    except Exception as e:
+        return ["⑧ 现在能做：（判不出来：%s）" % str(e)[:40]]
+
+
+def _autoloop_lines():
+    """⑩ 我留给自己的 / ⑪ 现在要做的：只读判定，**绝不在简讯里执行**。"""
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_autoloop as AL
+        return AL.wake_lines(root=ROOT)
+    except Exception as e:
+        return ["⑩ 我留给自己的：（判不出来：%s）" % str(e)[:40],
+                "⑪ 现在要做的：—"]
+
+
 def render_brief(b):
-    lines = ["唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", "")),
-             "总索引 %d 条来源，最近：" % b.get("index_total", 0)]
+    head = "唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", ""))
+    lines = [head]
+    if b.get("reread_need"):
+        lines.append("⚠ 需要重读设定：%s（读完跑 persona_wake.py reread --ack）"
+                     % (b.get("reread_why") or "被标记"))
+    else:
+        lines.append("设定已重读（30 分钟内、内容没变）")
+    lines += ["",
+              "醒后先做三件（顺序不许换）：",
+              "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
+              "     路径：memory\\设定\\",
+              "  ② 读总索引：python persona_master.py --k 10",
+              "  ③ 认领检查：python persona_claim.py check \"关键词\" --has text",
+              "  " + _pack_line(),
+              ""]
+    # ⑦⑧⑨⑩⑪：重置/醒来先知道「还有哪些活、停在哪、当下哪件能先动、我给自己留了什么」。
+    # 只读台账与判定，**不执行任何任务**；心跳周期（30 秒）与此无关，一个字没动。
+    lines += [_inflight_line()]
+    lines += _nextstep_lines()
+    lines += _autoloop_lines()
+    lines += ["",
+              "总索引 %d 条来源，最近：" % b.get("index_total", 0)]
     for s in b.get("recent") or []:
         lines.append("  %s  %-6s %4d条  %s" % (s["time"], s["source"], s["msgs"], s["head"]))
     if b.get("pending"):
@@ -188,15 +475,30 @@ def fire_due(limit=2, k=8):
         if run_cmd:
             env = dict(os.environ, PERSONA_PURPOSE=r["purpose"], PERSONA_WAKE_ID=r["id"],
                        PERSONA_BRIEF=BRIEF, PERSONA_ROOT=ROOT)
+            job = (r.get("job") or "").strip()
+            run_job = job or r["id"]
             try:
-                pr = subprocess.run(run_cmd, shell=True, capture_output=True, text=True,
-                                    timeout=120, env=env, cwd=ROOT,
-                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                rec["rc"] = pr.returncode
-                rec["out"] = ((pr.stdout or "") + (pr.stderr or ""))[-400:]
+                import persona_sched as _sched
+                # 闹钟默认优先级 1（最高）；登记的 job 以表里的数为准。
+                prio = (_sched.priority(job, "alarm", root=ROOT, default=1)
+                        if job else 1)
+                rr = _sched.run_preemptible(run_job, prio, run_cmd, timeout=120,
+                                            owner="alarm", root=ROOT, env=env)
+                rec["rc"] = rr.get("rc")
+                rec["out"] = (rr.get("out") or "")[-400:]
+                if rr.get("preempted_by"):
+                    rec["preempted_by"] = rr["preempted_by"]
             except Exception as exc:
-                rec["rc"] = -1
-                rec["out"] = str(exc)[:200]
+                # 仲裁模块不可用时退回直接执行：闹钟不能因为仲裁挂掉。
+                try:
+                    pr = subprocess.run(run_cmd, shell=True, capture_output=True, text=True,
+                                        timeout=120, env=env, cwd=ROOT,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    rec["rc"] = pr.returncode
+                    rec["out"] = ((pr.stdout or "") + (pr.stderr or ""))[-400:]
+                except Exception as exc2:
+                    rec["rc"] = -1
+                    rec["out"] = str(exc2)[:200]
         try:
             os.makedirs(OPS, exist_ok=True)
             with io.open(FIRES, "a", encoding="utf-8", newline="\n") as f:
@@ -211,6 +513,17 @@ def fire_due(limit=2, k=8):
                 r["due"] += r["every"]
         else:
             r["enabled"] = False
+        # 优先级仲裁：跑成功（rc==0）才占位，失败不 claim（失败不该挡住另一边）。
+        # ttl 取这条闹钟的周期；next_due 是推进后的下一次 due，供 status / 让位说明里显示。
+        job = (r.get("job") or "").strip()
+        if job and run_cmd and rec.get("rc") == 0:
+            try:
+                import persona_sched as _sched
+                _sched.claim(job, "alarm", ttl=int(r.get("every") or 300),
+                             next_due=(r.get("due") if r.get("every") else None),
+                             note=r.get("purpose", "")[:80], root=ROOT)
+            except Exception:
+                pass
         fired += 1
         if fired >= limit:
             break
@@ -313,9 +626,19 @@ def main():
     c.add_argument("--text", default="", help="自定义正文；不给就用总索引 + 待办拼一份")
     c.add_argument("--wait-idle", type=int, default=5, help="他最近 N 秒在打字就先等（默认 5）")
     c.add_argument("--dry-run", action="store_true")
+    c = sub.add_parser("event", help="事件唤醒：有事了才叫（派发口自动调用）")
+    c.add_argument("--agent", default="")
+    c.add_argument("--purpose", required=True, help="醒来做什么（必填，同闹钟规矩）")
+    c.add_argument("--delay", type=int, default=5, help="多少秒后醒（默认 5）")
+    c.add_argument("--source", default="dispatch", help="谁触发的（dispatch/task/dep）")
+    c = sub.add_parser("reread", help="重读设定：--auto（闹钟每 5 分钟）/ --check / --ack")
+    c.add_argument("--auto", action="store_true", help="需要就标记，节流 5 分钟")
+    c.add_argument("--check", action="store_true", help="exit 1 = 该重读了")
+    c.add_argument("--ack", action="store_true", help="真读完之后调用，清标记")
     a = ap.parse_args()
     fn = {"add": cmd_add, "list": cmd_list, "rm": cmd_rm, "brief": cmd_brief,
-          "inject": cmd_inject,
+          "reread": cmd_reread,
+          "inject": cmd_inject, "event": cmd_event,
           "fire": lambda _a: print("触发 %d 个" % fire_due())}.get(a.cmd)
     if not fn:
         ap.print_help()

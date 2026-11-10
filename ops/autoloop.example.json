@@ -1,0 +1,7 @@
+{
+  "_说明": "空闲循环的全局开关。意图清单不在这里——在 ops\\intents.jsonl（一行一条，只追加），用 persona_autoloop.py wish 写；这里只控制整块开/关。",
+  "_字段": {
+    "enabled": "true = 空闲循环开；false = 整块停（tick 直接返回「空闲循环已关」），不影响闹钟/守护的其他调度。"
+  },
+  "enabled": true
+}

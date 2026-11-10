@@ -1,0 +1,15 @@
+{
+  "_说明": "优先级表（ops\\sched-priority.json）：同一件事（job）两边都想跑时，数字小的一方先跑，数字大的一方让位。数字越小优先级越高。未登记的 job，两边都按 100 处理（互不让位）。首次运行 persona_sched.py 会自动生成只含 jobs 的默认表；本文件是带逐键说明的示例，复制为 sched-priority.json 即可。",
+  "_字段": {
+    "jobs": "按 job 分组；job 是「同一件事」的标识（例如 compact-check）。",
+    "jobs.<job>.alarm": "闹钟一侧的优先级数字。默认 compact-check=1（高）。",
+    "jobs.<job>.daemon": "守护一侧的优先级数字。默认 compact-check=2（低，让位）。",
+    "jobs.<job>.task": "（可选）守护任务名；任务名与 job 不同名时用它绑定，例如 reload。"
+  },
+  "jobs": {
+    "compact-check": {
+      "alarm": 1,
+      "daemon": 2
+    }
+  }
+}
