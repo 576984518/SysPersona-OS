@@ -100,6 +100,59 @@ def dsh_pressure():
         return 0, 0, 0
 
 
+def stats():
+    """水位统计（2026-11-10）：把系统里所有"像上下文"的数摆在一张表上，标清哪个是水位。
+
+    起因：界面上同时显示「122M tok / 输入 455K / 22%」三个数，人一眼看不出哪个是上下文；
+    我们这边又同时有 pressure / surface / 账本平均 / Hermes 四个数。**四个数都对，但只有一个是水位。**
+    """
+    press, surface, win = dsh_pressure()
+    led = {}
+    try:
+        data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
+        days = data.get("days") or {}
+        led = days[sorted(days)[-1]] if days else {}
+    except Exception:
+        led = {}
+    tot, last = {}, {}
+    try:
+        parent = os.path.dirname(PROJCACHE)
+        fs = sorted(glob.glob(os.path.join(PROJCACHE, "*.json")),
+                    key=os.path.getmtime, reverse=True)
+        if fs:
+            rows = (json.loads(io.open(fs[0], encoding="utf-8", errors="replace").read())
+                    .get("record") or {}).get("rows") or {}
+            tot = ((rows.get("tokenUsage") or {}).get("val") or {}).get("totals") or {}
+            last = (((rows.get("tokenUsage") or {}).get("val") or {}).get("last") or {})
+    except Exception:
+        pass
+    calls = int(led.get("calls") or 0)
+    avg = int((int(led.get("cacheRead") or 0) + int(led.get("input") or 0)) / calls) if calls else 0
+    unc = int(tot.get("uncachedInputTokens") or 0)
+    cache = int(tot.get("cacheReadTokens") or 0)
+
+    print("水位统计（%s）——**只有第一行是水位**" % time.strftime("%Y-%m-%d %H:%M:%S"))
+    print("  %-22s %-10s %-6s %s" % ("数", "值", "占窗口", "是什么"))
+    print("  %-22s %-10s %-6s %s" % ("pressure（当前水位）", human(press),
+                                    "%.1f%%" % (100.0 * press / (win or LIMIT)),
+                                    "最近一次调用的 cacheRead + 未缓存输入 = 壳判压缩用的数"))
+    print("  %-22s %-10s %-6s %s" % ("surface", human(surface),
+                                    "%.1f%%" % (100.0 * surface / (win or LIMIT)),
+                                    "system + 消息正文（不含 tools）"))
+    print("  %-22s %-10s %-6s %s" % ("未缓存输入（累计）", human(unc), "—",
+                                    "本会话所有调用里没命中缓存的输入总和＝界面上的「输入 455K」"))
+    print("  %-22s %-10s %-6s %s" % ("缓存命中（累计）", human(cache), "—",
+                                    "本会话累计命中＝界面上的「122M tok」"))
+    print("  %-22s %-10s %-6s %s" % ("账本日均", "~" + human(avg), "—",
+                                    "(cacheRead+input)/calls，全历史平均，只兜底"))
+    print("")
+    print("  窗口 %s ｜ 今日调用 %d 次 ｜ 今日 ¥%.3f" % (human(win or LIMIT), calls,
+                                                    float(led.get("costCny") or 0)))
+    print("  一句话：**百分比只有 pressure 那个算得出来**；455K / 122M 是累计量，"
+          "拿去当水位会以为还能撑很久。")
+    return press
+
+
 def dsh_ctx():
     """DSH 实测：账本累计值的**增量** = 最近一次调用真正带进去的 prompt。
 
@@ -577,7 +630,12 @@ if __name__ == "__main__":
     ap.add_argument("--clip", action="store_true", help="只复制最近生成的包到剪贴板")
     ap.add_argument("--ctx", type=int, default=0, help="强制指定上下文规模（测试到线行为）")
     ap.add_argument("--canonical", action="store_true", help="写到固定的 接续包-最新.md（覆盖），给周期任务用")
+    ap.add_argument("--stats", action="store_true", help="水位统计：把所有像上下文的数摆一张表，标清哪个是水位")
     a = ap.parse_args()
+
+    if a.stats:
+        stats()
+        sys.exit(0)
 
     c = report(a.ctx or None)
     if a.prepare:
