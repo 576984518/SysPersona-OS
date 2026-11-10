@@ -305,15 +305,16 @@ def detail_text(s):
 
 
 def show_status(icon=None, item=None):
+    """原生 MessageBox。
+
+    2026-11-10 踩坑：tkinter 的 messagebox 在 pythonw 里会**卡死**——窗口出来但
+    点「确定」和「×」都没反应（Tk 根窗口被 withdraw 后模态循环收不到消息）。
+    改用 Win32 的 MessageBoxW：MB_ICONINFORMATION | MB_TOPMOST，一定能关。
+    """
     text = detail_text(snapshot())
     try:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        messagebox.showinfo("SysPersona 状态", text)
-        root.destroy()
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, "SysPersona 状态", 0x40 | 0x40000)
     except Exception:
         print(text)
 
