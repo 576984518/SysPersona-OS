@@ -70,7 +70,8 @@ HOLD = os.path.join(OPS, "dr-hold")               # 蹲住闸：有它就绝不�
 TASK_DIR = os.path.join(OPS, "tasks")             # 计划任务的 XML 配置（提前落盘）
 NET_STATE = os.path.join(OPS, "dr-net.json")      # 网络连续不通的拍数
 DR_SESS_DIR = os.path.join(OPS, "session-dr")      # 每个会话一份容灾档案（建一次）
-REQ = os.path.join(OPS, "switch-request.json")     # 手动切档请求（前台只写这个文件）
+REQ = os.path.join(OPS, "switch-request.json")     # 切档请求（谁都能写，后台认）
+REQ_LOG = os.path.join(OPS, "switch-requests.jsonl")  # 谁下的、什么时候、成没成
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -515,6 +516,27 @@ def switch_model(cmd, model=""):
     return _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", ver])
 
 
+def session_cache_drop():
+    r"""把「本会话的模型缓存」整份移走（不是改，是让它没有可恢复的模型）。
+
+    为什么改字段不管用：客户端启动时并不读我们写进去的值，而是从它自己的存储恢复，
+    再把这个缓存重写回去（实测两次：改完 30 秒内被覆盖回 deepseek-flash）。
+    所以换个思路——缓存没了，它只能按 cordis.patch.yml 的默认值走。
+    移走的名字是 <文件>.off，不是删除；真要回滚，改个名就回来了。
+    """
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_session_model as SM
+        f = SM.find("")
+        if not f:
+            return False, "找不到会话缓存文件"
+        off = f + ".off"
+        os.replace(f, off)
+        return True, "已移走 %s（下次启动按配置重建）" % os.path.basename(f)
+    except Exception as e:                 # noqa: BLE001
+        return False, str(e)[:120]
+
+
 def session_model_sync(drop_reasoning=True):
     r"""把「当前会话记住的模型」也改成配置里的那个。
 
@@ -728,11 +750,11 @@ def enact(what, dry=False):
     todo = {"daemon": [("拉起守护", "daemon")],
             "restart": [("杀客户端", "kill"), ("拉起客户端", "launch")],
             "local": [("杀客户端", "kill"), ("改配置 → 本地档", "switch"),
-                       ("本会话也切到本地", "session"), ("拉起客户端", "launch")],
+                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
             "free": [("杀客户端", "kill"), ("改配置 → 硅基免费档", "switch"),
-                      ("本会话也切到硅基", "session"), ("拉起客户端", "launch")],
+                      ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
             "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
-                      ("本会话也切回 DeepSeek", "session"), ("拉起客户端", "launch")]}.get(what)
+                      ("移走本会话缓存", "session"), ("拉起客户端", "launch")]}.get(what)
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
         return 2
@@ -749,7 +771,7 @@ def enact(what, dry=False):
             time.sleep(0.5)                # 等文件句柄彻底放开
             ok, msg = switch_model(what)
         elif kind == "session":
-            ok, msg = session_model_sync(drop_reasoning=(what != "paid"))
+            ok, msg = session_cache_drop()
         else:
             time.sleep(1.5)                # 让触发我们的人先退干净
             ok, msg = launch_client()
@@ -924,7 +946,7 @@ def preflight_line():
                "开" if d.get("switch_on") else "关"))
 
 
-def request_switch(to, by="cli", dry=False):
+def request_switch(to, by="human", dry=False):
     """**手动切档的入口**：只写一个请求文件，由后台接手执行。
 
     为什么不让前台直接杀：从客户端窗口里起的进程会被 	askkill /T 连坐；
@@ -932,15 +954,16 @@ def request_switch(to, by="cli", dry=False):
     后台（守护的 dr 任务 60 秒一拍、外层 SysPersona-Watchdog 1 分钟一拍）看到这个文件就干活。
     """
     to = (to or "").strip().lower()
-    if to not in ("cloud", "local", "paid"):
-        print("用法：python persona_watchdog.py request cloud | local | paid")
+    if to not in ("cloud", "local", "paid", "restart"):
+        print("用法：python persona_watchdog.py request cloud | local | paid | restart [--by human|agent]")
         return 2
     if dry:
         print("会下请求：%s（--dry，没写文件）" % to)
         return 0
     d = {"to": to, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": by}
     _write_json(REQ, d)
-    print("已下请求：%s（%s）\n后台下一拍接手（≤60 秒），窗口会断几秒再回来。" % (to, d["at"]))
+    print("已下请求：%s（%s，由 %s 下）\n后台下一拍接手（≤60 秒），窗口会断几秒再回来。"
+          % (to, d["at"], by))
     return 0
 
 
@@ -954,14 +977,25 @@ def fulfill_request():
     except OSError:
         pass
     to = (d.get("to") or "").strip().lower()
+    by = d.get("by") or "?"
     task = {"cloud": "SysPersona-DR-Free", "local": "SysPersona-DR-Local",
-            "paid": "SysPersona-DR-Paid"}.get(to)
+            "paid": "SysPersona-DR-Paid", "restart": "SysPersona-DR-Restart"}.get(to)
     if not task:
-        return "不认识的切档请求：%s" % to
-    if not task_exists(task):
-        ensure_tasks()
-    ok, msg = task_run(task)
-    return "手动切档 %s → %s（%s）" % (to, "已触发" if ok else "触发失败", msg or "")
+        out = "不认识的切档请求：%s" % to
+        ok = False
+    else:
+        if not task_exists(task):
+            ensure_tasks()
+        ok, msg = task_run(task)
+        out = "%s 下命令：%s → %s（%s）" % (by, to, "已触发" if ok else "触发失败", msg or "")
+    try:
+        with io.open(REQ_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "want": to, "by": by, "ok": ok,
+                                "msg": out}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return out
 
 
 def pick(which, dry=False):
@@ -990,11 +1024,9 @@ def pick(which, dry=False):
     if dry:
         print("会触发：%s（dry，没触发）" % task)
         return 0
-    if not task_exists(task):
-        install(quiet=True)
-    ok, msg = task_run(task)
-    print("已触发 %s：%s" % (task, msg or ("ok" if ok else "失败")))
-    return 0 if ok else 4
+    # 走同一条通道：写请求 → 后台受理（不再直接触发任务）
+    return request_switch({"free": "cloud", "local": "local", "paid": "paid"}.get(cmd, cmd),
+                          by="human", dry=dry)
 
 
 def _gate(d):
@@ -1018,19 +1050,23 @@ def _gate(d):
 
 
 def execute(d, dry=False):
-    """判定 → 触发一个**先建好的**计划任务。返回执行记录（list）。
+    r"""判定 → 写一条请求 → 立刻履行（**和手动命令同一条通道**）。
 
-    这里刻意只说一句 `schtasks /Run`：不建任务、不写配置、不联网、不等模型回话。
+    人 2026-11-10 定「全部走一个通道」：判定侧不再直接 schtasks /Run，
+    而是和「你下命令」「我下命令」一样往队列里放一条请求，由同一个 fulfill_request() 受理。
     """
-    name = action_task(d)
-    if not name:
+    to = {"restart_client": "restart", "revive_daemon": "daemon",
+          "fallback_local": "local"}.get(d["action"])
+    if d["action"] == "switch_backup_cloud":
+        to = {"local": "local", "free": "cloud", "paid": "paid"}.get(
+            (d.get("target") or {}).get("cmd") or "free", "cloud")
+    if not to:
         return []
     if dry:
-        return [{"step": "触发 %s" % name, "ok": None, "msg": "（dry：没触发）"}]
-    if not task_exists(name):
-        ensure_tasks()                     # 任务被人删了就重建（正常不该发生）
-    ok, msg = task_run(name)
-    return [{"step": "触发 %s" % name, "ok": ok, "msg": msg or "已触发"}]
+        return [{"step": "请求 %s" % to, "ok": None, "msg": "（dry：没写没执行）"}]
+    _write_json(REQ, {"to": to, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "by": "dr"})
+    msg = fulfill_request()
+    return [{"step": "请求 %s" % to, "ok": bool(msg), "msg": msg or "（没被受理）"}]
 
 
 def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=None):
@@ -1103,6 +1139,7 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--act", action="store_true", help="开关开着时真执行")
     ap.add_argument("--dry", action="store_true", help="只打印会做哪几步，不执行")
+    ap.add_argument("--by", default="human", help="谁下的命令：human / agent（写进请求台账）")
     ap.add_argument("--restart-client", action="store_true", dest="restart_client",
                     help="（兼容旧参数，现在由开关决定）")
     ap.add_argument("--net", default="", help="测试用：覆盖网络探针目标")
@@ -1130,7 +1167,7 @@ def main(argv=None):
         return pick(a.arg, dry=a.dry)
 
     if a.cmd == "request":
-        return request_switch(a.arg, dry=a.dry)
+        return request_switch(a.arg, by=a.by, dry=a.dry)
 
     if a.cmd == "preflight":
         d = preflight()
