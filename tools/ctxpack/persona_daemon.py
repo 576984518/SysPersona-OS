@@ -157,7 +157,7 @@ DEFAULTS = {
     "sfbalance": 21600,          # 硅基余额快照：6 小时一班（脚本自己还有 6 小时闸门，重复调用不重复抓）
     "dsbalance": 1800,           # DeepSeek 余额：官方接口，半小时一次（不花 token，只防见底）
     "dr": 60,                    # 容灾：每分钟读一次 dr-plan.json，条件到了触发预建任务
-    "drpreflight": 1800,        # 容灾自检：半小时一遍，查版本/当前会话备胎/任务是否齐
+    "drpreflight": 21600,       # 容灾复核：6 小时一遍（每会话只在出现时建档一次）
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
@@ -1210,7 +1210,14 @@ def t_dr():
     import persona_watchdog as W
     d = W.run_once(act=True)
     why = (d.get("why") or "").strip()
-    return d.get("action") == "ok", "%s ｜ %s" % (d.get("action"), why[:60])
+    note = ""
+    try:
+        prof = W.session_profile(W.newest_session_id())
+        if prof.get("status") == "created":
+            note = " ｜ 新会话已建档"
+    except Exception:                  # noqa: BLE001
+        pass
+    return d.get("action") == "ok", "%s ｜ %s%s" % (d.get("action"), why[:50], note)
 
 
 def t_drpreflight():

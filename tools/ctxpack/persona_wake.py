@@ -479,7 +479,7 @@ def _drcheck_line():
         tk = d.get("tasks") or {}
         total = int(tk.get("total") or 0)
         miss = len(tk.get("missing") or [])
-        vers = "、".join("%s%s" % (v.get("name"), "✔" if v.get("ok") else "✘")
+        vers = "、".join("%s%s" % (v.get("name"), "正常" if v.get("ok") else "缺失")
                          for v in (d.get("versions") or []))
         return ("🩺 容灾自检（%s）：版本 %s ｜ 本会话 %s/%s → 备胎「%s」｜ 任务 %d/%d%s"
                 % (str(d.get("at") or "")[11:16], vers,

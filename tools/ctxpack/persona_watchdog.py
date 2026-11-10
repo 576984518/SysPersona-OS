@@ -47,6 +47,7 @@ r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打�
   * 客户端进程名 / 安装路径都从环境变量推，不写死（见 CLIENT_* 常量）。
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -68,6 +69,7 @@ STATE = os.path.join(OPS, "dr-state.json")        # 执行台账（冷却 / 次�
 HOLD = os.path.join(OPS, "dr-hold")               # 蹲住闸：有它就绝不动手
 TASK_DIR = os.path.join(OPS, "tasks")             # 计划任务的 XML 配置（提前落盘）
 NET_STATE = os.path.join(OPS, "dr-net.json")      # 网络连续不通的拍数
+DR_SESS_DIR = os.path.join(OPS, "session-dr")      # 每个会话一份容灾档案（建一次）
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -768,16 +770,63 @@ def enact(what, dry=False):
     return 0 if all(x["ok"] for x in out) else 4
 
 
-def preflight():
-    r"""容灾自检：只看、不动手。回答「现在这台机器上，容灾这套东西是齐的吗」。
+def newest_session_id():
+    """当前会话的 id（取最近改动的那个 projcache 文件）。"""
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_session_model as SM
+        f = SM.find("")
+        if not f:
+            return ""
+        name = os.path.basename(f)
+        if name.startswith("session-") and name.endswith(".json"):
+            return name[len("session-"):-len(".json")]
+    except Exception:                  # noqa: BLE001
+        pass
+    return ""
 
-    人 2026-11-10 要的：「每次心跳唤醒还有维护任务不是有检查吗？检查当前会话是否有容灾备份配置。」
-    所以每次唤醒/每次维护都该问一遍：
-      1. 三套固定版本在不在、解出来的 provider/model 对不对；
-      2. 当前会话记住的是哪个模型（它自己记的，不是配置里的），在链上第几格、备胎是谁；
-      3. 预建任务齐不齐、开关开没开、有没有蹲住闸。
+
+def session_profile(sid):
+    """建/取某个会话的容灾档案：**建一次**，之后只复核。"""
+    if not sid:
+        return {"status": "no_session"}
+    p = os.path.join(DR_SESS_DIR, sid + ".json")
+    if os.path.exists(p):
+        d = _read_json(p, {}) or {}
+        return {"status": "exists", "path": p, "data": d}
+    d = {"created": time.strftime("%Y-%m-%d %H:%M:%S"), "session": sid,
+         "chain": [{"id": c.get("id"), "label": c.get("label"),
+                     "provider": c.get("provider"), "model": c.get("model")}
+                    for c in chain()],
+         "versions": {}, "tasks_total": len(plan_tasks()), "checks": []}
+    for name in ("paid", "cloud", "local"):
+        vp = os.path.join(OPS, "profiles", name + ".yml")
+        try:
+            b = open(vp, "rb").read()
+            d["versions"][name] = hashlib.sha256(b).hexdigest()[:16]
+        except OSError:
+            d["versions"][name] = "missing"
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_session_model as SM
+        lu = SM.get_last_used(SM.load(SM.find("")))
+        d["model_at_creation"] = {"provider": lu.get("provider"), "model": lu.get("model")}
+    except Exception:                  # noqa: BLE001
+        pass
+    _write_json(p, d)
+    return {"status": "created", "path": p, "data": d}
+
+
+def preflight(force=True):
+    r"""容灾复核（低频）：版本还在不在、任务齐不齐、会话的备胎还对不对。只读，不动手。
+
+    人 2026-11-10 定：「每个会话只检查一次，创建一次，然后就是低频检查。」
+    所以：会话出现时由 `session_profile()` 建一份档案（建一次）；这里负责**低频复核**
+    （默认 6 小时，守护的 drpreflight 任务），不复核「每拍」。
     """
-    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "ok": True, "problems": []}
+    prof = session_profile(newest_session_id())
+    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "ok": True, "problems": [],
+           "session_profile": prof.get("status")}
     # 1) 版本文件
     vers = []
     prof_dir = os.path.join(OPS, "profiles")
@@ -862,7 +911,7 @@ def preflight_line():
     d = _read_json(os.path.join(OPS, "dr-preflight.json"), {}) or {}
     if not d:
         return "容灾自检：还没跑过"
-    vers = "、".join("%s%s" % (v["name"], "✔" if v.get("ok") else "✘")
+    vers = "、".join("%s%s" % (v["name"], "正常" if v.get("ok") else "缺失")
                     for v in d.get("versions") or [])
     s = d.get("session") or {}
     tk = d.get("tasks") or {}
