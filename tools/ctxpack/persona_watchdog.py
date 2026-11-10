@@ -502,11 +502,14 @@ def _run(cmd, timeout=180):
         return False, str(e)[:160]
 
 
+# 分支名 → 固定版本名（版本文件在 ops\\profiles\\\\<name>.yml，切档=整份复制）
+VER_OF = {"free": "cloud", "local": "local", "paid": "paid"}
+
+
 def switch_model(cmd, model=""):
-    args = [PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), cmd]
-    if model:
-        args += ["--model", model]
-    return _run(args)
+    """套用一套**固定的版本文件**（不是现场改文字：改文字会被客户端写回去）。"""
+    ver = VER_OF.get(cmd, cmd)
+    return _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", ver])
 
 
 def session_model_sync(drop_reasoning=True):

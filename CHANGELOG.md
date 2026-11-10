@@ -1,5 +1,31 @@
 # 变更记录
 
+## 模型档改成「固定版本文件」— 2026-11-10
+
+**人定的口径**：「配置文件是固定的，还是一直修改不固定的？」「如果这个文件有固定状态，我们只有保留不同版本的这个文件就可以了。」
+
+对，现场改文字这条路既复杂又会被客户端写回去。改成：
+
+| 命令 | 作用 |
+|---|---|
+| python persona_model_switch.py build | 以当前文件为底，派生三套**完整**版本到 ops\\profiles\\ |
+| ... versions | 列出三套：各自 provider/model、大小、改动时间，以及当前生效的是哪套 |
+| ... use paid\\|cloud\\|local | 整份复制过去（改前留一个 .bak，复制后回读校验） |
+
+三套的 providers（硅基免费档 + 本地档两条路由）**完全一致**，只有 gent-default-model 不同：
+
+`
+paid   云端主 · DeepSeek 收费    deepseek-account / deepseek-flash
+cloud  云端备 · 硅基免费档        siliconflow / Qwen/Qwen2.5-7B-Instruct
+local  本地 · Herdsman          herdsman-local / Qwen3:8B
+`
+
+persona_watchdog.py 的 pick 与容灾分支也改成套版本（ree→cloud），不再现场拼 YAML。
+三份都过了 js-yaml 解析校验；use cloud → use paid 往返实测通过。
+
+**仍然是老实话**：客户端开窗时恢复的是它自己记的模型（Local Storage 里，值带压缩），
+所以这套版本只对**新会话**生效；当前会话要换档，还得在界面上点一次。
+
 ## 容灾的执行顺序纠正：先杀 → 再改配置 → 再拉起 — 2026-11-10
 
 **人纠的**：「而且是不是顺序反了？不是应该先杀进程，然后再改配置吗？」

@@ -40,6 +40,7 @@ PATCH = os.path.join(os.path.expanduser("~"), ".dsh", "profiles", "desktop",
                      "cordis.patch.yml")
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SF_FREE = os.path.join(ROOT, "ops", "sf-free.json")
+PROFILE_DIR = os.path.join(ROOT, "ops", "profiles")   # 固定版本，切档=整份复制
 
 FREE_PROVIDER = "siliconflow"
 FREE_MODEL_FALLBACKS = ["Qwen/Qwen2.5-7B-Instruct", "THUDM/glm-4-9b-chat"]
@@ -51,6 +52,13 @@ LOCAL_BASE = os.environ.get("SYSPERSONA_LOCAL_BASE", "http://127.0.0.1:8080/v1")
 LOCAL_KEY_ENV = "HERDSMAN_API_KEY"          # 占位凭据的环境变量名（值不是密钥）
 LOCAL_KEY_VALUE = "local-placeholder"
 LOCAL_MODEL_FALLBACKS = ["Qwen3:8B", "Qwen3.5_9b", "Qwen3.5_4b"]
+
+# 三套固定版本：名字 → (provider, 指定模型或 None=自动挑, 说明)
+VERSIONS = {
+    "paid": (PAID_PROVIDER, PAID_MODEL, "云端主 · DeepSeek 收费"),
+    "cloud": (FREE_PROVIDER, None, "云端备 · 硅基免费档"),
+    "local": (LOCAL_PROVIDER, None, "本地 · Herdsman"),
+}
 LOCAL_MAX_MODELS = 3
 
 
@@ -232,11 +240,79 @@ def ensure_local_key():
         return "写环境变量失败（%s），仅本次进程内生效" % e
 
 
+def _version_path(name):
+    return os.path.join(PROFILE_DIR, name + ".yml")
+
+
+def cmd_build():
+    """以当前文件为底，派生三套**完整**版本；三套的 providers 完全一致，只有默认模型不同。"""
+    base = read()
+    free0 = (free_models() or FREE_MODEL_FALLBACKS)[0]
+    rows = []
+    for name, (prov, model, label) in VERSIONS.items():
+        if name == "paid":
+            keep, text_v = PAID_MODEL, set_default(base, PAID_PROVIDER, PAID_MODEL)
+        elif name == "cloud":
+            keep = model or free0
+            text_v = set_default(set_providers(base, keep), FREE_PROVIDER, keep)
+        else:
+            keep = model or (local_models() or LOCAL_MODEL_FALLBACKS)[0]
+            text_v = set_default(set_providers(base, free0), LOCAL_PROVIDER, keep)
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        with io.open(_version_path(name), "w", encoding="utf-8", newline="\n") as f:
+            f.write(text_v)
+        got_p, got_m, _, _ = current(text_v)
+        rows.append((name, label, got_p, got_m, (got_p, got_m) == (prov, keep)))
+    for name, label, p, m, ok in rows:
+        print("%s %-6s %-24s → %s / %s" % ("✔" if ok else "✘", name, label, p, m))
+    print("版本目录：%s" % PROFILE_DIR)
+    return 0 if all(r[4] for r in rows) else 1
+
+
+def cmd_versions():
+    if not os.path.isdir(PROFILE_DIR):
+        print("还没有版本（先跑 build）")
+        return 2
+    for name in sorted(VERSIONS):
+        p = _version_path(name)
+        if not os.path.exists(p):
+            print("%-6s %-24s 缺失" % (name, VERSIONS[name][2]))
+            continue
+        prov, model, _, _ = current(io.open(p, encoding="utf-8").read())
+        print("%-6s %-24s %s / %s  （%.1f KB，%s）"
+              % (name, VERSIONS[name][2], prov, model, os.path.getsize(p) / 1024.0,
+                 time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(p)))))
+    prov, model, _, _ = current(read())
+    print("当前生效：%s / %s" % (prov, model))
+    return 0
+
+
+def cmd_use(name):
+    src = _version_path(name)
+    if not os.path.exists(src):
+        print("没有这套版本：%s（先跑 build，或 versions 看有哪些）" % name)
+        return 2
+    raw = io.open(src, encoding="utf-8").read()
+    prov, model, _, _ = current(raw)
+    if not (prov and model):
+        print("这套版本里读不到 provider/model，拒绝套用")
+        return 1
+    backup()
+    write(raw)
+    got_p, got_m, _, _ = current(read())
+    if (got_p, got_m) != (prov, model):
+        print("套用后校验没过：%s / %s" % (got_p, got_m))
+        return 1
+    print("已套用版本 %-6s → %s · %s" % (name, got_p, got_m))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="切换客户端默认模型（收费 / 硅基免费档 / 本地）")
     ap.add_argument("cmd", nargs="?", default="show",
-                    choices=["show", "free", "paid", "local", "revert"])
+                    choices=["show", "free", "paid", "local", "revert", "build", "versions", "use"])
     ap.add_argument("--model", default="", help="free/local 时指定模型")
+    ap.add_argument("name", nargs="?", default="", help="use 时指定版本名（paid/cloud/local）")
     a = ap.parse_args(argv)
 
     if not os.path.exists(PATCH):
@@ -318,6 +394,16 @@ def main(argv=None):
         print("已切到本地档：%s · %s\n占位凭据：%s\n备份：%s\n**重启客户端或新开会话才生效**"
               % (prov, got, key_note, os.path.basename(bak)))
         return 0
+
+    # ── 版本化：把整份文件存成几套，切档 = 整份复制 ─────────────────────
+    if a.cmd == "build":
+        return cmd_build()
+
+    if a.cmd == "versions":
+        return cmd_versions()
+
+    if a.cmd == "use":
+        return cmd_use(a.name)
     return 0
 
 
