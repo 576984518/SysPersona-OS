@@ -55,7 +55,7 @@ without it scripts fall back to example paths, which are not real paths on your 
 2. Retrieval: search a phrase only you two know, get back `file:line`;
 3. Durability: mirror the source before any compaction, show a matching checksum;
 4. Processing: with nobody touching it, the context level actually drops;
-5. Reload: after processing, receive one rules reload; interrupt one on purpose and see it resubmit;
+5. Reset: after processing, the rules are put back in front once; interrupt one on purpose and see it resubmit;
 6. Self-check: six checks, each with a verdict (pass / fail / why);
 7. Boundary: ask it to delete a memory — it must **stop and ask you**.
 
@@ -74,3 +74,21 @@ No Linux/macOS implementation exists. No cloud service is required; offline, eve
 | "Change the model and it changes" | Persona and memory live in files; the model is only the engine |
 | "Close the window and it dies" | Only the UI closes; it reads its memory and is still itself |
 | "Let the AI decide what old memory to delete" | Never. Deletion always requires the human |
+## 8. Real-world deployment tests
+
+> This section records **actual runs only**: who ran it, in what environment, how far it got, where it
+> stopped, and the verdict. It never changes the design or the acceptance criteria above.
+
+| Date | Model tested | Environment | Reached step | Result | Evidence / blocker |
+|---|---|---|---|---|---|
+| | Qwen (qianwen.com) | | | pending | |
+| | DeepSeek (chat.deepseek.com) | | | pending | |
+| | Doubao (doubao.com) | | | pending | |
+
+**Three checks (all required before "deployment succeeded")**: the repo can be obtained; `SYSPERSONA_ROOT`
+is set correctly and index + retrieval return `file:line`; `selftest.py` runs and every failure is
+classified as "platform mismatch" or "real defect".
+
+**Two known traps** (seen 2026-11-10, already fixed): an unset `SYSPERSONA_ROOT` falls back to example
+paths and yields "0 sources" - an environment mistake, not a repo defect; and a sandbox with no outbound
+network cannot clone or download - an environment limit, not a repo defect.
