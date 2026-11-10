@@ -1,5 +1,19 @@
 # 变更记录
 
+## Hermes 也做「几份固定配置」— 2026-11-10
+
+**人定的口径**：「把容灾的几份配置按照这个，设定几份，拉起时自动切换配置。」
+
+Hermes 的模型就写在 config.yaml 的 model: 块里（档案卡片上的模型就是它），所以按 DSH 那套做法：
+
+- persona_hermes.py build → 从当前配置派生三份**完整**配置到 ops\\profiles-hermes\\：
+  paid（deepseek-flash）/ cloud（硅基 Qwen2.5-7B）/ local（Herdsman Qwen3.5_4b）；
+- persona_hermes.py versions → 看三份各是什么、当前生效哪份；
+- persona_hermes.py use-copy <name> → **整份替换**（不改文字：改文字会被它写回去），回读校验；
+- 容灾的 enact hermes 已改成 use-copy local：拉起代班前先把 Hermes 切到本地那份。
+
+注意：Hermes 的 config.yaml 里带着 api_key，这几份版本文件也就会带一份（都在本机 ops\\ 下，不往外发）。
+
 ## 断网不动 DSH，改由 Hermes 代班 — 2026-11-10
 
 **人定的口径**：「这个断网，保持不动，用另外一个本地容灾，网络恢复，后台在唤醒这个。」

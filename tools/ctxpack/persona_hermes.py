@@ -25,6 +25,8 @@ CONF = os.environ.get("SYSPERSONA_HERMES_CONF") or os.path.join(
     or r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home",
     "config.yaml")
 
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "profiles-hermes")
+
 PROFILES = {
     "paid": {"provider": "deepseek", "default": "deepseek-flash",
              "base_url": "https://api.deepseek.com", "api_mode": "chat_completions"},
@@ -93,6 +95,60 @@ def set_model(text, prof):
     return "".join(lines[:start]) + "".join(block) + "".join(lines[end:])
 
 
+def build():
+    """以当前 config.yaml 为底，派生三套**整份**配置（只有 model: 块不同）。"""
+    base = read()
+    rows = []
+    for name, prof in PROFILES.items():
+        text_v = set_model(base, prof)
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        with io.open(os.path.join(PROFILE_DIR, name + ".yaml"), "w",
+                     encoding="utf-8", newline="\n") as f:
+            f.write(text_v)
+        got = get_model(text_v)
+        rows.append((name, got.get("provider"), got.get("default"),
+                     (got.get("provider"), got.get("default")) == (prof["provider"], prof["default"])))
+    for name, prov, model, ok in rows:
+        print("%s %-6s %s / %s" % ("OK" if ok else "X", name, prov, model))
+    print("版本目录：%s" % PROFILE_DIR)
+    return 0 if all(r[3] for r in rows) else 1
+
+
+def versions():
+    if not os.path.isdir(PROFILE_DIR):
+        print("还没有版本（先跑 build）")
+        return 2
+    for name in sorted(PROFILES):
+        p = os.path.join(PROFILE_DIR, name + ".yaml")
+        if not os.path.exists(p):
+            print("%-6s 缺失" % name)
+            continue
+        got = get_model(io.open(p, encoding="utf-8").read())
+        print("%-6s %s / %s" % (name, got.get("provider"), got.get("default")))
+    print("当前生效：%s" % get_model(read()))
+    return 0
+
+
+def use_copy(name):
+    """整份替换 config.yaml（和 DSH 一样：改文字会被写回去，整份换最稳）。"""
+    src = os.path.join(PROFILE_DIR, name + ".yaml")
+    if not os.path.exists(src):
+        print("没有这套：%s（先跑 build）" % name)
+        return 2
+    raw = io.open(src, encoding="utf-8").read()
+    want = PROFILES[name]
+    got = get_model(raw)
+    if (got.get("provider"), got.get("default")) != (want["provider"], want["default"]):
+        print("版本文件本身不对，拒绝：%s" % got)
+        return 1
+    write(raw)
+    now = get_model(read())
+    ok = (now.get("provider"), now.get("default")) == (want["provider"], want["default"])
+    print("已套用 Hermes 配置 %-6s → %s / %s%s" % (name, now.get("provider"),
+          now.get("default"), "" if ok else "（回读不一致！）"))
+    return 0 if ok else 1
+
+
 def main(argv=None):
     a = sys.argv[1:] if argv is None else argv
     cmd = a[0] if a else "show"
@@ -107,6 +163,12 @@ def main(argv=None):
         print("配置：%s" % CONF)
         print("当前：%s" % get_model(text))
         return 0
+    if cmd == "build":
+        return build()
+    if cmd == "versions":
+        return versions()
+    if cmd == "use-copy":
+        return use_copy(a[1] if len(a) > 1 else "")
     if cmd == "use":
         name = a[1] if len(a) > 1 else ""
         prof = PROFILES.get(name)

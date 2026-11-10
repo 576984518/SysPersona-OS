@@ -918,7 +918,7 @@ def enact(what, dry=False):
         elif kind == "relay":
             ok, msg = write_relay()
         elif kind == "hconf":
-            ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use", "local"])
+            ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use-copy", "local"])
         elif kind == "hermes":
             ok, msg = _try(launch_hermes, tries=2, wait=5)
         elif kind == "proxy":
