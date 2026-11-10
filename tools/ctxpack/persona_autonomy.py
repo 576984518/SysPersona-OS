@@ -19,7 +19,8 @@ git push —— 在 `persona_autoloop.py` 的 GUARDS 里逐条写死，与档位
 
 配置：`ops\autonomy.json`（首次自动生成；仓库交 `ops/autonomy.example.json`）：
   {"cur_by_model": {"free": {"runs_per_hour": 12, "runs_per_day": 120, "note": "…"},
-                     "paid": {"runs_per_hour": 3,  "runs_per_day": 20,  "note": "…"}},
+                     "paid": {"runs_per_hour": 1,  "runs_per_day": 3,   "note": "…"},
+ "auto_free": false   ← 默认关：识别到免费档也不放宽，要放宽得显式开},
    "patterns": {"free": ["local/*", "*free*", …], "paid": ["deepseek-account:*", …]},
    "current_model": ""}
 `current_model` 非空 = 人工钉住；空 = 从成本账本
@@ -50,8 +51,8 @@ DEFAULT_CFG = {
     "cur_by_model": {
         "free": {"runs_per_hour": 12, "runs_per_day": 120,
                  "note": "免费/本地：只花电费，可以多做"},
-        "paid": {"runs_per_hour": 3, "runs_per_day": 20,
-                 "note": "收费：做多了花钱，收紧"},
+        "paid": {"runs_per_hour": 1, "runs_per_day": 3,
+                 "note": "收费：默认只给最小次数（1/时·3/日），要放宽自己改"},
     },
     "patterns": {
         "free": ["local/*", "*free*", "siliconflow*", "ollama*", "lmstudio*",
@@ -60,6 +61,8 @@ DEFAULT_CFG = {
                  "anthropic*"],
     },
     "current_model": "",
+    # 默认最小：自动识别到免费/本地模型也不放宽，要放宽必须显式打开
+    "auto_free": False,
 }
 
 RED_LINES = (
@@ -276,14 +279,18 @@ def profile(root=None, now=None):
     """当前生效的 {model, tier, 次数上限, 已用, 还能做}；只读。"""
     cfg = load(root)
     model, source = current_detail(root)
-    tier = classify(model, root)
+    tier_detected = classify(model, root)
+    auto_free = bool(cfg.get("auto_free", False))
+    # 默认最小：识别到免费档但没显式打开 auto_free → 仍按收费档的最小次数执行
+    tier = tier_detected if (tier_detected != "free" or auto_free) else "paid"
     lv = (cfg.get("cur_by_model") or {}).get(tier) or {}
     base = DEFAULT_CFG["cur_by_model"][tier]
     rh = _num(lv.get("runs_per_hour"), base["runs_per_hour"])
     rd = _num(lv.get("runs_per_day"), base["runs_per_day"])
     used_h, used_d = used_runs(root, now)
     return {"model": model, "model_source": source,
-            "tier": tier, "tier_label": TIER_LABEL[tier],
+            "tier": tier, "tier_detected": tier_detected, "auto_free": auto_free,
+            "tier_label": TIER_LABEL[tier],
             "tier_note": lv.get("note") or TIER_DESC[tier],
             "runs_per_hour": rh, "runs_per_day": rd,
             "used_hour": used_h, "used_day": used_d,
@@ -305,7 +312,7 @@ def limit_reason(p):
 
 
 def set_values(tier="", runs_per_hour=None, runs_per_day=None, model=None,
-               root=None):
+               auto_free=None, root=None):
     """改数/钉模型。返回 (profile, 变更说明列表)。只改 ops\\autonomy.json。"""
     cfg = load(root)
     changes = []
@@ -321,6 +328,11 @@ def set_values(tier="", runs_per_hour=None, runs_per_day=None, model=None,
             lv["runs_per_day"] = _num(runs_per_day, lv.get("runs_per_day", 0))
             changes.append("cur_by_model.%s.runs_per_day=%d" % (
                 tier, lv["runs_per_day"]))
+    if auto_free is not None:
+        cfg["auto_free"] = bool(auto_free)
+        changes.append("auto_free=%s（%s）" % (
+            "true" if auto_free else "false",
+            "允许免费档放宽" if auto_free else "一律按最小档"))
     if model is not None:
         m = str(model or "").strip()
         if m.lower() == "auto":
@@ -370,6 +382,8 @@ def main(argv=None):
     ap.add_argument("model_key", nargs="?", default="", help="classify 的模型键")
     ap.add_argument("--root", default="", help="库根（默认 SYSPERSONA_ROOT / 本文件目录）")
     ap.add_argument("--json", action="store_true", dest="as_json")
+    ap.add_argument("--auto-free", dest="auto_free", choices=["on", "off"], default=None,
+                    help="set 是否允许免费/本地档放宽（默认 off = 一律按最小档）")
     ap.add_argument("--tier", choices=list(TIERS), default="",
                     help="set 改哪一档（free/paid）")
     ap.add_argument("--runs-per-hour", type=int, default=None, dest="runs_per_hour")
@@ -392,7 +406,7 @@ def main(argv=None):
         return 0
 
     if a.cmd == "set":
-        if not a.tier and a.model_opt is None:
+        if not a.tier and a.model_opt is None and a.auto_free is None:
             print("set 要 --tier free|paid --runs-per-hour N [--runs-per-day N]，"
                   "或 --model <模型键|auto>")
             return 2
@@ -403,7 +417,9 @@ def main(argv=None):
             print("--runs-per-day 不能为负（0 = 不自动做事）")
             return 2
         p, changes = set_values(a.tier, a.runs_per_hour, a.runs_per_day,
-                                a.model_opt, root)
+                                a.model_opt,
+                                None if a.auto_free is None else (a.auto_free == "on"),
+                                root)
         if p is None:
             print("；".join(changes))
             return 2
