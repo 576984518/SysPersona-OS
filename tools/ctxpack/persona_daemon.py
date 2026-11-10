@@ -154,10 +154,11 @@ DEFAULTS = {
     "daily": 21600,
     "inject": 120,
     "selfcheck": 120,
+    "sfbalance": 21600,          # 硅基余额快照：6 小时一班（脚本自己还有 6 小时闸门，重复调用不重复抓）
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
-                "watermark": 120, "cost": 120, "selfcheck": 60}
+                "watermark": 120, "cost": 120, "selfcheck": 60, "sfbalance": 240}
 
 
 def now():
@@ -1140,6 +1141,26 @@ def t_inject():
         ev["streak"], ev["since_min"] if ev["since_min"] is not None else "?")
 
 
+def t_sfbalance():
+    r"""硅基流动余额快照（2026-11-10 加）：读登录态页面，落 `ops\sf-balance.json`。
+
+    为什么不在 API 里读：`GET /v1/user/info` 已 410 Gone，余额只在
+    `cloud.siliconflow.cn/me/expensebill` 页面上。人给的页，读一次一个数字。
+    频率：脚本自己有 6 小时闸门 + 24 小时最多 6 次，这里 6 小时叫一次不会多抓。
+    产物给 `persona_fallback` 当余额快照：低于阈值就降级（欠费→只做本机活）。
+    """
+    ok, s = run([NODE, os.path.join(ROOT, "sf_balance.js")],
+                TASK_TIMEOUT["sfbalance"])
+    try:
+        with open(os.path.join(OPS, "sf-balance.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and d.get("balance") is not None:
+            return ok, "余额 ¥%s（%s）" % (d["balance"], d.get("at", ""))
+    except (OSError, ValueError):
+        pass
+    return ok, s
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -1166,6 +1187,7 @@ TASKS = {
     "proxy": t_proxy,
     "todo": t_todo,
     "inject": t_inject,
+    "sfbalance": t_sfbalance,
 }
 
 
