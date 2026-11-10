@@ -26,7 +26,7 @@ r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打�
              ↓
         按「模型链」从当前模型的下一格往后找第一个通的：
              deepseek（收费） → 硅基免费 → 本地
-             ├─ 找到别的 ──→ ② 切过去（改配置 + 重启）
+             ├─ 找到别的 ──→ ② 切过去（杀 → 改配置 → 拉起）
              └─ 一个都不通 ──→ ① 保底：切本地
              当前那格就通 ──→ ③ 只是本地卡死：只重启，配置不动
 
@@ -503,16 +503,23 @@ def revive_daemon():
     return False, "起了但 20 秒内没看到守护"
 
 
-def restart_client(wait=25.0):
-    """杀客户端 → 等它退干净 → 重新拉起（有占位凭据时顺手带上）。"""
-    if not os.path.exists(CLIENT_EXE):
-        return False, "找不到客户端可执行文件：%s" % CLIENT_EXE
+def kill_client(wait=25.0):
+    """只杀，不拉。杀不干净就返回失败，免得开两份。"""
+    if not client_alive():
+        return True, "客户端本来就没在跑"
     _run(["taskkill", "/F", "/T", "/IM", CLIENT_IMG], timeout=40)
     t0 = time.time()
     while time.time() - t0 < wait and client_alive():
-        time.sleep(1.0)
+        time.sleep(0.5)
     if client_alive():
-        return False, "杀了 %0.f 秒还在跑，放弃拉起（避免开两份）" % (time.time() - t0)
+        return False, "杀了 %0.f 秒还在跑" % (time.time() - t0)
+    return True, "已退出（%.0f 秒）" % (time.time() - t0)
+
+
+def launch_client(wait=25.0):
+    """只拉，不杀。"""
+    if not os.path.exists(CLIENT_EXE):
+        return False, "找不到客户端可执行文件：%s" % CLIENT_EXE
     env = dict(os.environ)
     env.setdefault("HERDSMAN_API_KEY", "local-placeholder")
     flags = 0x00000008 | 0x00000200        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
@@ -526,9 +533,17 @@ def restart_client(wait=25.0):
     t0 = time.time()
     while time.time() - t0 < wait:
         if client_alive():
-            return True, "已重新拉起（%.0f 秒）" % (time.time() - t0)
+            return True, "已拉起（%.0f 秒）" % (time.time() - t0)
         time.sleep(1.0)
     return False, "已启动但 %0.f 秒内没看到进程" % wait
+
+
+def restart_client(wait=25.0):
+    """杀 → 拉起（不改配置）。配置那一档走 enact 的三步。"""
+    ok, msg = kill_client(wait)
+    if not ok:
+        return False, msg
+    return launch_client(wait)
 
 
 # ------------------------------------------------------- 计划任务（提前建好，现场只触发）
@@ -650,15 +665,20 @@ def ensure_tasks():
 
 
 def enact(what, dry=False):
-    """分支本体：由计划任务调用，自带「改配置 → 杀 → 拉起」全流程。
+    """分支本体：由计划任务调用，自带「杀 → 改配置 → 拉起」全流程。
 
     这里是**唯一**真动手的地方；看门狗只负责判定 + 触发任务。
     """
+    # 顺序：先杀 → 再改配置 → 再拉起（人 2026-11-10 纠的：反了）
+    # 先改配置的话，正在跑的那个进程还可能把文件写回去，改了也白改。
     todo = {"daemon": [("拉起守护", "daemon")],
-            "restart": [("重启客户端", "restart")],
-            "local": [("改配置 → 本地档", "switch"), ("重启客户端", "restart")],
-            "free": [("改配置 → 硅基免费档", "switch"), ("重启客户端", "restart")],
-            "paid": [("改配置 → DeepSeek 收费档", "switch"), ("重启客户端", "restart")]}.get(what)
+            "restart": [("杀客户端", "kill"), ("拉起客户端", "launch")],
+            "local": [("杀客户端", "kill"), ("改配置 → 本地档", "switch"),
+                       ("拉起客户端", "launch")],
+            "free": [("杀客户端", "kill"), ("改配置 → 硅基免费档", "switch"),
+                      ("拉起客户端", "launch")],
+            "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
+                      ("拉起客户端", "launch")]}.get(what)
     if todo is None:
         print("未知动作：%s（可选 daemon/restart/local/free/paid）" % what)
         return 2
@@ -669,14 +689,19 @@ def enact(what, dry=False):
             continue
         if kind == "daemon":
             ok, msg = revive_daemon()
+        elif kind == "kill":
+            ok, msg = kill_client()
         elif kind == "switch":
+            time.sleep(0.5)                # 等文件句柄彻底放开
             ok, msg = switch_model(what)
         else:
             time.sleep(1.5)                # 让触发我们的人先退干净
-            ok, msg = restart_client()
+            ok, msg = launch_client()
         out.append({"step": label, "ok": ok, "msg": msg})
-        if not ok:
-            break
+        if not ok and kind in ("daemon", "kill"):
+            break                          # 没杀干净就别改、也别开第二份
+        if not ok and kind == "switch":
+            continue                       # 配置没改成就按原配置拉起，别留个死窗口
     try:
         with io.open(os.path.join(OPS, "dr-actions.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "what": what,
@@ -808,7 +833,7 @@ def main(argv=None):
     if a.cmd == "dr":
         if a.arg == "on":
             d = set_switch(True)
-            print("容灾开关：**已打开**（%s）\n从现在起，心跳死 + 判定成立 → 自动改配置 / 杀进程 / 重新拉起。"
+            print("容灾开关：**已打开**（%s）\n从现在起，心跳死 + 判定成立 → 自动杀进程 / 改配置 / 重新拉起。"
                   "关掉：python persona_watchdog.py dr off" % d["at"])
             return 0
         if a.arg == "off":
