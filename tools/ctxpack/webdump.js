@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /*
- * webdump.js — 通过 CDP 抓 DeepSeek 网页对话，存成可读 Markdown（零依赖）
+ * webdump.js — 通过 CDP 抓 DeepSeek deepseek网页，存成可读 Markdown（零依赖）
  *
  * 前提：浏览器带 --remote-debugging-port=9222 启动。
  *
  * 用法：
- *   node webdump.js sessions/2026-11-08/网页对话
+ *   node webdump.js sessions/2026-11-08/deepseek网页
  *   node webdump.js <输出目录> --port 9222 --interval 2000
  *
  * 行为：
@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
-const opt = { out: args[0] || 'sessions/2026-11-08/网页对话', port: 9222, interval: 2000 };
+const opt = { out: args[0] || 'sessions/2026-11-08/deepseek网页', port: 9222, interval: 2000 };
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--port') opt.port = Number(args[++i]);
   else if (args[i] === '--interval') opt.interval = Number(args[++i]);
@@ -85,7 +85,7 @@ function writeSnapshot(rec, pageId) {
   const file = path.join(OUT, `deepseek-${id}.md`);
   const body = rec.text || '';
   const head = [
-    `# DeepSeek 网页对话 ${id}`,
+    `# DeepSeek deepseek网页 ${id}`,
     '',
     `- 网址：${rec.url}`,
     `- 标题：${rec.title}`,

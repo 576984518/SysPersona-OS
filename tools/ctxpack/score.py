@@ -21,7 +21,7 @@ import re
 import sqlite3
 import time
 
-ROOT = r"Z:\会话检索261107"
+ROOT = r"D:\4590-PC-文件\AI会话检索记录"
 DB = os.path.join(ROOT, "memory.db")
 
 # ---------- 词表 ----------
@@ -247,8 +247,11 @@ def recalibrate(con):
     hi, mid = q(0.95), q(0.75)
     con.execute("UPDATE memory SET bucket = CASE WHEN total >= ? THEN 'L1-永存'"
                 " WHEN total >= ? THEN 'L3-召回' ELSE '冷却' END", (hi, mid))
+    # 记忆该记的是"你说过什么"，不是"AI 怎么复述你说过什么"：
+    # 助手消息最多进 L3，永不进 L1
+    con.execute("UPDATE memory SET bucket = 'L3-召回' WHERE role = '助手' AND bucket = 'L1-永存'")
     con.commit()
-    print("分位标定：L1 >= %.1f（前 5%%）　L3 >= %.1f（前 25%%）" % (hi, mid))
+    print("分位标定：L1 >= %.1f（前 5%%）　L3 >= %.1f（前 25%%）　（助手不进 L1）" % (hi, mid))
 
 
 def stats(con):

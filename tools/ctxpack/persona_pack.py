@@ -8,7 +8,7 @@ persona_pack.py — 上下文提取与归档（MVP，v2.5.0）
 
 目录约定（脚本同级放记录目录；记录目录里按 日期/来源 两层分桶，来源互不干扰）：
   sessions/2026-11-07/电脑会话/xxx.md     ← 输入（另一台电脑的 DSH 会话）
-  sessions/2026-11-08/网页对话/xxx.md     ← 输入（网页版对话）
+  sessions/2026-11-08/deepseek网页/xxx.md     ← 输入（网页版对话）
   sessions/2026-11-08/网页文章/xxx.md     ← 输入（网页文章正文）
   archive/2026-11-07/电脑会话/            ← 归档自动跟随输入的 日期/来源
 来源名 = 路径里日期段(YMD)的下一段；日期段不存在则视为无来源。
@@ -21,7 +21,7 @@ persona_pack.py — 上下文提取与归档（MVP，v2.5.0）
 用法：
   python persona_pack.py digest ./notes -o HANDOFF.md --dry-run
   python persona_pack.py digest . -o HANDOFF.md
-  python persona_pack.py search 分身 --sort time --source 网页对话
+  python persona_pack.py search 分身 --sort time --source deepseek网页
 """
 
 import argparse

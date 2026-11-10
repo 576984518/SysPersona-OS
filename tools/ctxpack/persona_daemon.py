@@ -28,6 +28,12 @@ r"""persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 
 """
 import argparse, io, json, os, re, subprocess, sys, threading, time, traceback
 
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
@@ -94,7 +100,11 @@ def log(msg):
     line = "%s  %s" % (now(), msg)
     try:
         os.makedirs(OPS, exist_ok=True)
+        fresh = (not os.path.exists(LOG)) or os.path.getsize(LOG) == 0
         with open(LOG, "a", encoding="utf-8") as f:
+            # 新建/空文件时先写 BOM：记事本靠 BOM 认 UTF-8，没有就整篇按 GBK 解 → 全乱码
+            if fresh:
+                f.write("\ufeff")
             f.write(line + "\n")
     except OSError:
         pass
@@ -207,7 +217,7 @@ def t_watermark():
 
 def t_capture():
     anchor = os.path.join(OPS, "anchor.txt")
-    out = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "网页对话",
+    out = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "deepseek网页",
                        "capture-%s.md" % time.strftime("%H%M%S"))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     args = [NODE, CAPTURE_JS, out]
@@ -536,16 +546,38 @@ def t_uiskin():
     return True, "注入器未在跑，已拉起"
 
 
+def _kick_recapture():
+    """B40：心跳末尾只问一句「这次要不要重抓」（读 JSON + 抽签，毫秒级）。
+
+    抓取要 30–90 秒，**绝不能**在心跳线程里同步跑；判定该抓就丢后台线程，
+    心跳立刻返回。`decide()` 会先占位（last_try），30 秒后的下一次心跳不会重复起线程。
+    """
+    try:
+        import persona_recapture as R
+        due, why = R.decide()
+        if not due:
+            return "重抓：%s" % why
+        threading.Thread(target=R.run_once, kwargs={"force": True}, daemon=True).start()
+        return "重抓已起：%s" % why
+    except Exception as e:
+        return "重抓判断失败：%s" % str(e)[:80]
+
+
 def t_wake():
     """闹钟（v5.3 第一块）：到点就记一条触发记录。
     真正的「唤醒某个智能体并让它先读总索引」由调用方按 purpose 执行；
-    这里只负责守时和留痕，不做模型调用。"""
+    这里只负责守时和留痕，不做模型调用。
+
+    B40 的重抓判断挂在这里（而不是另加一个 30 秒任务）：两者同频，
+    多一个任务只多一个线程和一份和心跳抢跑的窗口，没有收益。
+    """
     try:
         import persona_wake
     except Exception as e:
         return False, "导入 persona_wake 失败：%s" % str(e)[:60]
     n = persona_wake.fire_due()
-    return True, ("触发 %d 个闹钟" % n) if n else "无到点闹钟"
+    kick = _kick_recapture()
+    return True, ((("触发 %d 个闹钟" % n) if n else "无到点闹钟") + " | " + kick)
 
 
 def t_agent():

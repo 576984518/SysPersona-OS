@@ -120,13 +120,13 @@ def header_fields(path):
 
 
 def bucket_defaults(rel):
-    """头里没写时按来源桶兜底：网页对话一定来自网页，这条是事实不是猜。
+    """头里没写时按来源桶兜底：deepseek网页一定来自网页，这条是事实不是猜。
 
     电脑会话不兜底——旧记忆可能来自另一台机器，写死本机主机名就是编造。
     """
     parts = rel.split('/')
     src = parts[2] if len(parts) > 3 else ''
-    if src == '网页对话':
+    if src == 'deepseek网页':
         return '网页', 'deepseek-web'
     return '', ''
 

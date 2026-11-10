@@ -30,6 +30,7 @@ except Exception:
 
 import sys
 import time
+import urllib.request
 
 ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.abspath(__file__))
 ARCHIVE = os.path.join(ROOT, "archive")
@@ -99,6 +100,62 @@ def tail(path, n):
 NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
 RELOAD_JS = os.path.join(ROOT, "reload_page.js")
 
+# 抓取要连的调试浏览器：不通就拉 start_cdp_browser.ps1（独立 profile，默认无头）。
+CDP_PORT = int(os.environ.get("PERSONA_CDP_PORT") or 9222)
+CDP_LAUNCHER = os.environ.get("PERSONA_CDP_LAUNCHER") or \
+    r"C:\Users\Huang\AppData\Local\SysPersona\start_cdp_browser.ps1"
+POWERSHELL = os.environ.get("PERSONA_POWERSHELL") or \
+    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+
+def cdp_alive(port=CDP_PORT, timeout=1.5):
+    """CDP 端点通不通。通了就不用再拉浏览器（毫秒级，别拖慢读会话）。"""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/json/version" % port,
+                                    timeout=timeout) as r:
+            return getattr(r, "status", 200) == 200
+    except Exception:
+        return False
+
+
+def ensure_cdp(port=CDP_PORT, wait_sec=20):
+    """CDP 不通就拉起调试浏览器（独立 profile，默认无头）。返回 (ok, msg)。
+
+    「每个抓取都要人先开一个调试浏览器」——这件事不该由人记得。
+    失败**不抛异常**：让调用方如实报「CDP 起不来」，而不是误报「没有新内容」。
+    msg 只有三种：「已在跑」/「已拉起」/「CDP 起不来：…」。
+    """
+    if cdp_alive(port):
+        return True, "已在跑"
+    if not os.path.exists(CDP_LAUNCHER):
+        return False, "CDP 起不来：找不到启动脚本 %s" % CDP_LAUNCHER
+    if not os.path.exists(POWERSHELL):
+        return False, "CDP 起不来：找不到 powershell.exe（%s）" % POWERSHELL
+    cmd = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", CDP_LAUNCHER, "-Port", str(port)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=wait_sec + 10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        return False, "CDP 起不来：启动脚本 %.0f 秒没返回" % (wait_sec + 10)
+    except Exception as e:
+        return False, "CDP 起不来：%s" % str(e)[:120]
+    raw = r.stdout or b""
+    text = ""
+    for enc in ("utf-8", "gbk"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", "replace")
+    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
+    if cdp_alive(port):
+        return True, "已拉起"
+    detail = lines[-1] if lines else (r.stderr or b"").decode("utf-8", "replace").strip()[:160]
+    return False, "CDP 起不来：%s" % (detail or ("启动脚本退出码 %d" % r.returncode))
+
 
 def force_reload():
     """CDP 强制刷新网页会话——**不指望他按 F5**（2026-11-10 读会话铁律第 3 条）。"""
@@ -157,8 +214,15 @@ def main():
           % (hm(since), hm(files[0][0]), os.path.relpath(files[0][1], ROOT)))
 
     tries = 0
+    cdp_ok = None
+    cdp_msg = ""
     while files[0][0] < since and tries < a.retries and not a.no_capture:
         tries += 1
+        if cdp_ok is None:
+            cdp_ok, cdp_msg = ensure_cdp()
+            print(("CDP：%s" % cdp_msg) if cdp_ok else cdp_msg)
+            if not cdp_ok:
+                break
         print("→ 归档比你说的时间旧，判定**没刷到**。第 %d/%d 次：先强制刷新页面，再抓取…"
               % (tries, a.retries))
         rok, rmsg = force_reload()
@@ -179,6 +243,11 @@ def main():
     fresh = [(t, p) for t, p in files if t > max(m0, since) - 1]
 
     if files[0][0] < since:
+        if cdp_ok is False:
+            print("\n结论：%s —— 这次**没抓到**，不是没有新内容。" % cdp_msg)
+            print("（抓取链路断了：先跑一次 start_cdp_browser.ps1 -Login 完成首次登录；"
+                  "实在抓不到再加 -Headful 回落）")
+            return 3
         print("\n结论：抓了 %d 次，归档仍停在 %s（页面更新于 %s）——**刷新没成功**，不是没有新内容。"
               % (tries, hm(files[0][0]), page_time()))
         if tries == 0:

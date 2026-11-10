@@ -14,7 +14,8 @@ r"""persona_constitution_reloader.py — 设定重载器（Constitution Reloader
 
 冲突保护（硬要求）：**不许抢焦点打断他**。
   - 注入前先看 `GetLastInputInfo`：他最近 N 秒在敲 → 排队，不注入；
-  - 排队不是丢：写 `ops/reloader-queue.json`，下一轮（或手动）接着来；
+  - 排队不是丢：写 `ops/reloader-queue.json`，**队列自己就是一档触发**——
+    下一轮巡检（`--only-if-needed`）一进门先看队列，欠账优先于水位带，必还；
   - 真正注入走 `persona_inject`，它自己会点输入框、粘贴、回车，并**还原剪贴板**。
 
 用法：
@@ -204,6 +205,35 @@ def save_queue(d):
         pass
 
 
+def queue_pending():
+    """队列里还欠着哪一次重载（没有就返回 ""）。
+
+    排队不是丢——但光"记着"没用，必须有人来还账。还账的两个入口：
+    ① 每 5 分钟 `persona_compact.py check` 顺手叫的 `--only-if-needed`；
+    ② 手动 `--reason manual`。
+    所以 `run()` 一进来就先看队列：**欠账优先于任何水位带判定**。
+    """
+    q = load_queue()
+    if not isinstance(q, dict) or not q:
+        return ""
+    for k in ("compact", "daily", "manual", "periodic"):
+        if q.get(k):
+            return k
+    for k in q:                      # 兜底：队列里出现没见过的键
+        if q.get(k):
+            return k
+    return ""
+
+
+def _requeue(reason, chars):
+    """把这次重载重新挂回队列，**保留最初的排队时刻**（证据要能回溯）。"""
+    q = load_queue()
+    old = q.get(reason) or {}
+    q[reason] = {"at": old.get("at") or now(), "chars": chars,
+                 "retry": int(old.get("retry") or 0) + 1, "last_try": now()}
+    save_queue(q)
+
+
 def log(rec):
     try:
         os.makedirs(OPS, exist_ok=True)
@@ -233,16 +263,28 @@ def human_busy(seconds=5):
 
 def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
         only_if_needed=False):
+    # 欠账必还（2026-11-10 踩）：11:00:15 压缩完叫重载，他正在敲 → 排队；
+    # 之后每 5 分钟的巡检只看水位带（131K < 150K）就跳过，队列等于石沉大海。
+    # 所以队列自己就是一档触发，优先级高于水位带，也高于 hash 变化那档。
+    pending = queue_pending()
+    q_at = ""
+    if pending:
+        q_at = (load_queue().get(pending) or {}).get("at") or "?"
+        reason = pending
+        print("有欠账：%s 那次重载没发出去（%s 排队至今）" % (pending, q_at))
     if only_if_needed:
-        try:
-            sys.path.insert(0, ROOT)
-            import persona_wake as W
-            need, need_reason = W.reread_need()
-        except Exception:
-            need, need_reason = False, "判定不了"
-        due, why, press = band_due()
-        if need and not due:
-            due, why = True, "设定变了（%s）" % (need_reason or "hash 不同")
+        if pending:
+            due, why = True, "欠账未还（%s，%s 排队）" % (pending, q_at)
+        else:
+            try:
+                sys.path.insert(0, ROOT)
+                import persona_wake as W
+                need, need_reason = W.reread_need()
+            except Exception:
+                need, need_reason = False, "判定不了"
+            due, why, _press = band_due()
+            if need and not due:
+                due, why = True, "设定变了（%s）" % (need_reason or "hash 不同")
         if not due:
             log({"at": now(), "reason": reason, "action": "skip", "msg": why})
             print("跳过：%s" % why)
@@ -253,13 +295,12 @@ def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
         print(text)
         print("\n[DRY] %d 字，未注入" % len(text))
         return 0
-    if human_busy(idle_wait):
+    busy_window = max(idle_wait, 20) if pending else idle_wait
+    if human_busy(busy_window):
         if queue_if_busy:
-            q = load_queue()
-            q[reason] = {"at": now(), "chars": len(text)}
-            save_queue(q)
+            _requeue(reason, len(text))
             log({"at": now(), "reason": reason, "action": "queued",
-                 "msg": "他最近 %d 秒在操作，不抢焦点" % idle_wait})
+                 "msg": "他最近 %d 秒在操作，不抢焦点（欠账继续挂着）" % busy_window})
             print("已排队：他正在操作，等他这一轮结束再重载（ops/reloader-queue.json）")
             return 0
         print("放弃：他正在操作")
@@ -270,9 +311,21 @@ def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
         print("FAIL 导入注入模块失败：%s" % e)
         log({"at": now(), "reason": reason, "action": "fail", "msg": str(e)[:120]})
         return 2
-    ok, msg = pi.inject(text, wait_idle=idle_wait)
+    if pending:
+        # 补发时更耐心：先等**壳**空闲，别撞正在进行的那一轮（回车被吞就是这么来的）
+        try:
+            sok, _sw, smsg = pi.wait_shell_idle(stable=8, timeout=180)
+        except Exception:
+            sok, smsg = True, "（空闲探针不可用）"
+        if not sok:
+            _requeue(reason, len(text))
+            log({"at": now(), "reason": reason, "action": "queued",
+                 "msg": "补发时%s，继续挂着" % smsg})
+            print("已排队：%s" % smsg)
+            return 0
+    ok, msg = pi.inject(text, wait_idle=(60 if pending else idle_wait))
     log({"at": now(), "reason": reason, "action": "fired" if ok else "fail",
-         "chars": len(text), "msg": msg})
+         "chars": len(text), "flush": bool(pending), "msg": msg})
     if ok:                                       # 重载成功 = 设定这一轮读过了
         try:
             sys.path.insert(0, ROOT)
@@ -311,6 +364,8 @@ def main():
               % (press // 1000, (win or 0) // 1000,
                  int(st.get("next_at") or CTX_FIRST) // 1000, st.get("last_at") or "（无）"))
         print("队列：%s" % (json.dumps(load_queue(), ensure_ascii=False) or "（空）"))
+        _p = queue_pending()
+        print("欠账：%s" % (("有（%s，下一轮巡检就补发）" % _p) if _p else "无"))
         try:
             last = [json.loads(l) for l in io.open(LOG, encoding="utf-8") if l.strip()][-3:]
             for r in last:

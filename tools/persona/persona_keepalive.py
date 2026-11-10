@@ -21,6 +21,11 @@ import io
 import json
 import os
 import subprocess
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import sys
 import time
 
@@ -61,7 +66,10 @@ def save_state(d):
 def log(line):
     try:
         os.makedirs(OPS, exist_ok=True)
+        fresh = (not os.path.exists(LOG)) or os.path.getsize(LOG) == 0
         with io.open(LOG, "a", encoding="utf-8", newline="\n") as f:
+            if fresh:                     # BOM：记事本没有它就按 GBK 解，整篇乱码
+                f.write("\ufeff")
             f.write("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), line))
     except OSError:
         pass

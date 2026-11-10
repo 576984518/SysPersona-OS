@@ -35,16 +35,74 @@ ROOT = _find_root()
 IDX_DIR = os.path.join(ROOT, "index")
 META = os.path.join(IDX_DIR, "meta.jsonl")
 VECS = os.path.join(IDX_DIR, "vectors.npy")
-API = "http://127.0.0.1:8080/v1"
-EMB_MODEL = "bge-m3"
-RERANK_MODEL = "bge-reranker-v2-m3"
+DEFAULT_API = "http://127.0.0.1:8080/v1"
+DEFAULT_EMB = "bge-m3"
+DEFAULT_RERANK = "bge-reranker-v2-m3"
+
+
+def _load_conf():
+    """嵌入后端：ops/embed.json（云端）> 环境变量 > 本地 8080。密钥只认环境变量/.env。"""
+    conf = {"api": os.environ.get("PERSONA_EMBED_API") or DEFAULT_API,
+            "model": os.environ.get("PERSONA_EMBED_MODEL") or DEFAULT_EMB,
+            "rerank": os.environ.get("PERSONA_RERANK_MODEL") or DEFAULT_RERANK,
+            "key": os.environ.get("PERSONA_EMBED_KEY") or ""}
+    f = os.path.join(ROOT, "ops", "embed.json")
+    try:
+        d = json.load(io.open(f, encoding="utf-8-sig"))
+        conf["api"] = d.get("api") or conf["api"]
+        conf["model"] = d.get("model") or conf["model"]
+        if "rerank" in d:
+            conf["rerank"] = d.get("rerank") or ""   # 显式空串 = 关掉重排
+        if not conf["key"]:
+            name = d.get("key_env") or ""
+            conf["key"] = os.environ.get(name, "") if name else ""
+            if not conf["key"] and name and d.get("env_file"):
+                # 只读那一行，值不落盘、不进日志
+                try:
+                    for line in io.open(d["env_file"], encoding="utf-8-sig", errors="replace"):
+                        k, _, v = line.strip().partition("=")
+                        if k.strip() == name:
+                            conf["key"] = v.strip()
+                            break
+                except OSError:
+                    pass
+    except (OSError, ValueError):
+        pass
+    return conf
+
+
+CONF = _load_conf()
+API = CONF["api"].rstrip("/")
+EMB_MODEL = CONF["model"]
+RERANK_MODEL = CONF["rerank"]
+EMB_KEY = CONF["key"]
 
 
 def post(path, payload, timeout=120):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(API + path, data=data, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if EMB_KEY:
+        headers["Authorization"] = "Bearer " + EMB_KEY
+    req = urllib.request.Request(API + path, data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def rerank(query, docs):
+    if not RERANK_MODEL:
+        return None            # 云端没配重排：保持 RRF 顺序，不是错误
+    """重排。云端多半没有 /rerank 或返回别家格式：拿不到就有序返回 None，调用方保持原序。"""
+    try:
+        res = post("/rerank", {"model": RERANK_MODEL, "query": query, "documents": docs}, timeout=60)
+        items = (res or {}).get("results")
+        if not isinstance(items, list):
+            return None
+        out = [{"index": it["index"], "relevance_score": it["relevance_score"]}
+               for it in items
+               if isinstance(it, dict) and "index" in it and "relevance_score" in it]
+        return {"results": out} if out else None
+    except Exception:
+        return None
 
 
 def embed(texts):
@@ -75,7 +133,7 @@ def chunks_of(path):
 def build(only=None):
     os.makedirs(IDX_DIR, exist_ok=True)
     # 拆雷：本函数用的是旧切块法（text[:1200] 截断、文档块丢失），
-    # 直接写 index/ 会把 index_inc.py 建的全量索引（14851 块）覆盖成更少。
+    # 直接写 index/ 会把 persona_index.py 建的全量索引（14851 块）覆盖成更少。
     _man = os.path.join(IDX_DIR, 'manifest.json')
     _vec = os.path.join(IDX_DIR, 'vectors.npy')
     if os.path.exists(_man) and os.path.exists(_vec) and '--force' not in sys.argv:
@@ -83,9 +141,9 @@ def build(only=None):
             _old = np.load(_vec, mmap_mode='r').shape[0]
         except Exception:
             _old = 0
-        print("拒绝重建：index/ 现有 %d 块，由 index_inc.py 维护。" % _old)
+        print("拒绝重建：index/ 现有 %d 块，由 persona_index.py 维护。" % _old)
         print("本脚本用的是旧切块法（截断长消息、丢文档块），重建会覆盖掉它。")
-        print("日常增量请用：python index_inc.py")
+        print("日常增量请用：python persona_index.py")
         print("确实要重建：加 --force")
         return
     files = [p for p in glob.glob(os.path.join(ROOT, "archive", "**", "*.md"), recursive=True)]

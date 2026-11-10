@@ -30,7 +30,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import zsearch  # noqa: E402
+import persona_search  # noqa: E402
 
 BUILTIN = [
     ("把笔记本的睡眠状态从 S3 改成 S4 是改哪个 ACPI 模块", ["C118F500"]),
@@ -87,19 +87,19 @@ def main():
     ap.add_argument('--set', default=None, help='JSONL 题库；不给就用内置 20 题')
     ap.add_argument('--k', type=int, default=100)
     ap.add_argument('--no-vector', action='store_true')
-    ap.add_argument('--merged', action='store_true', help='追加测合并路（zsearch.merged）')
+    ap.add_argument('--merged', action='store_true', help='追加测合并路（persona_search.merged）')
     ap.add_argument('--recent', type=int, default=0,
                     help='合并路叠加"最近 N 天优先"，同时报叠加前后；0=不测')
-    ap.add_argument('--root', default=os.environ.get('ZSEARCH_ROOT', zsearch.ROOT))
+    ap.add_argument('--root', default=os.environ.get('ZSEARCH_ROOT', persona_search.ROOT))
     a = ap.parse_args()
 
-    zsearch.ROOT = a.root
-    zsearch.ARCHIVE = os.path.join(a.root, 'archive')
-    zsearch.INDEX = os.path.join(a.root, 'index')
+    persona_search.ROOT = a.root
+    persona_search.ARCHIVE = os.path.join(a.root, 'archive')
+    persona_search.INDEX = os.path.join(a.root, 'index')
 
     qs = load(a.set) if a.set else BUILTIN
-    bl = zsearch.blocks()
-    df = zsearch.idf(bl)
+    bl = persona_search.blocks()
+    df = persona_search.idf(bl)
 
     routes = ['kw', 'vec', 'union']
     if a.merged:
@@ -110,19 +110,19 @@ def main():
 
     t0 = time.time()
     for q, want in qs:
-        kr = zsearch.keyword_rank(q, bl, df, topn=a.k)
+        kr = persona_search.keyword_rank(q, bl, df, topn=a.k)
         ktext = [bl[i][4] for i, _ in kr]
 
-        vr = [] if a.no_vector else zsearch.vector_rank(q, topn=a.k)
+        vr = [] if a.no_vector else persona_search.vector_rank(q, topn=a.k)
         vtext = [t for _, _, t, _ in vr]
 
         got = {'kw': ktext, 'vec': vtext, 'union': ktext + vtext}
         if a.merged:
             try:
-                m0 = zsearch.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False)
+                m0 = persona_search.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False)
                 got['merged'] = [r['text'] for r in m0]
                 if a.recent:
-                    m1 = zsearch.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False,
+                    m1 = persona_search.merged(q, k=a.k, use_vector=not a.no_vector, use_rerank=False,
                                         recent_days=a.recent)
                     got['merged_recent'] = [r['text'] for r in m1]
                 else:

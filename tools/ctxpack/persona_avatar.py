@@ -21,9 +21,9 @@ ROOT = os.environ.get("SYSPERSONA_ROOT") or r"D:\4590-PC-文件\AI会话检索�
 _RE_AGENT = re.compile(r'(?m)^-\s*(?:设备|客户端|来源)：\s*(.+?)\s*$')
 _RE_MODEL = re.compile(r'(?m)^-\s*(?:底座|模型)：\s*(.+?)\s*$')
 
-# 只有"来源桶"是事实，不是猜：网页对话一定来自网页。
+# 只有"来源桶"是事实，不是猜：deepseek网页一定来自网页。
 _BUCKET = {
-    '网页对话': ('网页', 'deepseek-web'),
+    'deepseek网页': ('网页', 'deepseek-web'),
     '手机端': ('手机', ''),
 }
 
@@ -163,13 +163,13 @@ def family(model):
 
 
 def version_of(model):
-    """从模型名里取版本：`deepseek-v4-flash` → `4`；`qwen3.5-4b` → `3.5`；取不到 → `x`。"""
-    m = norm(model)
-    for tok in re.split(r"[-_.]", m):
-        mm = re.fullmatch(r"v?([0-9]+(?:\.[0-9]+)?)", tok)
-        if mm:
-            return mm.group(1)
-    return "x"
+    """从模型名里取版本：`deepseek-v4-flash` → `4`；`qwen3.5-4b` → `3.5`；取不到 → `x`。
+
+    必须在**原始名字**上取：先做 norm 会把 `3.5` 变成 `3-5`，再去拆词就会取到参数里的 `5`（踩过）。
+    """
+    m = (model or "").split("/")[-1].lower()
+    mm = re.search(r"[a-z]+[-_ ]?v?([0-9]+(?:\.[0-9]+)?)", m)
+    return mm.group(1) if mm else "x"
 
 
 def persona_key(agent, model):

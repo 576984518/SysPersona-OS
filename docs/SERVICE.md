@@ -284,3 +284,119 @@ Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SysPerso
 - **不装依赖、不联网**：假设 Python 运行时、`pystray` / `Pillow` 已就绪；脚本不执行 pip，
   也不从网络拉东西。
 - **路径是这台机器的**：换机器先改 `install-service.ps1` 顶部四个路径，再跑 `-DryRun` 核对。
+
+---
+
+## 六、抓取用的调试浏览器（默认无头）
+
+> 2026-11-10 · 修掉「每次抓取都要人先开一个调试浏览器」。
+> 抓取链路（`persona_readnew.py` → `persona_daemon.py --once capture`）连的是
+> `http://127.0.0.1:9222`；没人开时**自动拉起**，平时是**无头**的，不弹窗口。
+
+| 文件 | 作用 |
+|---|---|
+| `%LOCALAPPDATA%\SysPersona\start_cdp_browser.ps1` | 探测 / 拉起 / 停止（幂等） |
+| `%LOCALAPPDATA%\SysPersona\cdp-profile\` | 它**专用**的浏览器 profile（登录态存这儿） |
+| `%LOCALAPPDATA%\SysPersona\cdp-browser.log` | 每次启动的时间、模式、结果 |
+| `Startup\SysPersona-CDP.lnk` | 开机自启：登录后无头拉起 |
+
+### 为什么用独立 profile
+
+- **不碰你日常浏览器的 profile**：日常窗口的标签、登录、扩展完全不受影响；刷新页面、
+  跳会话只发生在 `cdp-profile` 这个进程里。
+- 抓取要一个「登录着 DeepSeek、且随时能被 CDP 控制」的浏览器，把它和日常浏览分开：
+  关掉调试浏览器不丢你正在看的页面；profile 坏了也只影响抓取。
+- 两者可以同时开：两个进程、两个 `--user-data-dir`，互不抢锁。
+
+### 首次：登录一次（只有这一次要开窗口）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\SysPersona\start_cdp_browser.ps1" -Login
+```
+
+- `-Login` **开一个可见窗口**（不无头），打开 `https://chat.deepseek.com`；
+- 在里面扫码 / 登录；
+- 看到会话列表后**直接关掉这个窗口**——登录态已写进 `cdp-profile`，以后无头复用。
+
+> 如果 9222 还被旧的手工调试窗口占着，先关掉那个窗口再登录；
+> 本脚本的 `-Stop` 只会停 `cdp-profile` 的实例，不会动旧 profile。
+
+### 平时：不用管
+
+- 开机：`SysPersona-CDP.lnk` 无头拉起；
+- 每次抓取前：`persona_readnew.py` 先调 `ensure_cdp()`，CDP 不通就自己跑这个脚本
+  （最多等 20 秒），输出里会有一行 `CDP：已在跑` 或 `CDP：已拉起`；起不来会如实报
+  `CDP 起不来：…`，不会误报「没有新内容」；
+- 无头确实抓不到（个别页面不渲染）时，手工回落一次可见窗口：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\SysPersona\start_cdp_browser.ps1" -Headful
+```
+
+启动输出和 `cdp-browser.log` 会写明「本次回落到可见窗口」。
+
+### 验证
+
+```powershell
+curl.exe -s --noproxy '*' http://127.0.0.1:9222/json/version
+curl.exe -s --noproxy '*' http://127.0.0.1:9222/json
+```
+
+- 第一条返回 `"Browser": "Edg/…"` = CDP 活着；
+- 第二条里找一个 `"type": "page"`、`"url"` 含 `chat.deepseek.com` 的项，看 `title`
+  是否为 DeepSeek 页面——**页面在无头里也照样渲染，CDP 照样可用**。
+
+### 怎么停
+
+```powershell
+# 停本 profile 的调试浏览器（不影响日常浏览器）
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\SysPersona\start_cdp_browser.ps1" -Stop
+
+# 不想开机自启：删快捷方式（不杀当前进程）
+Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SysPersona-CDP.lnk"
+```
+
+`-Login` / `-Headful` 开的可见窗口直接关窗口即可；无头没有窗口，用 `-Stop`。
+
+### 边界
+
+- 只操作 `--user-data-dir=%LOCALAPPDATA%\SysPersona\cdp-profile` 的进程：不杀、也不复用
+  日常浏览器的 profile；
+- 日常浏览器若自己带着 `--remote-debugging-port=9222` 在跑，抓取会连它（和以前一样）；
+  本脚本不会去开、改、关它；
+- 端口默认 `9222`（`-Port` 只给排障 / 自测换口用，抓取脚本仍连 9222）；
+- 登录过期时抓取会抓到登录页：重跑一次 `-Login` 扫码即可；
+- 不做反检测、不伪造指纹：无头抓不到就 `-Headful` 回落，如实记录。
+
+## 七、日志怎么看（治「打开全是乱码」）
+
+> 现象：双击 `ops\*.jsonl` / `ops\persona.log`，满屏 `姘翠綅 322K`。**文件没坏**，
+> 是记事本在没有 BOM 时按 GBK(ANSI) 去解 UTF-8 的字节。
+
+**正确入口**：双击仓库里的 `tools\ctxpack\看日志.cmd`（记忆库里同名文件），或者托盘菜单「看日志」。
+它自己解对编码，并把 JSONL 排成「时间 / 动作 / 说明」三栏：
+
+```
+2026-11-10 11:05:22 fired      已注入 867 字到「# 接续包 20261110-0709 · v2（极简 — DeepSeek H」
+2026-11-10 11:05:25 skip       水位 56K < 150K
+```
+
+命令行等价物：
+
+```powershell
+python "D:\4590-PC-文件\AI会话检索记录\persona_logs.py" 重载 --tail 30
+python ...\persona_logs.py 后台 --tail 80
+python ...\persona_logs.py --scan        # 44 个日志的真实编码一次列清
+python ...\persona_logs.py --fix         # 非 UTF-8 的就地转好（先存 .bak）
+```
+
+**两层修法**（都做了）：
+
+| 层 | 做什么 | 为什么 |
+|---|---|---|
+| 文件 | `persona.log` / `keeper.log` / `keepalive.log` 补 **UTF-8 BOM**；写入端新建文件时先写 BOM | 记事本认 BOM 就不猜了；不补的话每次重建又回到乱码 |
+| 工具 | `persona_logs.py` 自己按 BOM→UTF-8→UTF-16→GBK 顺序试解 | 不指望任何编辑器猜对，也不改机器读的 `.jsonl`（解析器对 BOM 敏感） |
+
+**边界**：`.jsonl` 保持 UTF-8 **无 BOM**（`json.loads` 对首行 BOM 会报错，机器读的这一层不动）；
+`--fix` 只动文本、只替换坏字节、只备份一次 `.bak`，不删任何日志。
+

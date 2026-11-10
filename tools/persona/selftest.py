@@ -24,6 +24,11 @@ import os
 import shutil
 import socket
 import subprocess
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import sys
 import tempfile
 import threading

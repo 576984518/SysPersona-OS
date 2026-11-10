@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const argv = process.argv.slice(2);
-const OUT = path.resolve(argv[0] || 'sessions/2026-11-08/网页对话');
+const OUT = path.resolve(argv[0] || 'sessions/2026-11-08/deepseek网页');
 let LIMIT = Infinity;
 let DRY = false;
 // 默认只查最新的 N 个会话：旧会话上下文满了就不再变，往前翻没意义

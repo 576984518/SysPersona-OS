@@ -97,6 +97,30 @@ def export(days, dry):
 OBS_RE = re.compile(r"记(?:一?条)?观察[:：]\s*(.+)")
 
 
+def _with_lock(path, fn):
+    """跨进程互斥：多个分身（DSH / Hermes / 手机）可能同时写同一份记忆。
+
+    做法是最土的 O_CREAT|O_EXCL 锁文件 + 50 次重试（5 秒）。
+    拿不到锁也照写——宁可冒一次覆盖风险，也不丢这条观察。"""
+    lock = path + ".lock"
+    fd = None
+    for _ in range(50):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    try:
+        return fn()
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+                os.unlink(lock)
+            except OSError:
+                pass
+
+
 def harvest_observations(msgs, day):
     """从本轮消息里抓「记一条观察：…」，追加进 memory/USER.md。"""
     dst = os.path.join(ROOT, "memory", "USER.md")
@@ -121,7 +145,9 @@ def harvest_observations(msgs, day):
         body = body.replace(marker, marker + "\n" + "\n".join(add), 1)
     else:
         body = body.rstrip() + "\n\n" + "\n".join(add) + "\n"
-    open(dst, "w", encoding="utf-8", newline="").write(body)
+    def _write():
+        open(dst, "w", encoding="utf-8", newline="").write(body)
+    _with_lock(dst, _write)
     return len(add)
 
 

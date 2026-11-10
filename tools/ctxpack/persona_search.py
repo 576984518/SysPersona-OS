@@ -21,6 +21,12 @@ import hashlib
 import re
 import sys
 import subprocess
+
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import tempfile
 import time
 
@@ -139,9 +145,9 @@ def blocks():
                 m2 = re.search(r'(?m)^-\s*底座：\s*(.+?)\s*$', head)
                 dev = m1.group(1) if m1 else ''
                 mod = m2.group(1) if m2 else ''
-                # 老文件头里没这两行：网页对话按来源桶兜底（事实，不是猜）；
+                # 老文件头里没这两行：deepseek网页按来源桶兜底（事实，不是猜）；
                 # 电脑会话不兜底——旧记忆可能来自另一台机器，写死本机名就是编造。
-                if not dev and not mod and src == '网页对话':
+                if not dev and not mod and src == 'deepseek网页':
                     dev, mod = '网页', 'deepseek-web'
                 # 老导出写 设备/底座，Hermes 导出写 来源/模型——两样都认，缺了留空。
                 a_agent, a_model, _ = av.from_head(head, src)

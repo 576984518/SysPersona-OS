@@ -19,6 +19,12 @@ r"""persona_watch.py — Hermes 会话实时导出守护
 """
 import argparse, os, subprocess, sys, time
 
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
+
 ROOT = r"D:\4590-PC-文件\AI会话检索记录"
 DB = r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home\state.db"
 PY = sys.executable
