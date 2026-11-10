@@ -33,6 +33,22 @@
 
 ---
 
+## 审计反馈修复（不占新号）— 2026-11-10：三条真缺陷 + 三项文档漂移
+
+**来源**：把仓库交给外部模型（千问）在一个干净的 Linux 沙箱里按 `USAGE` 从零部署，它交回一份带证据的测试报告，判定总体 ≈70%，并列出「Windows 上同样会犯」的三条真缺陷。**这一条只记修了什么，不切版本号**（按 `RELEASING` §三，修缺陷并入现有版本，不新开号）。
+
+**三条真缺陷（都已在生产跑过验证）**
+
+1. **FTS 建表依赖 SQLite ≥3.43**：`contentless_delete=1` 在 3.35/3.37 上直接报 `unrecognized option`，四路零模型检索实际不可用。→ 改为按 `sqlite3.sqlite_version_info` 分支：≥3.43 用该参数，否则走兼容建表、删除改 FTS5 的 `delete` 指令；新增 `--force-compat` 把低版本路径也纳入验收。生产库 69727 块 / 425 MiB，`fts-char` 真出 `文件:行号`。
+2. **水位读数直读壳的私有目录且无守卫**：`persona_gauge.py` 直接 `open(~/.dsh/storages/cost-meter/ledger.json)`，文件不存在就崩栈，也绕开了「路径唯一出口」的规矩。→ 新增 `persona_root.dsh_home()` / `dsh_storages()` 解析（环境变量 → 本机配置 → 默认），读不到输出「账本读数不可用」并降级到壳/实测读数；`.dsh` 硬路径零命中。
+3. **归档会被静默删除**：`persona_pack._drop_archived()` 在来源内容变化时 `os.remove` 旧归档，与「删除记忆必须人点头」冲突。→ 改为改名保留（`<原名>.old-<时间戳>`），**默认只报告**，加 `--apply` 才执行，每次改名记 `ops/_archive-pending/INDEX.md`。
+
+**三项文档漂移**：`SERVICE.md` 不再声称"安装脚本写死四个路径"（实际读环境变量，缺则 `[FAIL] exit 2`），全文机器路径换成 `$Repo/$Mem/$Py/$Pyw` 占位变量；`examples/scenario.90d.json` 补 `expect`/`expect_final`，从「断言通过 0 条」变成 6 条真回归；`USAGE(.en).md` 的外部实测表填上千问那次的真实记录，其余两行写明"未测"。
+
+**顺带**：`tools/cdp_capture/collect7.js` 入库（此前抓取器只在作者本机，别人 clone 后记忆进不来）；生产 `persona_search.py` 落后于仓库（没有 `--engine`，FTS 四路没上线），已同步。
+
+---
+
 ## 文档修订（不占号）— 2026-11-10：新增使用说明
 
 **范围**：新增 `docs/USAGE.md`——发给人的不是程序，而是「把仓库交给 AI 智能体、由它按环境生成」的用法：提示词、环境盘点清单、验收七步、常见误解。
