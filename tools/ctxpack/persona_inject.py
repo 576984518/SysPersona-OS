@@ -136,6 +136,34 @@ def set_clipboard(text):
         u.CloseClipboard()
 
 
+
+def window_rect(hwnd):
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+    r = RECT()
+    u.GetWindowRect(hwnd, ctypes.byref(r))
+    return r.left, r.top, r.right, r.bottom
+
+
+def composer_point(hwnd):
+    """猜输入框位置：窗口底部居中往上一点（底部状态栏之上）。
+
+    Electron 的输入区在底部；UIA 读不到（Chromium 未开无障碍），只能按几何位置点一下，
+    把焦点真正交到输入框里——2026-11-10 的失败就是「按键到了窗口，但输入框没焦点」。
+    """
+    left, top, right, bottom = window_rect(hwnd)
+    w, h = right - left, bottom - top
+    return left + w // 2, bottom - max(70, h // 12)
+
+
+def click_at(x, y):
+    u.SetCursorPos(int(x), int(y))
+    time.sleep(0.15)
+    u.mouse_event(0x0002, 0, 0, 0, 0)      # 左键按下
+    u.mouse_event(0x0004, 0, 0, 0, 0)      # 左键抬起
+    time.sleep(0.25)
+
 def paste_and_enter():
     u.keybd_event(VK_CONTROL, 0, 0, 0)
     u.keybd_event(VK_V, 0, 0, 0)
@@ -186,7 +214,7 @@ def focus_window(hwnd):
     return u.GetForegroundWindow() == hwnd
 
 
-def inject(text, dry_run=False, settle=1.2, wait_idle=5):
+def inject(text, dry_run=False, settle=1.2, wait_idle=5, click_composer=True):
     win = pick_window()
     if not win:
         return False, "没找到壳的主窗口（DeepSeek Harness 是否在跑？）"
@@ -206,6 +234,9 @@ def inject(text, dry_run=False, settle=1.2, wait_idle=5):
         if not set_clipboard(brief):
             return False, "写剪贴板失败"
         got = focus_window(hwnd)
+        px, py = composer_point(hwnd)
+        if click_composer:
+            click_at(px, py)
         time.sleep(settle)
         paste_and_enter()
         time.sleep(0.8)

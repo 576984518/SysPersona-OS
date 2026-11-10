@@ -25,7 +25,7 @@ r"""persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
   python persona_wake.py rm <id>
   python persona_wake.py fire            # 手动触发一次（守护进程每 30 秒自动跑）
   python persona_wake.py brief [--k 8]   # 只打印「醒来该先看的那段」
-  python persona_wake.py inject [--dry-run]   # 把简讯打进壳的输入框（尚未打通，见 B71）
+  python persona_wake.py inject [--dry-run]   # 把简讯打进壳的输入框（**已打通**，2026-11-10）
 
 存储：ops/wake.json（闹钟表）；ops/wake-fires.jsonl（触发记录，只追加）；
       ops/wake-brief.json + ops/wake-brief.jsonl（唤醒简讯，最新一份 + 历史）。
