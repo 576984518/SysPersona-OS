@@ -1,7 +1,18 @@
 # -*- coding: utf-8 -*-
 r"""persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
 
-规则（2026-11-09 定，v5.3 成文）：
+唤醒分三类（2026-11-10 他重新定的口径，以此为准）：
+
+1. **心跳唤醒**：静默维护，不打扰前台。守护的 `wake` 任务每 30 秒扫一次，只维护、只记账。
+2. **自主定时唤醒**：**AI 自己**定的闹钟——每完成一个任务就给自己排下一次（「5 分钟后查编译结果」），
+   到点把自己叫醒接着干。特征：登记人是分身自己，purpose 是下一步动作。
+3. **云端服务唤醒**：由服务端（任务调度）决定谁该醒、醒了领哪件活，对应 **v5.5 任务调度**；
+   本机只负责收指令 + 报到 + 领活，不自己排期。
+
+> 曾经有一版写成「心跳 / 闹钟 / 日常」，那是按"谁触发"分的；他 2026-11-10 纠正：
+> 分法要看**谁来决定什么时候醒**——守护定 / 自己定 / 云端定，这三类才互不重叠。
+
+规则：
   * 闹钟必须带 purpose（醒来做什么），没有 purpose 一律拒绝登记——防「醒了不知道干什么」；
   * 到点不是「拉起来就算完」：先摘一份**总索引简讯**（最近的来源 + 派发中的任务），
     再执行 purpose、写触发记录、替 agent 报到（已读索引），然后才交给调用方；
@@ -14,6 +25,7 @@ r"""persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
   python persona_wake.py rm <id>
   python persona_wake.py fire            # 手动触发一次（守护进程每 30 秒自动跑）
   python persona_wake.py brief [--k 8]   # 只打印「醒来该先看的那段」
+  python persona_wake.py inject [--dry-run]   # 把简讯打进壳的输入框（**已打通**，2026-11-10）
 
 存储：ops/wake.json（闹钟表）；ops/wake-fires.jsonl（触发记录，只追加）；
       ops/wake-brief.json + ops/wake-brief.jsonl（唤醒简讯，最新一份 + 历史）。
@@ -23,6 +35,12 @@ import io
 import json
 import os
 import subprocess
+
+try:
+    import persona_win as _pw  # 无窗口：GUI 进程里 spawn 控制台程序不弹黑窗
+except Exception:
+    pass
+
 import sys
 import time
 
@@ -30,6 +48,7 @@ ROOT = os.environ.get("PERSONA_ROOT") or os.path.dirname(os.path.abspath(__file_
 OPS = os.path.join(ROOT, "ops")
 REG = os.path.join(OPS, "wake.json")
 FIRES = os.path.join(OPS, "wake-fires.jsonl")
+EVENTS = os.path.join(OPS, "wake-events.jsonl")
 BRIEF = os.path.join(OPS, "wake-brief.json")
 BRIEF_HIST = os.path.join(OPS, "wake-brief.jsonl")
 
@@ -73,6 +92,58 @@ def cmd_add(a):
     save(items)
     print("已登记 %s：%s（%s）" % (wid, rec["purpose"],
                                 time.strftime("%m-%d %H:%M", time.localtime(due))))
+    return 0
+
+
+def event(agent, purpose, delay=5, source="dispatch"):
+    """事件唤醒（B74）：不是「到点了」，是「有事了」。
+
+    由派发口直接调用——任务池里出现了一条给 A 的活，就在 `delay` 秒后给 A 排一个闹钟，
+    不再等它下一次自己想起来。守护进程的 wake 任务本来 30 秒扫一次，到点就摘简讯。
+
+    为什么仍算「心跳唤醒」：决定什么时候醒的还是**守护进程**，只是触发条件从"到点"
+    改成"有事件"。三类唤醒的界线（谁决定）没有变，所以不多立第四类。
+    """
+    now = time.time()
+    purpose = (purpose or "").strip() or "事件唤醒"
+    agent = agent or ""
+    items = load()
+    # 同一个分身已经有没到点的事件闹钟 → 合并，不堆一串（一堆同一秒的闹钟只会连着吵）
+    for r in items:
+        if (r.get("enabled", True) and r.get("source") == "event"
+                and r.get("agent", "") == agent and r.get("due", 0) > now):
+            r["purpose"] = purpose
+            r["due"] = now + max(0, delay)
+            r["events"] = int(r.get("events", 1)) + 1
+            save(items)
+            _log_event({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "agent": agent,
+                        "purpose": purpose, "merged_into": r["id"], "source": source})
+            print("已合并到 %s：%s（%d 秒后）" % (r["id"], purpose, delay))
+            return r["id"], False
+    wid = "e%d" % (int(now * 1000) % 100000000)
+    rec = {"id": wid, "due": now + max(0, delay), "every": 0, "purpose": purpose,
+           "agent": agent, "run": "", "enabled": True, "source": "event", "events": 1,
+           "created": time.strftime("%Y-%m-%d %H:%M:%S"), "last_run": 0}
+    items.append(rec)
+    save(items)
+    _log_event({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "agent": agent,
+                "purpose": purpose, "id": wid, "source": source,
+                "due_in": max(0, delay)})
+    print("已登记事件唤醒 %s：%s（%d 秒后）" % (wid, purpose, delay))
+    return wid, True
+
+
+def _log_event(rec):
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(EVENTS, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def cmd_event(a):
+    event(a.agent, a.purpose, a.delay, a.source)
     return 0
 
 
@@ -218,6 +289,61 @@ def _auto_report(r, brief, now):
         pass
 
 
+def cmd_inject(a):
+    """日常唤醒：把「今天该干什么」拼成一句话，直接打进壳的输入框。
+
+    来源（都在本地，不联网）：
+      - 总索引简讯 `ops/wake-brief.json`（最近写了哪些来源）；
+      - `BACKLOG.md` 里还开着的 P1 条目（前 N 条）。
+    防打断：交给 `persona_inject.py`，他最近在打字就先等。
+    """
+    text = (a.text or "").strip()
+    if not text:
+        b = index_brief(a.k)
+        lines = ["【唤醒简讯 %s】" % time.strftime("%m-%d %H:%M")]
+        try:
+            lines.append("最近写入：%d 个来源，最新 %s" %
+                         (b.get("index_total", 0),
+                          (b.get("index") or [{}])[0].get("date", "?")))
+        except Exception:
+            pass
+        todo = _open_p1(limit=a.k)
+        if todo:
+            lines.append("还开着的 P1：")
+            lines += ["  " + t for t in todo]
+        lines.append("读 续接\\接续包-最新.md 后，回一句当前任务。")
+        text = "\n".join(lines)
+    try:
+        import persona_inject as pi
+    except Exception as e:
+        print("FAIL 导入 persona_inject 失败：%s" % e)
+        return 1
+    ok, msg = pi.inject(text, dry_run=a.dry_run, wait_idle=a.wait_idle)
+    pi.log({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "len": len(text),
+            "dry": bool(a.dry_run), "ok": ok, "msg": msg, "src": "wake-daily"})
+    print(("OK   " if ok else "FAIL ") + msg)
+    return 0 if ok else 1
+
+
+def _open_p1(limit=6):
+    """从 BACKLOG.md 抽「还开着的 P1」——只读，不改。"""
+    p = os.path.join(ROOT, "BACKLOG.md")
+    if not os.path.exists(p):
+        return []
+    out = []
+    for line in io.open(p, encoding="utf-8", errors="replace"):
+        if not line.startswith("| B") or "【P1" not in line:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or "✅" in cells[3]:
+            continue
+        title = cells[1].replace("**", "")
+        out.append("%s %s" % (cells[0], title[:60]))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd")
@@ -235,8 +361,19 @@ def main():
     c.add_argument("--k", type=int, default=8)
     c.add_argument("--agent", default="")
     c.add_argument("--fresh", action="store_true", help="忽略已有简讯，现摘一份")
+    c = sub.add_parser("inject", help="把「唤醒简讯」直接打进壳的输入框（日常唤醒）")
+    c.add_argument("--k", type=int, default=6)
+    c.add_argument("--text", default="", help="自定义正文；不给就用总索引 + 待办拼一份")
+    c.add_argument("--wait-idle", type=int, default=5, help="他最近 N 秒在打字就先等（默认 5）")
+    c.add_argument("--dry-run", action="store_true")
+    c = sub.add_parser("event", help="事件唤醒：有事了才叫（派发口自动调用）")
+    c.add_argument("--agent", default="")
+    c.add_argument("--purpose", required=True, help="醒来做什么（必填，同闹钟规矩）")
+    c.add_argument("--delay", type=int, default=5, help="多少秒后醒（默认 5）")
+    c.add_argument("--source", default="dispatch", help="谁触发的（dispatch/task/dep）")
     a = ap.parse_args()
     fn = {"add": cmd_add, "list": cmd_list, "rm": cmd_rm, "brief": cmd_brief,
+          "inject": cmd_inject, "event": cmd_event,
           "fire": lambda _a: print("触发 %d 个" % fire_due())}.get(a.cmd)
     if not fn:
         ap.print_help()

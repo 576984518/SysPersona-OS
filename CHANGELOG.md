@@ -10,6 +10,16 @@
 
 ---
 
+## 2026-11-10 — B74 落地：事件唤醒（有事了才叫，不等下一次）
+
+**范围**：`persona_wake.py` 新增 `event` 子命令与 `event()` 函数（同分身已有未到点的闹钟则**合并**，不堆一串）+ `ops/wake-events.jsonl` 台账；`persona_report.py dispatch` 派发成功后自动排一个 `--delay`（默认 5 秒）的事件闹钟，`--no-wake` 可关。`docs/SCHEDULER_SPEC.md` 写明**它不另立第四类**——决定什么时候醒的仍是守护进程，只是触发条件从"到点"扩成"有事"。
+
+**为什么**：三类唤醒里前两类都要"等到点"，任务池里刚出现一条活，收件人却要等下一次自己想起来——那正是三段式里唯一还靠"等"的一段。
+
+**证据**：派发 `_t_b74` 一条活 → 登记事件闹钟 `e75866107`（3 秒后）→ `fire` → `ops/wake-fires.jsonl` 记该闹钟、`index_total=177`，随后 `who` 显示 `_t_b74 woken 4s 前 读索引=是 闹钟唤醒：新活：测试事件唤醒B（简讯含 177 条来源）`；连派两条 → 第二条"已合并到"同一条闹钟（不堆）。
+
+---
+
 ## 2026-11-10 — B75 落地：接活时也要验索引凭证
 
 **范围**：`tools/persona/persona_report.py`——`report` 增记 `read_at` / `read_at_str`（只在真读了索引的报到里刷新）；`ack --status accepted|claimed|running` 前校验 `read_at ≥ 派发时刻`，早于则 exit 3；新增 `ack --force` 人工兜底。`docs/INTERACT_SPEC.md` §3.2 索引门拆成两道。

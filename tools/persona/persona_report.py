@@ -107,6 +107,14 @@ def cmd_dispatch(a):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print("（persona_dispatch 不可用：%s）" % str(e)[:60])
     print("已派发 %s → %s：%s" % (r.get("id", "-"), a.agent, a.task))
+    # B74 事件唤醒：活既然派出来了，就别等它下次自己想起来——立刻给它排个"5 秒后醒"。
+    # 失败不影响派发本身（派发已落盘），所以只提示、不返回错。
+    if not getattr(a, "no_wake", False):
+        try:
+            import persona_wake as W
+            W.event(a.agent, "新活：%s" % a.task.strip()[:60], delay=a.delay, source="dispatch")
+        except Exception as e:
+            print("（事件唤醒没排上：%s）" % str(e)[:60])
     return 0
 
 
@@ -185,6 +193,9 @@ def main():
     c.add_argument("task")
     c.add_argument("--within", type=int, default=600)
     c.add_argument("--force", action="store_true", help="跳过索引门（人工兜底）")
+    c.add_argument("--delay", type=int, default=5, help="派发后多少秒事件唤醒该分身（默认 5）")
+    c.add_argument("--no-wake", action="store_true", dest="no_wake",
+                   help="不排事件唤醒（批量灌任务时用）")
     c = sub.add_parser("ack")
     c.add_argument("id")
     c.add_argument("--status", default="done")
