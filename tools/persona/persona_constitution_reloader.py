@@ -93,8 +93,10 @@ def build_text(reason="manual"):
     red = _bullets(law, r"## 四、人机边界", 6)
     rule00 = _find_block(talk, r"## 一、开场铁律.*?\n\n> ", r"\n\n", limit=200)
     steps = _table(talk, r"\| 步 \| 做什么 \| 不许 \|", 900)
-    if steps and not steps.startswith("| 步"):
-        steps = "| 步 | 做什么 | 不许 |\n|---|---|---|\n" + steps
+    if steps:
+        body = "\n".join(l for l in steps.splitlines()
+                          if not re.match(r"^\|[\s:|-]+\|$", l.strip()))
+        steps = "| 步 | 做什么 | 不许 |\n|---|---|---|\n" + body
 
     ctx = ""
     try:
@@ -177,7 +179,21 @@ def human_busy(seconds=5):
         return True
 
 
-def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True):
+def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True,
+        only_if_needed=False):
+    if only_if_needed:
+        try:
+            sys.path.insert(0, ROOT)
+            import persona_wake as W
+            need, why = W.reread_need()
+        except Exception:
+            need, why = False, "判定不了"
+        if not need:
+            log({"at": now(), "reason": reason, "action": "skip",
+                 "msg": why or "不需要"})
+            print("跳过：设定没变、也没被标记（%s）" % (why or "不需要"))
+            return 0
+        print("需要重载：%s" % why)
     text = build_text(reason)
     if dry_run:
         print(text)
@@ -219,10 +235,13 @@ def run(reason="manual", dry_run=False, idle_wait=5, queue_if_busy=True):
 
 def main():
     ap = argparse.ArgumentParser(description="设定重载器（独立于心跳）")
-    ap.add_argument("--reason", default="manual", choices=["compact", "daily", "manual"])
+    ap.add_argument("--reason", default="manual",
+                    choices=["compact", "daily", "manual", "periodic"])
     ap.add_argument("--dry-run", action="store_true", help="只打印要注入的正文")
     ap.add_argument("--wait-idle", type=int, default=5, help="他最近 N 秒在操作就排队（默认 5）")
     ap.add_argument("--no-queue", action="store_true", help="忙就放弃，不排队")
+    ap.add_argument("--only-if-needed", action="store_true", dest="only_if_needed",
+                    help="只在「设定变了 / 被标记」时才注入（5 分钟巡检用）")
     ap.add_argument("--status", action="store_true", help="看队列与最近一次重载")
     a = ap.parse_args()
     if a.status:
@@ -235,7 +254,7 @@ def main():
         except (OSError, ValueError):
             print("  （还没有重载记录）")
         return 0
-    return run(a.reason, a.dry_run, a.wait_idle, not a.no_queue)
+    return run(a.reason, a.dry_run, a.wait_idle, not a.no_queue, a.only_if_needed)
 
 
 if __name__ == "__main__":
