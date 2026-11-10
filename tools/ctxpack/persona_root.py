@@ -14,15 +14,18 @@ r"""persona_root.py — 路径解析的唯一出口（2026-11-10 收口：本机
     PERSONA_CAPTURE     抓取用的 node 脚本（collect7.js 一类）
     PERSONA_HERDSMAN    herdsman.exe 路径
     PERSONA_BACKUP2     第二备份根目录
+    SYSPERSONA_DSH_HOME 壳的私有目录（默认 %USERPROFILE%\.dsh；也认 DSH_HOME）
+    SYSPERSONA_DSH_STORAGES 壳的 storages 目录（默认 <DSH_HOME>\storages）
 
 缺了会怎样：root() / repo() 找不到对应目录时抛 PathUnset，消息里直接写该设哪个变量；
 node() / hermes_home() / runtime_dir() / herdsman() 找不到就返回 None，由调用处报一句
 清楚的话并跳过该任务——**不做静默回退，也不猜第二台机器的路径**。
 LOCALAPPDATA / ProgramData 一律交给 os.environ，取不到返回 None（本模块不替系统做主）。
 
-可选的本机配置（只读，仓库里不创建、不提交）：%LOCALAPPDATA%\SysPersona\paths.json，
-键名同上面的变量（小写）：root / repo / runtime / python / node / hermes_home /
-capture / herdsman / backup2。没有这个文件也能跑；有就等于把变量固化成文件。
+可选的本机配置（只读，仓库里不创建、不提交）：
+  %LOCALAPPDATA%\SysPersona\paths.json  键名同上面的变量（小写）
+  <repo|本文件目录>\ops\persona.conf.json  键名 capture_js / backup2_root 等
+没有这两个文件也能跑；有就等于把变量固化成文件，优先级低于环境变量。
 """
 import json
 import os
@@ -32,6 +35,7 @@ import sys
 __all__ = [
     "PathUnset", "find_root", "root", "repo", "runtime_dir", "runtime_py", "node",
     "hermes_home", "herdsman", "capture_js", "backup_root",
+    "dsh_home", "dsh_storages",
     "localappdata", "programdata", "app_local", "require", "explain",
 ]
 
@@ -41,6 +45,7 @@ class PathUnset(RuntimeError):
 
 
 _CFG = None
+_CONF = None
 
 
 def _here():
@@ -77,6 +82,40 @@ def _machine_cfg():
 
 def _cfg(key):
     return _pick(_machine_cfg().get(key))
+
+
+def _persona_conf():
+    r"""可选的 ops\persona.conf.json（本机配置，不入库）；读不到就是空字典。
+
+    先看 SYSPERSONA_REPO\ops，再看本文件目录\ops，最后看仓库布局的 ../../ops。
+    这里**不调用 repo()**，避免 repo() 读本配置时又回头调用自己。
+    """
+    global _CONF
+    if _CONF is not None:
+        return _CONF
+    _CONF = {}
+    cands = []
+    rp = _pick(os.environ.get("SYSPERSONA_REPO"), _cfg("repo"))
+    if rp:
+        cands.append(os.path.join(rp, "ops", "persona.conf.json"))
+    here = _here()
+    cands.append(os.path.join(here, "ops", "persona.conf.json"))
+    cands.append(os.path.join(os.path.dirname(os.path.dirname(here)),
+                              "ops", "persona.conf.json"))
+    for path in dict.fromkeys(cands):
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                _CONF = data
+                break
+        except (OSError, ValueError):
+            continue
+    return _CONF
+
+
+def _conf(key):
+    return _pick(_persona_conf().get(key))
 
 
 def localappdata():
@@ -124,7 +163,7 @@ def root(explicit=None, strict=True):
     index/ 的脚本旁目录 > （strict 时）抛 PathUnset / （否则）None。
     """
     v = _pick(explicit, os.environ.get("SYSPERSONA_ROOT"),
-              os.environ.get("PERSONA_ROOT"), _cfg("root"))
+              os.environ.get("PERSONA_ROOT"), _cfg("root"), _conf("root"))
     if v:
         return v
     here = _here()
@@ -144,7 +183,7 @@ def repo(explicit=None):
     显式参数 > SYSPERSONA_REPO > 本机配置 repo > 从本文件向上找 > None。
     单独拷到记忆库根下（平铺部署）时推导不出来，返回 None——调用处要能只跳过那一件任务。
     """
-    v = _pick(explicit, os.environ.get("SYSPERSONA_REPO"), _cfg("repo"))
+    v = _pick(explicit, os.environ.get("SYSPERSONA_REPO"), _cfg("repo"), _conf("repo"))
     if v:
         return v
     cand = _here()
@@ -165,7 +204,8 @@ def runtime_dir(explicit=None):
     （<runtime>\\python\\python.exe → <runtime>）> %ProgramData%\\SysPersona-Runtime
     （**存在才算**）> None。不写死任何盘符。
     """
-    v = _pick(explicit, os.environ.get("SYSPERSONA_RUNTIME"), _cfg("runtime"))
+    v = _pick(explicit, os.environ.get("SYSPERSONA_RUNTIME"), _cfg("runtime"),
+              _conf("runtime"))
     if v:
         return v
     exe = os.path.abspath(sys.executable)
@@ -191,7 +231,7 @@ def runtime_py(explicit=None, windowed=False):
     > sys.executable（正在跑的这个解释器，永远不会指错机器）。
     windowed=True 时尽量换成同目录的 pythonw.exe（GUI 入口，不弹黑窗）。
     """
-    v = _pick(explicit, os.environ.get("PERSONA_PY"), _cfg("python"))
+    v = _pick(explicit, os.environ.get("PERSONA_PY"), _cfg("python"), _conf("python"))
     if not v:
         rt = runtime_dir()
         if rt:
@@ -214,7 +254,7 @@ def node(explicit=None):
     > <runtime>\\node\\bin\\node.exe > PATH 上的 node > None。
     """
     v = _pick(explicit, os.environ.get("PERSONA_NODE"), os.environ.get("NODE_BIN"),
-              _cfg("node"))
+              _cfg("node"), _conf("node"))
     if v:
         return v
     rt = runtime_dir()
@@ -231,10 +271,12 @@ def hermes_home(explicit=None):
     显式参数 > PERSONA_HERMES_HOME > SYSPERSONA_HERMES_HOME > 本机配置 hermes_home
     > %ProgramData%\\Hermes Agent CN Desktop\\data\\hermes-home（**存在才算**）> None。
     这台机器的 %ProgramData% 指向系统盘默认位置，而运行时数据放在另一块盘的
-    \ProgramData 下——两者没有可推导关系，所以只能靠变量；不设就由调用处报一句清楚的话。
+    \ProgramData 下——两者没有可推导关系，所以只能靠变量/本机配置；不设就由调用处
+    报一句清楚的话。
     """
     v = _pick(explicit, os.environ.get("PERSONA_HERMES_HOME"),
-              os.environ.get("SYSPERSONA_HERMES_HOME"), _cfg("hermes_home"))
+              os.environ.get("SYSPERSONA_HERMES_HOME"), _cfg("hermes_home"),
+              _conf("hermes_home"))
     if v:
         return v
     pd = programdata()
@@ -246,9 +288,10 @@ def hermes_home(explicit=None):
 
 
 def herdsman(explicit=None):
-    r"""herdsman.exe：显式参数 > PERSONA_HERDSMAN > 本机配置 herdsman
+    r"""herdsman.exe：显式参数 > PERSONA_HERDSMAN > 本机配置 herdsman_exe
     > %ProgramData%\\Herdsman\\herdsman.exe（存在才算）> None。"""
-    v = _pick(explicit, os.environ.get("PERSONA_HERDSMAN"), _cfg("herdsman"))
+    v = _pick(explicit, os.environ.get("PERSONA_HERDSMAN"), _cfg("herdsman"),
+              _conf("herdsman_exe"))
     if v:
         return v
     pd = programdata()
@@ -260,17 +303,51 @@ def herdsman(explicit=None):
 
 
 def capture_js(explicit=None):
-    r"""网页抓取的 node 脚本：显式参数 > PERSONA_CAPTURE > 本机配置 capture > None。"""
-    return _pick(explicit, os.environ.get("PERSONA_CAPTURE"), _cfg("capture"))
+    r"""网页抓取的 node 脚本：显式参数 > PERSONA_CAPTURE > 本机配置 capture_js / capture > None。"""
+    return _pick(explicit, os.environ.get("PERSONA_CAPTURE"), _cfg("capture"),
+                 _conf("capture_js"), _conf("capture"))
 
 
 def backup_root(explicit=None):
-    r"""第二备份根：显式参数 > PERSONA_BACKUP2 > 本机配置 backup2 > None。
+    r"""第二备份根：显式参数 > PERSONA_BACKUP2 > 本机配置 backup2 / backup2_root > None。
 
     故意不默认到 `<库根>\\备份`：第二份备份必须在另一块盘上，落进库里等于没有第二份。
     没配就由调用处报「跳过」，而不是把备份写进库内。
     """
-    return _pick(explicit, os.environ.get("PERSONA_BACKUP2"), _cfg("backup2"))
+    return _pick(explicit, os.environ.get("PERSONA_BACKUP2"), _cfg("backup2"),
+                 _conf("backup2"), _conf("backup2_root"))
+
+
+def dsh_home(explicit=None):
+    r"""壳的私有目录（其下有 storages\ 与 sessions\）。
+
+    显式参数 > SYSPERSONA_DSH_HOME > PERSONA_DSH_HOME > DSH_HOME（壳自己设的）
+    > 本机配置 dsh_home > 用户主目录下的 .dsh > None。
+    """
+    v = _pick(explicit, os.environ.get("SYSPERSONA_DSH_HOME"),
+              os.environ.get("PERSONA_DSH_HOME"), os.environ.get("DSH_HOME"),
+              _cfg("dsh_home"), _conf("dsh_home"))
+    if v:
+        return v
+    home = _pick(os.path.expanduser("~"))
+    if home and home != "~":
+        return os.path.join(home, ".dsh")
+    return None
+
+
+def dsh_storages(explicit=None):
+    r"""壳的 storages 目录（cost-meter / session_projcache 所在）。
+
+    显式参数 > SYSPERSONA_DSH_STORAGES > PERSONA_DSH_STORAGES > 本机配置
+    dsh_storages > dsh_home()\storages > None。只读；本模块不往里写。
+    """
+    v = _pick(explicit, os.environ.get("SYSPERSONA_DSH_STORAGES"),
+              os.environ.get("PERSONA_DSH_STORAGES"),
+              _cfg("dsh_storages"), _conf("dsh_storages"))
+    if v:
+        return v
+    home = dsh_home()
+    return os.path.join(home, "storages") if home else None
 
 
 def require(path, what, hint=None):
@@ -287,6 +364,7 @@ def explain():
         ("python", runtime_py()), ("pythonw", runtime_py(windowed=True)),
         ("node", node()), ("hermes_home", hermes_home()), ("herdsman", herdsman()),
         ("capture_js", capture_js()), ("backup2", backup_root()),
+        ("dsh_home", dsh_home()), ("dsh_storages", dsh_storages()),
         ("LOCALAPPDATA", localappdata()), ("ProgramData", programdata()),
     ]
     width = max(len(k) for k, _ in keys)

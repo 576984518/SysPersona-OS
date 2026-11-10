@@ -20,6 +20,7 @@ r"""persona_fts.py — 不依赖模型/向量的本地检索层（SQLite FTS5）
 用法：
   python persona_fts.py --build                 # 全量或增量（按 file + sha256(text)）
   python persona_fts.py --build --rebuild       # 推倒重建
+  python persona_fts.py --build --force-compat  # 模拟低版本 SQLite（无 contentless_delete）
   python persona_fts.py --search "上下文压缩" --k 20
   python persona_fts.py --search "DSH 水位 350K" --rerank
   python persona_fts.py --stats                 # 行数/库大小/建库耗时/20 条查询 p50·p95
@@ -214,6 +215,16 @@ def _connect(path):
     return con
 
 
+# contentless_delete 是 SQLite 3.43 才有的 FTS5 选项；低版本建表会直接报
+# `unrecognized option: "contentless_delete"`。低版本走「不带该参数」的建表，
+# 删除时用 FTS5 官方的 'delete' 指令（见 _delete_row），内容照样可检索。
+CLD_MIN = (3, 43, 0)
+
+
+def _supports_contentless_delete(force_compat=False):
+    return (not force_compat) and tuple(sqlite3.sqlite_version_info) >= CLD_MIN
+
+
 def _create_schema(con, contentless_delete):
     con.execute('''CREATE TABLE IF NOT EXISTS chunks(
         rowid INTEGER PRIMARY KEY,
@@ -256,9 +267,14 @@ def _table_exists(con, name):
         "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)).fetchone())
 
 
-def build(db, inputs, tokenizer='auto', rebuild=False, prune=False, root=None, quiet=False):
-    """建库/增量。返回 (rows, seconds, inserted, reused, deleted)。"""
+def build(db, inputs, tokenizer='auto', rebuild=False, prune=False, root=None, quiet=False,
+          force_compat=False):
+    """建库/增量。返回 (rows, seconds, inserted, reused, deleted)。
+
+    force_compat=True：即使 SQLite ≥3.43 也走低版本兼容建表，用来验证回退路径。
+    """
     t0 = time.time()
+    want_cld = _supports_contentless_delete(force_compat)
     # 显式要 jieba 但环境没有：在创建/改动任何文件之前就失败，别留下半个空库。
     if tokenizer == 'jieba' and _jieba is None:
         raise SystemExit('jieba 不可用：请装 jieba，或改用 --tokenizer char')
@@ -268,7 +284,16 @@ def build(db, inputs, tokenizer='auto', rebuild=False, prune=False, root=None, q
         if rebuild:
             for t in ('chunks_fts', 'chunk_meta', 'chunks', 'build_meta'):
                 con.execute('DROP TABLE IF EXISTS %s' % t)
-        _create_schema(con, contentless_delete=True)
+        _create_schema(con, contentless_delete=want_cld)
+        fts_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_fts'").fetchone()
+        actual_cld = bool(fts_sql and 'contentless_delete' in (fts_sql[0] or ''))
+        if not actual_cld:
+            print('[fts] sqlite %s → 兼容模式（无 contentless_delete）'
+                  % sqlite3.sqlite_version)
+        elif force_compat:
+            print('[fts] --force-compat：现有库已带 contentless_delete，未改变；'
+                  '用 --db 另建库可验证兼容模式', file=sys.stderr)
         cols = set(r[1] for r in con.execute('PRAGMA table_info(chunks)'))
         if 'text' not in cols:
             raise SystemExit('这个库的表结构不认识；请加 --rebuild')
@@ -286,11 +311,6 @@ def build(db, inputs, tokenizer='auto', rebuild=False, prune=False, root=None, q
             tokenizer = 'jieba' if _jieba is not None else 'char'
         if tokenizer == 'jieba' and _jieba is None:
             raise SystemExit('jieba 不可用：请装 jieba，或改用 --tokenizer char')
-        # 先确认这个连接支持 contentless_delete；不支持就重建为兼容模式。
-        cld = _meta_get(con, 'contentless_delete')
-        if cld == '0':
-            raise SystemExit('这个库是旧 SQLite 的兼容模式建的，增量删除不安全；请 --rebuild')
-
         existing = {}
         if _table_exists(con, 'chunk_meta'):
             for rid, file, sha in con.execute('SELECT rowid,file,sha FROM chunk_meta'):
@@ -301,7 +321,8 @@ def build(db, inputs, tokenizer='auto', rebuild=False, prune=False, root=None, q
         with con:
             _meta_set(con, 'schema_ver', SCHEMA_VER)
             _meta_set(con, 'tokenizer', tokenizer)
-            _meta_set(con, 'contentless_delete', '1')
+            _meta_set(con, 'contentless_delete', '1' if actual_cld else '0')
+            _meta_set(con, 'sqlite_version', sqlite3.sqlite_version)
             _meta_set(con, 'root', os.path.abspath(root or default_root()))
             _meta_set(con, 'db_path', os.path.abspath(db))
             _meta_set(con, 'sources', json.dumps([os.path.abspath(p) for p in inputs if p],
@@ -621,6 +642,8 @@ def main(argv=None):
     ap.add_argument('--build', action='store_true', help='建库/增量')
     ap.add_argument('--rebuild', action='store_true', help='推倒重建')
     ap.add_argument('--prune', action='store_true', help='删除输入里已消失的文件对应的块（默认不删）')
+    ap.add_argument('--force-compat', action='store_true', dest='force_compat',
+                    help='强制走低版本 SQLite 兼容建表（无 contentless_delete），用于验证回退路径')
     ap.add_argument('--search', metavar='QUERY', default=None)
     ap.add_argument('--k', type=int, default=20)
     ap.add_argument('--rerank', action='store_true', help='FTS 分数 + 关键词密度二路融合（纯 Python）')
@@ -662,7 +685,8 @@ def main(argv=None):
         print('输入：%s' % ', '.join(inputs))
         print('模式：%s%s' % (a.tokenizer, '（--rebuild）' if a.rebuild else '（增量）'))
         rows, secs, ins, reused, deleted = build(
-            db, inputs, tokenizer=a.tokenizer, rebuild=a.rebuild, prune=a.prune, root=root)
+            db, inputs, tokenizer=a.tokenizer, rebuild=a.rebuild, prune=a.prune, root=root,
+            force_compat=a.force_compat)
         size = os.path.getsize(db)
         print('完成：%d 块，用时 %.3f s，新增 %d，复用 %d，清理 %d，库 %.1f MiB'
               % (rows, secs, ins, reused, deleted, size / 1048576.0))

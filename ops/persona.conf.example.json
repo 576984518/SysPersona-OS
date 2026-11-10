@@ -13,5 +13,9 @@
  "_说明_repo": "代码仓库根（含 impl\\launcher 与 docs\\）。默认 persona_root.repo()：SYSPERSONA_REPO → 从本文件向上找；推不出则密钥扫描（scan）跳过。",
  "repo": "<代码仓库根的绝对路径>",
  "_说明_node": "node 可执行文件。默认 persona_root.node()：PERSONA_NODE → <runtime>\\node\\bin\\node.exe → PATH；推不出则 capture 跳过。一般不用配。",
- "node": "<node.exe 的绝对路径，可留空不写>"
+ "node": "<node.exe 的绝对路径，可留空不写>",
+ "_说明_dsh_home": "壳的私有目录（其下有 storages\\ 与 sessions\\）。默认 persona_root.dsh_home()：SYSPERSONA_DSH_HOME → DSH_HOME（壳自己设的）→ 用户主目录\\.dsh；一般不用配。",
+ "dsh_home": "<壳私有目录的绝对路径，可留空不写>",
+ "_说明_dsh_storages": "壳的 storages 目录（cost-meter / session_projcache 所在）。默认 persona_root.dsh_storages()：SYSPERSONA_DSH_STORAGES → dsh_home()\\storages；水位只读这里，不写。",
+ "dsh_storages": "<壳 storages 目录的绝对路径，可留空不写>"
 }

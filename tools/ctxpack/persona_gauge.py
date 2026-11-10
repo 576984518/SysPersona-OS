@@ -33,12 +33,14 @@ except Exception:
 import sys
 import time
 
-from persona_root import hermes_home as _hermes_home, node as _node, root as _persona_root
+from persona_root import (dsh_home as _dsh_home, dsh_storages as _dsh_storages,
+                          hermes_home as _hermes_home, node as _node,
+                          root as _persona_root)
 
-HOME = os.path.expanduser("~")
-LEDGER = os.path.join(HOME, ".dsh", "storages", "cost-meter", "ledger.json")
 ROOT = _persona_root()
 NODE = _node()
+DSH_STORAGES = _dsh_storages()
+LEDGER = os.path.join(DSH_STORAGES, "cost-meter", "ledger.json") if DSH_STORAGES else None
 
 # 阈值只在一处定义：persona_limits.py（规范见 docs/BACKGROUND_SPEC.md §二）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,11 +51,45 @@ def human(n):
     return "%.0fK" % (n / 1000) if n < 1_000_000 else "%.2fM" % (n / 1_000_000)
 
 
+def _unavailable(reason):
+    """账本读不到时的空读数：上层照常走，只是标成「读数不可用」。"""
+    return {
+        "session": "?", "calls": 0, "cache": 0, "input": 0, "output": 0,
+        "cost": 0, "ctx": 0, "estimated": True,
+        "available": False, "error": reason,
+    }
+
+
+def _load_ledger():
+    """读 cost-meter 账本，返回 (data, error)。任何 IO/JSON 问题都收成一句话，不抛栈。"""
+    if not LEDGER:
+        return None, "没解析出 DSH storages 目录（persona_root 的 dsh_storages() 返回 None）"
+    try:
+        with io.open(LEDGER, encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None, "ledger 不存在：%s" % LEDGER
+    except OSError as e:
+        return None, "ledger 不可读：%s" % e
+    except ValueError as e:          # 含 JSONDecodeError
+        return None, "ledger 不是合法 JSON：%s" % e
+    if not isinstance(data, dict):
+        return None, "ledger 顶层不是对象：%s" % LEDGER
+    return data, ""
+
+
 def current():
-    data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
+    data, err = _load_ledger()
+    if data is None:
+        return _unavailable(err)
     days = data.get("days") or {}
+    if not days:
+        return _unavailable("ledger 里没有 days 记录")
     day = days[sorted(days)[-1]]
-    rec = max(day.get("sessions") or [], key=lambda s: s.get("calls", 0))
+    sessions = day.get("sessions") or []
+    if not sessions:
+        return _unavailable("ledger 最新一天没有 sessions 记录")
+    rec = max(sessions, key=lambda s: s.get("calls", 0))
     calls = max(1, rec.get("calls", 1))
     return {
         "session": rec.get("id", "?"),
@@ -65,6 +101,7 @@ def current():
         # 上下文只认"最近一轮输入"；账本里的 cacheRead 是**累计**，除以调用数只是估算。
         "ctx": _estimate(rec, calls),
         "estimated": True,
+        "available": True,
     }
 
 
@@ -77,7 +114,7 @@ def _estimate(rec, calls):
 
 
 DSH_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "dsh-ctx.json")
-PROJCACHE = os.path.join(HOME, ".dsh", "storages", "session_projcache", "sessions")
+PROJCACHE = os.path.join(DSH_STORAGES, "session_projcache", "sessions") if DSH_STORAGES else ""
 
 
 def dsh_pressure():
@@ -93,6 +130,8 @@ def dsh_pressure():
     既然壳自己记着，就不要再算第二份：**读数只有一个来源**。
     """
     try:
+        if not PROJCACHE:
+            return 0, 0, 0
         fs = glob.glob(os.path.join(PROJCACHE, "*.json"))
         if not fs:
             return 0, 0, 0
@@ -115,15 +154,14 @@ def stats():
     """
     press, surface, win = dsh_pressure()
     led = {}
-    try:
-        data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
+    data, _err = _load_ledger()
+    if data is not None:
         days = data.get("days") or {}
         led = days[sorted(days)[-1]] if days else {}
-    except Exception:
-        led = {}
     tot, last = {}, {}
     try:
-        parent = os.path.dirname(PROJCACHE)
+        if not PROJCACHE:
+            raise OSError("no projcache")
         fs = sorted(glob.glob(os.path.join(PROJCACHE, "*.json")),
                     key=os.path.getmtime, reverse=True)
         if fs:
@@ -169,12 +207,14 @@ def dsh_ctx():
 
     返回 (每轮输入, 会话 id)；取不到返回 (0, "")。
     """
+    data, _err = _load_ledger()
+    if data is None:
+        return 0, ""
     try:
-        data = json.loads(io.open(LEDGER, encoding="utf-8", errors="replace").read())
         days = data.get("days") or {}
         day = days[sorted(days)[-1]]
         rec = max(day.get("sessions") or [], key=lambda s: s.get("calls", 0))
-    except Exception:
+    except (KeyError, IndexError, TypeError, ValueError):
         return 0, ""
     cur = {"id": rec.get("id", ""), "calls": int(rec.get("calls", 0) or 0),
            "cache": int(rec.get("cacheRead", 0) or 0), "input": int(rec.get("input", 0) or 0)}
@@ -269,6 +309,15 @@ def report(ctx=None):
     press, surface, win = dsh_pressure()
     real, model, tid = hermes_ctx()
     est = c["ctx"]
+    if not c.get("available") and not ctx:
+        if press or dsh or real:
+            print("[上下文] 账本读数不可用：%s；改用壳/实测读数" % c.get("error"))
+        else:
+            print("[上下文] 读数不可用：%s" % c.get("error"))
+            print("         已跳过账本读数，不崩栈；水位口径不变（pressureTokens 为准）。")
+            print("         建议：检查 persona_root 的 dsh_storages() 指向的 ledger 路径后重试。")
+            c["src"] = "不可用"
+            return c
     # 优先级：壳自己的 pressureTokens > 账本增量 > Hermes 实测 > 账本平均
     # （前两个才有意义时才算数；Hermes 那条读的是另一个客户端的库，只在没有 DSH 会话时兜底）
     use = press or dsh or real or est
@@ -300,7 +349,10 @@ def report(ctx=None):
 
 def latest_session_dir():
     best, best_t = None, 0
-    for f in glob.glob(os.path.join(HOME, ".dsh", "sessions", "*", "*", "session.v4.jsonl.zstd")):
+    home = _dsh_home()
+    if not home:
+        return None
+    for f in glob.glob(os.path.join(home, "sessions", "*", "*", "session.v4.jsonl.zstd")):
         t = os.path.getmtime(f)
         if t > best_t:
             best, best_t = f, t

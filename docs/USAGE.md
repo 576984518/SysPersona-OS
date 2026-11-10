@@ -98,8 +98,9 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 ## 四·六、路径与环境变量
 
 **本机路径一律不写死在代码里。** 路径解析只有唯一出口 `tools/ctxpack/persona_root.py`
-（`root()` / `repo()` / `runtime_py()` / `node()` / `hermes_home()` / `localappdata()` /
-`programdata()`），取值顺序固定为：**显式参数 > 环境变量 > 本机可选配置 > 相对脚本自身的推导 > 默认值**。
+（`root()` / `repo()` / `runtime_py()` / `node()` / `hermes_home()` / `dsh_home()` /
+`dsh_storages()` / `localappdata()` / `programdata()`），取值顺序固定为：
+**显式参数 > 环境变量 > 本机可选配置 > 相对脚本自身的推导 > 默认值**。
 
 | 变量名 | 作用 | 默认值 | 必填？ | 不设会怎样 |
 |---|---|---|---|---|
@@ -109,6 +110,7 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 | `SYSPERSONA_RUNTIME` | 运行时根（其下有 `python\` 与 `node\bin\`） | 从 `sys.executable` 反推；再试 `%ProgramData%\SysPersona-Runtime`（存在才算） | 否 | 推不出来就不猜：node 只能靠 `PERSONA_NODE` 或 `PATH` |
 | `PERSONA_NODE` | node 可执行文件 | `<runtime>\node\bin\node.exe` → `PATH` 上的 `node` → 无 | 否 | 抓取 / 导出 / 注入类任务报「没配置 PERSONA_NODE」并跳过；索引与检索不受影响 |
 | `PERSONA_HERMES_HOME` | Hermes 家目录（`state.db`、`desktop-ui.sqlite`） | `%ProgramData%\Hermes Agent CN Desktop\data\hermes-home`（存在才算） | 否 | Hermes 相关任务（导出 / 水位 / 交接记录）报「没配置」并跳过；索引、检索、自检照常 |
+| `SYSPERSONA_DSH_HOME` / `SYSPERSONA_DSH_STORAGES` | 壳的私有目录 / 其下 `storages`（`cost-meter`、`session_projcache` 所在） | `DSH_HOME` → 用户主目录下的 `.dsh`；`storages` 再拼一层 | 否 | 水位读不到账本时返回「读数不可用」而不是崩栈 |
 | `PERSONA_CAPTURE` | 网页抓取用的 node 脚本（`collect7.js` 一类） | 无 | 否 | `capture` 任务跳过 |
 | `PERSONA_HERDSMAN` | `herdsman.exe` | `%ProgramData%\Herdsman\herdsman.exe`（存在才算） | 否 | 8080 端口挂了也不自动拉起 |
 | `PERSONA_BACKUP2` | 第二备份根（必须在**另一块盘**） | 无 | 否 | `backup2` 任务跳过——绝不把第二份备份写进库内凑数 |
@@ -120,9 +122,11 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 `PERSONA_NODE` 的旧名）、`PERSONA_CDP_PORT`、`PERSONA_CDP_LAUNCHER`、`PERSONA_POWERSHELL`、
 `PERSONA_HERMES_DB`、`PERSONA_HERMES_UI_DB`。
 
-**可选的本机配置**：`%LOCALAPPDATA%\SysPersona\paths.json`，键名
-`root` / `repo` / `runtime` / `python` / `node` / `hermes_home` / `capture` / `herdsman` / `backup2`。
-仓库**不创建、不提交**这个文件；它只是把变量固化成一个文件，优先级低于环境变量。
+**可选的本机配置**：`%LOCALAPPDATA%\SysPersona\paths.json`（键名
+`root` / `repo` / `runtime` / `python` / `node` / `hermes_home` / `capture` / `herdsman` / `backup2` /
+`dsh_home` / `dsh_storages`），以及 `<repo|脚本目录>\ops\persona.conf.json`（键名 `capture_js` /
+`hermes_home` / `backup2_root` / `herdsman_exe` / `dsh_home` / `dsh_storages`）。
+仓库**不创建、不提交**这两个文件；它们只是把变量固化成一个文件，优先级低于环境变量。
 
 两个提醒：
 

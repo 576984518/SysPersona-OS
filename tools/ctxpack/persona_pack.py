@@ -37,6 +37,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 ARCHIVE = os.path.join(ROOT, "archive")
 INDEX = os.path.join(ARCHIVE, "index.jsonl")
 STATE = os.path.join(ROOT, "state.json")
+PENDING_DIR = os.path.join(ROOT, "ops", "_archive-pending")
+PENDING_INDEX = os.path.join(PENDING_DIR, "INDEX.md")
+PENDING_QUEUE = os.path.join(PENDING_DIR, "pending.jsonl")
 
 DECIDE = ("必须", "决定", "采用", "规则", "不能", "MUST", "应当")
 REJECT = ("否决", "不要", "放弃", "不再", "错了", "删掉", "驳回", "反例")
@@ -119,7 +122,8 @@ def scan(root, st):
         files = [root]
     else:
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in ("archive", ".git", "__pycache__")]
+            dirnames[:] = [d for d in dirnames
+                           if d not in ("archive", ".git", "__pycache__", "_archive-pending")]
             for fn in filenames:
                 if fn.lower().startswith("handoff"):
                     continue
@@ -174,34 +178,128 @@ def _indexed_files():
     return out
 
 
-def _drop_archived(old_rel):
-    """删掉某个来源的旧归档（.md 与 .gz）并移除其索引行，保证一个来源只留最新快照。"""
-    if not old_rel:
+def _pending_load():
+    """读待保留队列（ops\\_archive-pending\\pending.jsonl）；读不到就是空表。"""
+    out = []
+    if not os.path.exists(PENDING_QUEUE):
+        return out
+    try:
+        with open(PENDING_QUEUE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("from") and rec.get("to"):
+                    out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
+def _pending_save(items):
+    os.makedirs(PENDING_DIR, exist_ok=True)
+    tmp = PENDING_QUEUE + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        for rec in items:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    os.replace(tmp, PENDING_QUEUE)
+
+
+def _pending_index(lines):
+    """往 ops\\_archive-pending\\INDEX.md 追加改名记录，供人复核。"""
+    if not lines:
         return
-    full = os.path.join(ROOT, old_rel.replace("/", os.sep))
-    for p in (full, full + ".gz"):
+    os.makedirs(PENDING_DIR, exist_ok=True)
+    new = not os.path.exists(PENDING_INDEX)
+    with open(PENDING_INDEX, "a", encoding="utf-8", newline="\n") as f:
+        if new:
+            f.write("# 旧归档保留记录（待人工复核）\n\n")
+        for line in lines:
+            f.write(line + "\n")
+
+
+def _retire_pairs(old_rel, stamp):
+    """旧归档要改成的名字；只列真实存在的文件（.md 与其 .gz）。"""
+    pairs = []
+    old_rel = old_rel.replace("\\", "/")
+    for rel in (old_rel, old_rel + ".gz"):
+        src = os.path.join(ROOT, rel.replace("/", os.sep))
+        if not os.path.exists(src):
+            continue
+        target = "%s.old-%s" % (rel, stamp)
+        full = os.path.join(ROOT, target.replace("/", os.sep))
+        n = 2
+        while os.path.exists(full):
+            target = "%s.old-%s-%d" % (rel, stamp, n)
+            full = os.path.join(ROOT, target.replace("/", os.sep))
+            n += 1
+        pairs.append((rel, target))
+    return pairs
+
+
+def _apply_pending():
+    """执行队列里的保留改名。每改一个就往 INDEX.md 记一行；返回改了几个。"""
+    items = _pending_load()
+    if not items:
+        return 0
+    remain, lines = [], []
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    for rec in items:
+        src = os.path.join(ROOT, rec["from"].replace("/", os.sep))
+        dst = os.path.join(ROOT, rec["to"].replace("/", os.sep))
+        if not os.path.exists(src):
+            if os.path.exists(dst):
+                continue                    # 之前已经改名成功，清掉队列记录
+            print("跳过保留旧版：%s 与目标都不存在（记录已清理）" % rec["from"])
+            continue
+        if os.path.exists(dst):
+            base, n = rec["to"], 2
+            while os.path.exists(os.path.join(ROOT, base.replace("/", os.sep))):
+                base = "%s-%d" % (rec["to"], n)
+                n += 1
+            rec = dict(rec, to=base)
+            dst = os.path.join(ROOT, base.replace("/", os.sep))
         try:
-            if os.path.exists(p):
-                os.remove(p)
-        except OSError:
-            pass
-    if not os.path.exists(INDEX):
-        return
-    keep = []
-    with open(INDEX, encoding="utf-8") as f:
-        for line in f:
-            s = line.strip()
-            if not s:
-                continue
-            try:
-                rec = json.loads(s)
-            except ValueError:
-                continue
-            if rec.get("file") == old_rel:
-                continue
-            keep.append(s)
-    with open(INDEX, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(keep) + ("\n" if keep else ""))
+            os.replace(src, dst)
+        except OSError as e:
+            print("保留旧版失败：%s → %s（%s）" % (rec["from"], rec["to"], e))
+            remain.append(rec)
+            continue
+        lines.append("- %s | %s → %s | 来源内容变化，旧版保留（未删除）"
+                     % (stamp, rec["from"], rec["to"]))
+        print("已保留旧版：%s → %s" % (rec["from"], rec["to"]))
+    _pending_save(remain)
+    _pending_index(lines)
+    return len(lines)
+
+
+def _drop_archived(old_rel, apply=False):
+    """旧归档不再删除：改名保留（.old-时间戳），默认只报告，加 --apply 才执行。
+
+    改名记录写 ops\\_archive-pending\\INDEX.md 供人复核；不删归档，也不改写
+    archive\\index.jsonl（旧文件还在，索引行保留才查得到）。
+    """
+    if not old_rel:
+        return 0
+    pairs = _retire_pairs(old_rel, time.strftime("%Y%m%d-%H%M%S"))
+    if not pairs:
+        return 0
+    items = _pending_load()
+    queued = set(r.get("from") for r in items)
+    for rel, target in pairs:
+        if rel not in queued:
+            items.append({"from": rel, "to": target, "at": round(time.time(), 3)})
+            queued.add(rel)
+    _pending_save(items)
+    if apply:
+        return _apply_pending()
+    for rel, target in pairs:
+        print("将保留旧版：%s → %s（未执行，加 --apply）" % (rel, target))
+    return 0
 
 
 def archive(path, title=None, tags=None, source=None, day=None):
@@ -244,7 +342,10 @@ def _mtime(p):
         return 0
 
 
-def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False, includes=None):
+def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False, includes=None,
+               apply=False):
+    if apply and not dry_run:
+        _apply_pending()          # 先把上次只报告、没执行的保留动作补上
     changed, skipped = scan(root, st)
     if all_files:
         extra = [(os.path.join(ROOT, rel.replace("/", os.sep)), rel) for rel in skipped]
@@ -303,7 +404,7 @@ def cmd_digest(root, out_path, dry_run, st, max_chars=0, all_files=False, includ
             st["processed"][rel] = dict(meta, mtime=cur["mtime"], size=cur["size"], at=time.time())
             continue  # 内容哈希没变（只是 mtime 变了）：视为同一份，不动归档
         if old:
-            _drop_archived(old)  # 内容变了：旧版本作废，只留最新
+            _drop_archived(old, apply)  # 内容变了：旧版改名保留，默认只报告
         full = archive(p, title=os.path.basename(p), source=source_of(rel), day=day_of(rel))
         st["processed"][rel] = sig(p)
         st["processed"][rel]["archived_as"] = os.path.relpath(full, ROOT).replace("\\", "/")
@@ -439,6 +540,8 @@ def main():
     d.add_argument("--max-chars", type=int, default=0, help="摘要总字数上限，0 为不限")
     d.add_argument("--all", action="store_true", help="忽略水位，把所有文件重新出一份摘要")
     d.add_argument("--include", action="append", default=None, help="额外并入摘要的文件（如 DECISIONS.md），可重复")
+    d.add_argument("--apply", action="store_true",
+                   help="执行旧归档保留改名（默认只报告；改名记录写 ops\\_archive-pending\\INDEX.md）")
 
     s = sub.add_parser("search")
     s.add_argument("query")
@@ -461,7 +564,8 @@ def main():
         print("archived:", full)
         print("gz:      ", full + ".gz")
     elif args.cmd == "digest":
-        return cmd_digest(args.path, args.out, args.dry_run, state, args.max_chars, args.all, args.include)
+        return cmd_digest(args.path, args.out, args.dry_run, state, args.max_chars, args.all,
+                          args.include, args.apply)
     elif args.cmd == "status":
         return cmd_status(args.path, state)
     else:
