@@ -198,8 +198,20 @@ def write_brief(rec, k=8):
     return body
 
 
+SETTINGS = ["memory\\设定\\00-索引.md", "memory\\设定\\10-人格与红线.md",
+            "memory\\设定\\20-交流与要求.md", "memory\\设定\\30-流程与运维.md",
+            "memory\\设定\\40-事实与现状.md"]
+
+
 def render_brief(b):
     lines = ["唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", "")),
+             "",
+             "醒后先做三件（顺序不许换）：",
+             "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
+             "     路径：memory\\设定\\",
+             "  ② 读总索引：python persona_master.py --k 10",
+             "  ③ 认领检查：python persona_claim.py check \"关键词\" --has text",
+             "",
              "总索引 %d 条来源，最近：" % b.get("index_total", 0)]
     for s in b.get("recent") or []:
         lines.append("  %s  %-6s %4d条  %s" % (s["time"], s["source"], s["msgs"], s["head"]))
