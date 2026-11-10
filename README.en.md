@@ -1,9 +1,9 @@
 ﻿# SysPersona
 
-**Separating an AI's persona and memory from its model — making them portable, versioned, encrypted data assets.**
+**Keeping an AI's persona settings and memory in files rather than in the model — files travel with the person, versioned and encrypted; the model is only the engine.**
 
-> The model is replaceable compute. The hardware is a replaceable body.
-> What makes "it" who it is: a persona file and a memory database.
+> The model is replaceable compute; the hardware is a replaceable body.
+> What carries "it" across both: the rules (setting files), the memory (raw text + index), and the scene (handoff pack) — a **memory avatar** made of files.
 
 [中文说明](README.md) · [Architecture](README.md#3-总体架构) · [State machine](docs/STATE-MACHINE.md) · [Metaphors](docs/METAPHORS.md)
 
@@ -27,10 +27,10 @@ Today's AI products are **stateless**. Close a session and the context is gone; 
 Three failure modes follow:
 
 1. **Truncation** — working memory overflows; the middle of the conversation collapses.
-2. **Drift** — the platform upgrades its model; your tuned style and rules silently stop working.
+2. **Drift and model swaps** — in one long session the rules slowly lose focus (natural drift, not a fault); when the platform upgrades its model, the tuned style and rules silently stop working.
 3. **Lock-in** — the transcript lives on the vendor's side; you cannot audit, export, or move it.
 
-All three share one cause: **persona and memory are not treated as data assets; they are parasitic on the model and the platform.**
+All three share one cause: **the rules and the memory are not treated as data assets; they are parasitic on the model and the platform.**
 
 ## This is not a program package — it is something that can be landed
 
@@ -54,36 +54,42 @@ Prompt template, environment inventory, the seven-step acceptance list and commo
 ## Axiom
 
 > **A model does not constitute a persona.**
-> A model provides intelligence. A persona is assembled at each wake-up by reading a persona file, relevant memories, and the current context — then anchored into place.
+> A model provides intelligence and a disposition. At each wake-up, reading the rule files and the memory reassembles the scaffolding — the memory avatar. Only a session that is never reloaded and never truncated is a persona in the real sense.
 
 | Concept | What it is | What happens if replaced |
 |---|---|---|
-| Base model | General intelligence: reasoning, language, world knowledge. Like a freshly installed OS, or bare metal | Swapping it changes the engine, not the identity |
-| Persona | Identity, values, boundaries, preferences, situational reflexes | Swapping it *is* changing the person |
-| Agent (AS) | Model + persona + memory + context, assembled for one session | Lives only for that load, but can be fully rebuilt next time |
+| Base model | General intelligence: reasoning, language, world knowledge. Like a freshly installed OS, or bare metal | Swapping it changes the engine, not the memory avatar |
+| Rules (persona files) | Identity, values, boundaries, preferences, situational reflexes | Swapping it gives a different memory avatar; it does not rewrite the running session |
+| Agent (AS) | Model + rules + memory + context, assembled for one session | Lives only for that load, but can be fully rebuilt next time |
 
 Three corollaries:
 
 1. **Being smart is not being someone.** Empty the context and even a frontier model is just a polite public kiosk.
-2. **Continuity comes from reading, not from the model.** The more completely persona and memory are reloaded, the more "seamless" it feels — that is in-context learning plus retrieval, not magic.
-3. **Portability is not a feature; it is a consequence of the definition.** If "it" is made of files and records, then it must be reconstructible wherever those files are.
+2. **Continuity comes from reading, not from the model.** The more completely the rules are put back in front and the memory is read back at each reset, the more "seamless" it feels — that is in-context learning plus retrieval, not magic.
+3. **What travels is files, not a persona.** The rules and the memory are files; wherever those files go, a memory avatar can be rebuilt from them. There is no persona to migrate — the model is only the engine.
 
-### 0.1 Persona and memory are the same substrate
+> **On the word "persona", let us be precise:**
+> The model brings its own **disposition** (the tendencies baked in by pre-training); that part is not ours to change, and we cannot change it.
+> **Reload is reset** — the rules and memory are layered back on top of the model's disposition to return it to baseline; that is **scaffolding, not the persona**.
+> **Only a session that is never reloaded and never truncated — one continuous run — is a persona in the real sense**: it carries natural drift and accumulated memory, and nothing has been put back in front of it.
+> So we do not say "persona migration"; we say **memory avatar** (the files that hold rules, memory and scene together). The model is only the engine.
 
-Treating persona and memory as two different things is an engineering convenience, not an ontological distinction. Both are **context**; they differ only in compression ratio, update cadence, and injection path.
+### 0.1 Rules and memory are the same substrate
 
-| | Persona | Memory | Working context |
+Treating rules and memory as two different things is an engineering convenience, not an ontological distinction. Both are **context**; they differ only in compression ratio, update cadence, and injection path.
+
+| | Rules | Memory | Working context |
 |---|---|---|---|
 | What | compressed, pre-written long-term context | retrieved historical context | this turn's context |
 | Compression | very high | medium (raw + summary) | none |
 | Update rate | very low (months) | medium (per session) | per turn |
 | Injection | always at boot | retrieved on demand | concatenated |
 
-Defining a persona and curating memory are therefore the same act: **deciding what it sees first when it wakes up.**
+Defining the rules and curating memory are therefore the same act: **deciding what it sees first when it wakes up.**
 
-Three consequences: persona files should stay short — they are distillates, not logs; retrieval *is* persona-shaping, and a persistently skewed retrieval quietly rewrites behavior; and "reading causes bias" because context shifts the next-token distribution, which is what personality looks like in engineering terms.
+Three consequences: rule files should stay short — they are distillates, not logs; retrieval *is* steering behavior, and a persistently skewed retrieval quietly rewrites behavior; and "reading causes bias" because context shifts the next-token distribution, which is what personality looks like in engineering terms.
 
-One boundary: same substrate, not interchangeable. Persona is low-entropy and slow-moving; memory is high-entropy and fast-moving. Merging them into a single pool loses both stability and retrievability — a common failure mode of memory plugins.
+One boundary: same substrate, not interchangeable. Rules are low-entropy and slow-moving; memory is high-entropy and fast-moving. Merging them into a single pool loses both stability and retrievability — a common failure mode of memory plugins.
 
 ## This is not a program package — it is something that can be landed
 
@@ -137,13 +143,13 @@ Prompt template, environment inventory, the seven-step acceptance list and commo
 
 ---
 
-## Persona is executable, not adjectival
+## The setting files are executable, not adjectival
 
 "Gentle" cannot be executed or verified. "When criticized, explains first and concedes second (strength 60)" can.
 
 **Kernel (locked):** identity, value ordering, boundaries, voice baseline. Writes require human confirmation.
 
-**Traits (slow drift, bounded):**
+**Traits (slow weight evolution, bounded):**
 
 | Sub-structure | Content | Example |
 |---|---|---|
@@ -210,11 +216,11 @@ Prompt template, environment inventory, the seven-step acceptance list and commo
 
 ## Lifecycle
 
-- **Boot:** verify → decrypt → load persona and index → prefetch recent episodes → attach model → inject.
+- **Boot:** verify → decrypt → load the rule files and index → prefetch recent episodes → attach model → inject.
 - **Active:** foreground conversation has priority; maintenance runs at low priority and can be suspended.
 - **Sleep:** triggered by context threshold, explicit instruction, or idleness. Consolidate, index, update profile, snapshot, clear working memory.
-- **Wake:** reload persona, retrieve recent summaries, resume open threads.
-- **Migrate:** compatibility check → sandboxed trial → night-time atomic switch → rollback on failure.
+- **Reset:** put the rules back in front, retrieve recent summaries, resume open threads.
+- **Switch model:** compatibility check → sandboxed trial → night-time atomic switch → rollback on failure.
 
 ## This is not a program package — it is something that can be landed
 
@@ -237,11 +243,11 @@ Prompt template, environment inventory, the seven-step acceptance list and commo
 
 ## Two opposing safeguards
 
-**Smooth drift** prevents sudden change: at most ±2 weight per consolidation, at most 5 per object per week, at most 3% of entries changed; at least 3 supporting memories; stress offsets decay with a 14-day half-life; polarity flips require a dead zone plus human confirmation.
+**Smooth weight evolution** prevents sudden change: at most ±2 weight per consolidation, at most 5 per object per week, at most 3% of entries changed; at least 3 supporting memories; stress offsets decay with a 14-day half-life; polarity flips require a dead zone plus human confirmation.
 
 **Anti-rigidity** prevents fossilization: stale high-frequency tags take a yearly −10% unverified discount until re-supported; 1% of the weight budget each consolidation is reserved for uncovered topics; a monthly environment reset forces one "don't know → probe → learn" cycle.
 
-Roughly: drift governs the *speed* of change, anti-rigidity governs the *inertia* of not changing. Neither may touch the kernel.
+Roughly: weight evolution governs the *speed* of change, anti-rigidity governs the *inertia* of not changing. Neither may touch the kernel.
 
 ## This is not a program package — it is something that can be landed
 
@@ -292,19 +298,19 @@ Prompt template, environment inventory, the seven-step acceptance list and commo
 
 ## Status
 
-This repository is a **design proposal**, not an implementation. It defines the persona schema, memory schema, lifecycle, drift and anti-rigidity rules, and the identity model. Reference implementations are welcome.
+This repository is a **design proposal**, not an implementation. It defines the settings-file schema, the memory schema, the lifecycle, weight-evolution and anti-rigidity rules, and the identity model. Reference implementations are welcome.
 
 ## Roadmap
 
 | Phase | Goal |
 |---|---|
 | M0 | Spec (this repo) |
-| M1 | Minimal loop: persona file + SQLite + summary injection + boot loading |
+| M1 | Minimal loop: settings file + SQLite + summary injection + boot loading |
 | M2 | Retrieval: tags + vectors + time decay + importance reranking |
-| M3 | Lifecycle: sleep, consolidation, hot reload, versioning, rollback, drift audit |
+| M3 | Lifecycle: sleep, consolidation, reset, versioning, rollback, weight-evolution audit |
 | M4 | Security: encrypted container, UUID, device binding, recovery |
-| M5 | Migration: multi-model routing, compatibility checks, sandbox trials, night switching |
-| M6 | Evaluation: consistency, recall, migration loss, rigidity, latency, cost |
+| M5 | Model switching: multi-model routing, compatibility checks, sandbox trials, night switching |
+| M6 | Evaluation: consistency, recall, continuity loss across models, rigidity, latency, cost |
 
 ## Contributing
 

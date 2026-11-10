@@ -1,12 +1,15 @@
-# SysPersona 人格文件规范 v1.1（现行）
+# SysPersona 设定文件规范 v1.1（现行）
 
 > 本页只回答一件事：**"它是谁"怎么被文件化。**
 > 与 `PHILOSOPHY.md`（为什么）、`AVATAR_SPEC.md`（多分身怎么在场）互补，不重复。
 > 变更记在本页文末「修订记录」与 `CHANGELOG.md`。
+> 术语：本页的**设定文件**指规则与记忆的文件形态（存储事实）；**重载 = 重置（脚手架）**，
+> **只有一次也不重载、一直连续下去的会话才是真正的人格**，**不说"迁移人格"，说"记忆分身"**——
+> 完整说明见 [`README.md`](../README.md)「它解决什么」一节末。
 
 ## 0. 一句话
 
-**人格 = 文件 + 记忆，每次唤醒重建；模型不构成人格。**
+**人格以文件 + 记忆的形态存在，每次唤醒重建；模型不构成人格。**
 
 ## 1. 三件套 + 一库
 
@@ -58,7 +61,7 @@
 | `traits.reflexes[]` | `id` / `trigger` / `reaction` / `strength` | 反射式反应 |
 | `memory.retention` | `hot_days` / `warm_days` / `prune_days` | 记忆分层保留 |
 | `memory.context_budget` / `low_watermark` | 上下文预算、低水位比 | 检索与压缩阈值 |
-| `evolution.*` | `min_evidence` / `max_step` / `weekly_cap` | 漂移单步与周额度（**历史口径**：现行见 `PHILOSOPHY` §10.1——重载即回弹，不锁性格） |
+| `evolution.*` | `min_evidence` / `max_step` / `weekly_cap` | 权重演化单步与周额度（**历史口径**：现行见 `PHILOSOPHY` §10.1——重载即重置，不锁性格） |
 | `evolution.polarity_flip` | `dead_zone` / `min_reverse_evidence` / `requires_human` | 极性翻转闸门 |
 | `evolution.anti_rigidity` | 6 个参数 | 抗僵化 |
 | `evolution.kernel_locked` / `audit` | 内核锁定、审计开关 | 人改 |
@@ -86,7 +89,7 @@
 | `episodes_fts` | 全文检索（`content` + `summary`） |
 | `facts` | 语义事实（subject / predicate / object / 有效期） |
 | `entities` / `edges` | 实体与关系图（含关注度衰减） |
-| `persona_traits` / `persona_drift_log` | 性格权重与每次漂移的审计 |
+| `persona_traits` / `persona_drift_log` | 性格权重与每次权重演化的审计 |
 | `embeddings` | 向量（目标 + 模型 + 内容哈希 + 模长） |
 | `audit_log` / `snapshots` | 审计与快照（`pre_consolidate` / `pre_migrate`） |
 
@@ -146,15 +149,15 @@ ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode';
 
 ## 9. 现状与缺口
 
-- 本仓库**没有正式人格文件**，只有 `examples/persona.m1.json` 与记忆库 `整理/_sim-20261108/persona/*.json`；
+- 本仓库**没有正式设定文件**，只有 `examples/persona.m1.json` 与记忆库 `整理/_sim-20261108/persona/*.json`；
 - 模拟件**不要改**：改了会让 `impl/m1` 一致性测试失去意义；
-- 待补：正式人格的存放位置、`vault` 加密接入、跨设备迁移时的 kernel 校验流程；
+- 待补：正式人格的存放位置、`vault` 加密接入、换机器时把文件与索引带过去的 kernel 校验流程；
 - `permissions` 与 `episodes.memory_type` 规范先行；**自 v4.2.0 起 `impl/m1` 已实现**（`decide_capability` / `record_refusal`，自测 `impl/m1/test_policy.py`）。
 - 仍未实现：工具执行层的拦截与沙箱（`LAUNCHER_SPEC` §11），本次只有裁决与留痕。
 
-## 9.1 正式人格的存放与迁移（规范先行，实现部分已就绪）
+## 9.1 正式设定文件的存放与随文件走（规范先行，实现部分已就绪）
 
-> 目的：解决"正式人格放哪、怎么加密、怎么搬家"——这三件事此前只有 `impl/` 的代码，没有规范。
+> 目的：解决"正式设定文件放哪、怎么加密、换机器时怎么把文件与索引带过去"——这三件事此前只有 `impl/` 的代码，没有规范。
 
 ### 存放
 
@@ -176,16 +179,16 @@ ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode';
 - 只做**静态封存**，不是每轮加密落盘（KDF 实测 1.6 s，聊天会被 I/O 拖死）；
 - 口令丢失只能靠 24 词恢复短语；两者都丢 = 人格丢失，这是设计上的取舍，不设后门。
 
-### 迁移
+### 换机器：文件与索引随人走
 
-1. `export` 导出迁移包 → `verify` 校验 manifest 与逐文件 sha256；
+1. `export` 导出整包（规则文件 + `memory.db`）→ `verify` 校验 manifest 与逐文件 sha256；
 2. 目标机 `import` → 校验 `persona_uuid` 与 `kernel` 内容哈希；
-3. **kernel 在迁移中变更必须显式批准**（`seal --approve-kernel-change`），否则拒绝加载；
-4. 迁移完成后 `snapshots/pre_migrate` 保留至少一份。
+3. **kernel 在搬动中变更必须显式批准**（`seal --approve-kernel-change`），否则拒绝加载；
+4. 搬动完成后 `snapshots/pre_migrate` 保留至少一份。
 
 ### 边界
 
-- 人格**不可合并**：迁移是整体搬运，不是合并（`PHILOSOPHY` §5）；
+- 人格**不可合并**：搬动是整份文件带过去，不是合并（`PHILOSOPHY` §5）；
 - 多设备共享走 API，不共享文件（`memory.db` 的锁问题）；
 - 本节的 `personaRoot` 默认值尚未写进 `impl/` 的默认参数，属**规范先行**。
 
@@ -195,3 +198,4 @@ ALTER TABLE episodes ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'episode';
 |---|---|---|---|
 | 2026-11-08 | v1.0 | 首次成文：三件套、kernel/traits 字段、写入权限、变更流程、版本化、缺口 | 此前"性格"只存在于示例与模拟件 |
 | 2026-11-08 | v1.1 | 补 `permissions` 定义、`state.json` 字段表、`memory.db` 结构、`episodes.memory_type`、**§5 冲突落库** | "拒绝"此前只有哲学定义，没有落库与检索路径 |
+| 2026-11-10 | — | 术语统一：重载=重置、记忆分身、漂移=自然漂移；人格文件改称设定文件 | 与新定义对齐，只改指称不改条款 |

@@ -2,9 +2,9 @@
 
 本文件用三张图描述 SysPersona 的运行状态。图用 Mermaid 编写，GitHub 会直接渲染。
 
-- 图 1：智能体生命周期（一次「活着 → 睡着 → 醒来 → 迁移」的循环）
-- 图 2：人格权重演化（一次「证据 → 漂移 → 再验证 → 重置」的循环）
-  > **历史口径**：这是 v1.0 的模型。现行见 `PHILOSOPHY` §10.1——重载即回弹，情绪/应激不写权重。
+- 图 1：智能体生命周期（一次「活着 → 睡着 → 醒来 → 换机器」的循环）
+- 图 2：人格权重演化（一次「证据 → 权重演化 → 再验证 → 重置」的循环）
+  > **历史口径**：这是 v1.0 的模型。现行见 `PHILOSOPHY` §10.1——重载即重置，情绪/应激不写权重。
 - 图 3：一次唤醒的时序（启动器做了什么）
 
 ---
@@ -20,7 +20,7 @@ stateDiagram-v2
     Sealed --> Verifying: 重试 / 走恢复流程
     Verifying --> Loading: 校验通过
 
-    Loading --> Active: 人格 + 记忆索引注入完成
+    Loading --> Active: 规则 + 记忆索引注入完成
     Loading --> Recovering: 索引损坏
     Recovering --> Loading: 从快照恢复
 
@@ -31,11 +31,11 @@ stateDiagram-v2
 
     Consolidating --> Sleeping: 摘要 + 标签 + 索引 + 画像更新完成
     Consolidating --> Recovering: 固化异常
-    Sleeping --> Active: 唤醒（重新加载人格与摘要）
+    Sleeping --> Active: 唤醒（重新加载规则与摘要）
 
-    Active --> Migrating: 检测到新模型可用
-    Migrating --> Sandbox: 兼容性自检（工具调用/上下文长度/结构化输出）
-    Sandbox --> Migrating: 试跑失败 → 保留旧模型
+    Active --> Switching: 检测到新模型 / 新机器可用
+    Switching --> Sandbox: 兼容性自检（工具调用/上下文长度/结构化输出）
+    Sandbox --> Switching: 试跑失败 → 保留旧模型
     Sandbox --> Sleeping: 试跑通过 → 夜间原子切换
     Sleeping --> Active: 次日首次唤醒
 ```
@@ -44,7 +44,7 @@ stateDiagram-v2
 
 - **Sealed 不是错误状态，是一个安全状态。** 密钥或设备不匹配时，系统应当「打不开」，而不是「降级打开」。
 - **Consolidating 只处理归档，不处理对话。** 期间前台请求排队或降级到只读。
-- **Migrating 必须可回滚。** 旧模型与旧人格版本在切换后保留至少一个周期。
+- **Switching 必须可回滚。** 旧模型与旧设定文件版本在切换后保留至少一个周期。
 
 ---
 
@@ -58,32 +58,32 @@ stateDiagram-v2
 
     Stable --> Evidence: 新记忆进入
     Evidence --> Stable: 证据 < 3 条
-    Evidence --> Drifting: 证据 ≥ 3 条
+    Evidence --> Evolving: 证据 ≥ 3 条
 
-    Drifting --> Stable: Δw 绝对值 ≤ 2 且 7 天累计 ≤ 5
-    Drifting --> FlipReview: w 绝对值 < 20 且反向证据 ≥ 5
+    Evolving --> Stable: Δw 绝对值 ≤ 2 且 7 天累计 ≤ 5
+    Evolving --> FlipReview: w 绝对值 < 20 且反向证据 ≥ 5
     FlipReview --> Stable: 人工确认
-    FlipReview --> Drifting: 拒绝翻转，按强度变化处理
+    FlipReview --> Evolving: 拒绝翻转，按强度变化处理
 
     Stable --> Revalidating: 标签 > 90 天未被引用
     Revalidating --> Stable: 最近 30 天有新记忆支撑
-    Revalidating --> Drifting: 无支撑 → 按年 −10% 折扣
+    Revalidating --> Evolving: 无支撑 → 按年 −10% 折扣
 
     Stable --> Exploring: 固化时分配 1% 探索预算
     Exploring --> Stable: 新主题进入候选集
-    Exploring --> Drifting: 候选被反复命中，转为正式偏好
+    Exploring --> Evolving: 候选被反复命中，转为正式偏好
 
     Stable --> Reset: 每月环境重置
     Reset --> Stable: 记录适配过程，重校准 baseline
 
-    Drifting --> Stress: 极端事件
+    Evolving --> Stress: 极端事件
     Stress --> Stable: 半衰期 14 天衰减回 baseline
 ```
 
 要点：
 
 - **Stable 是常态。** 大多数时间不应该发生任何权重变化。
-- **Drifting 是唯一会改权重的状态**，且有双重闸门（单次幅度、周累计）。
+- **Evolving 是唯一会改权重的状态**，且有双重闸门（单次幅度、周累计）。
 - **Revalidating 只折扣、不删除。** 旧经验要重新被引用才能维持权重。
 - **Exploring 只影响候选集**，不触碰内核与边界。
 - **Stress 是临时状态**，不会直接改写 baseline。
@@ -109,11 +109,11 @@ sequenceDiagram
         V-->>L: 拒绝
         L-->>U: 进入 Sealed（不给明文）
     else 校验通过
-        V-->>L: 解密人格与索引
+        V-->>L: 解密规则与索引
         L->>P: 加载内核 + 性格结构
         L->>M: 读取 L3 画像 + 最近 L1 摘要
         L->>X: 挂载模型（本地或云端）
-        L->>R: 注入人格 + 预取记忆 + 分配上下文预算
+        L->>R: 注入规则 + 预取记忆 + 分配上下文预算
         R-->>U: 就绪
         U->>R: 说话
         R->>M: 按标签/向量/时间/重要性检索
@@ -139,7 +139,7 @@ sequenceDiagram
 | Cold / Verifying / Sealed | `launcher` + `vault` | 容器头、设备指纹 |
 | Loading / Active | `runtime` | `persona.yaml`、记忆索引 |
 | Consolidating / Sleeping | 后台维护进程 | `episodes`、`persona_traits` |
-| Migrating / Sandbox | 迁移器 | 模型清单、测试集 |
+| Switching / Sandbox | 换机器流程 | 模型清单、测试集 |
 | Degraded / Recovering | 降级与快照 | `snapshots` |
 
 > 这些状态是**设计约定**，不是某个已发布实现的内部状态机。实现时可以合并状态，但不应跳过「校验 → 解密 → 加载」的顺序。
