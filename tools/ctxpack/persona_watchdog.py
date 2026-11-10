@@ -574,6 +574,33 @@ def switch_model(cmd, model=""):
     return _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", ver])
 
 
+RELAY_BEGIN = "<!-- syspersona-relay:begin -->"
+RELAY_END = "<!-- syspersona-relay:end -->"
+
+
+def hermes_memory_path():
+    """Hermes 起会话会读的记忆文件（在它的 hermes-home\\memories 下）。"""
+    home = os.environ.get("SYSPERSONA_HERMES_HOME") or \
+        r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home"
+    p = os.path.join(home, "memories", "MEMORY.md")
+    return p if os.path.isdir(os.path.dirname(p)) else ""
+
+
+def relay_remove():
+    """收尾：把记忆里那段代班卡去掉（别留在长期记忆里）。"""
+    mem = hermes_memory_path()
+    if not mem or not os.path.exists(mem):
+        return
+    try:
+        t = io.open(mem, encoding="utf-8").read()
+        if RELAY_BEGIN in t and RELAY_END in t:
+            t = t.split(RELAY_BEGIN)[0] + t.split(RELAY_END)[-1]
+            with io.open(mem, "w", encoding="utf-8", newline="\n") as f:
+                f.write(t.rstrip() + "\n")
+    except OSError:
+        pass
+
+
 def write_relay():
     r"""给代班的 Hermes 写一张交接卡：它开的是新窗口，得先知道「现在到哪儿了」。
 
@@ -610,9 +637,23 @@ def write_relay():
         "## 恢复后做什么",
         "- 网络恢复后，后台会唤醒 DSH；把结论同步到 memory\\备忘\\ 一份，别只留在这个窗口。",
     ]
+    body = "\n".join(lines) + "\n"
     p = os.path.join(OPS, "hermes-relay.md")
     with io.open(p, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write(body)
+    # 光写文件它不会看：塞进它的记忆文件（Hermes 起会话会读 memories\\MEMORY.md）
+    mem = hermes_memory_path()
+    if mem:
+        try:
+            old = io.open(mem, encoding="utf-8").read() if os.path.exists(mem) else ""
+            keep = old
+            if RELAY_BEGIN in keep and RELAY_END in keep:
+                keep = keep.split(RELAY_BEGIN)[0] + keep.split(RELAY_END)[-1]
+            keep = keep.rstrip() + "\n\n" + RELAY_BEGIN + "\n" + body + RELAY_END + "\n"
+            with io.open(mem, "w", encoding="utf-8", newline="\n") as f:
+                f.write(keep)
+        except OSError:
+            pass
     return True, p
 
 
@@ -1358,6 +1399,7 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
             else:
                 woke = "网络恢复 → DSH 本来就在"
             proxy_clear()
+            relay_remove()
 
     retry = ensure_client_up()      # 「应该活着」的意图还挂着，就继续拉（不依赖上一次动作）
     d = decide(stale, net_override=net_override, prov_override=prov_override)
