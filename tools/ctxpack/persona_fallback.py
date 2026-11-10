@@ -152,7 +152,9 @@ def _balance(cfg):
                     except (TypeError, ValueError):
                         continue
             detail["sources"].append({"label": label, "value": val,
-                                      "threshold": thr, "warn": warn, "path": path})
+                                      "threshold": thr, "warn": warn, "path": path,
+                                      "at": str((data or {}).get("at") or "")
+                                      if isinstance(data, dict) else ""})
             if val is None:
                 continue
             if lowest is None or val < lowest[0]:
@@ -230,8 +232,8 @@ def line(root=None):
     """给唤醒简讯的一行。"""
     s = state(root)
     if s.get("on"):
-        return ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载），"
-                "抓取·联网检索·付费动作一律跳过；本地模型在线就它上"
+        return ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载/抓本机会话），"
+                "付费模型与外部联网检索一律不走；本地模型在跑就它上"
                 % (s.get("why") or "已降级"))
     srcs = s.get("balance_sources") or []
     if srcs:
@@ -239,7 +241,8 @@ def line(root=None):
         for r in srcs:
             v = r.get("value")
             txt = "¥%.2f" % v if isinstance(v, (int, float)) else "不可读"
-            bits.append("%s %s" % (r.get("label"), txt))
+            at = str(r.get("at") or "")[11:16]
+            bits.append("%s %s%s" % (r.get("label"), txt, ("（%s 记）" % at) if at else ""))
             w = r.get("warn") or 0
             if isinstance(v, (int, float)) and w and v < w:
                 warns.append("%s %s 偏低（警戒 %.2f）" % (r.get("label"), txt, w))
