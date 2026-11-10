@@ -349,6 +349,100 @@ def refresh(icon):
         time.sleep(TICK)
 
 
+
+# ── 任务池：托盘 ↔ 分身 的唯一通道（只走 ops/tasks.jsonl）────────────
+TASKS = os.path.join(OPS, "tasks.jsonl")
+TODO_PY = os.path.join(ROOT, "persona_tasks.py")
+
+
+def _task_rows():
+    """读任务池，按 id 去重，只留没结束的。"""
+    if not os.path.exists(TASKS):
+        return []
+    latest = {}
+    try:
+        with open(TASKS, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                tid = r.get("id") or r.get("task_id")
+                if tid:
+                    latest[tid] = r
+    except OSError:
+        return []
+    rows = [r for r in latest.values()
+            if r.get("status") in ("pending", "claimed", "running")]
+    rows.sort(key=lambda r: (r.get("prio", 5), r.get("at", "")))
+    return rows
+
+
+def pool_text(limit=8):
+    rows = _task_rows()
+    if not rows:
+        return "任务池空"
+    out = ["任务池 %d 条：" % len(rows)]
+    for r in rows[:limit]:
+        out.append("  p%s %-8s %s" % (r.get("prio", 5), r.get("status", ""),
+                                      (r.get("title") or "")[:34]))
+    if len(rows) > limit:
+        out.append("  …还有 %d 条" % (len(rows) - limit))
+    out.append("")
+    out.append("（只读；派活由我 submit，认领由我 claim）")
+    return "\n".join(out)
+
+
+def show_pool(icon=None, item=None):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, pool_text(), "任务池（只读）", 0x40 | 0x40000)
+
+
+def _ask(prompt, title="SysPersona"):
+    """原生输入框：用 WSH 的 InputBox（tkinter 在 pythonw 下会卡死）。"""
+    import tempfile
+    vbs = ("Set a = WScript.Arguments\n"
+           "x = InputBox(\"\" \" & a(0), \"\" \" & a(1))\n"
+           "If Len(x) > 0 Then WScript.Echo x\n")
+    fd, path = tempfile.mkstemp(suffix=".vbs")
+    os.close(fd)
+    try:
+        with open(path, "w", encoding="mbcs", errors="replace") as f:
+            f.write(vbs)
+        r = subprocess.run(["cscript.exe", "//nologo", path, prompt, title],
+                           capture_output=True, text=True, timeout=180,
+                           encoding="mbcs", errors="replace",
+                           creationflags=NO_WINDOW)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def submit_task(icon=None, item=None):
+    """在托盘里派一条活：写进任务池，下一轮我 pool 就能看到。"""
+    title = _ask("派一条任务给分身（会写进任务池，我下一轮认领）：", "派活")
+    if not title:
+        return
+    try:
+        r = subprocess.run([PY, TODO_PY, "submit", "--title", title],
+                           capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace",
+                           cwd=ROOT, creationflags=NO_WINDOW)
+        msg = (r.stdout or r.stderr or "").strip()[:300] or "已提交"
+    except Exception as e:
+        msg = "提交失败：%s" % e
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, msg, "派活", 0x40 | 0x40000)
+
+
 def main():
     if "--probe" in sys.argv:
         print(detail_text(snapshot()))
@@ -360,6 +454,8 @@ def main():
         title=s["title"][:120],
         menu=pystray.Menu(
             pystray.MenuItem("状态", show_status, default=True),
+            pystray.MenuItem("任务池（只读）", show_pool),
+            pystray.MenuItem("派一条…", submit_task),
             pystray.MenuItem("打开日志", open_log),
             pystray.MenuItem("打开记忆库", open_mem),
             pystray.Menu.SEPARATOR,
