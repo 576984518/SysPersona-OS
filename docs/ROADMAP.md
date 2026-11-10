@@ -101,14 +101,14 @@
 
 > 一句话：**每条记忆都说得清"我是谁记的、从哪来、什么时候记的"。**
 
-## v5.7.0 — 网盘索引总线（**已交付**）
+## v5.7.0 — 简易网络同步（**已交付**）
 
 **目标**：多个常驻程序在网盘上安全写索引、读索引。
 
-- 挂载：rclone / WebDAV 挂 `Z:`，不用官方客户端（会锁未传完的文件）；
+- 接入：任何能挂成「普通可读写目录」的网络盘，盘符由部署决定（`PERSONA_CLOUD`）；
 - 分区：`Hot_Bus\`（实时小分片）+ `Cold_Backup\`（大压缩包）+ `Archive\`（只移不删）；
 - 写：tmp→rename 原子；总索引 `MASTER_INDEX.md` 单写手 + 文件锁；
 - 断网：降级本地排队 `ops\cloud-queue.jsonl`，`--flush` 幂等补交。
 
-规格 `docs/CLOUD_BUS_SPEC.md`，实现 `tools/ctxpack/persona_cloud_bus.py`。
+规格 `docs/SIMPLE_SYNC_SPEC.md`（只讲读写纪律，不绑定任何网盘/协议），实现 `tools/ctxpack/persona_cloud_bus.py`。
 **还欠**：真实网盘挂载验证、GC 独立线程。

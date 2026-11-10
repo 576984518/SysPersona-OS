@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-r"""persona_cloud_bus.py — 网盘索引总线（写索引 / 读索引 / 断网降级）
+r"""persona_cloud_bus.py — 简易网络同步（写分片 / 读总索引 / 断网降级）
 
 设计（2026-11-10，来源见 `docs/CLOUD_BUS_SPEC.md`）：
 
-- 网盘用 **rclone / WebDAV 挂成盘符**，不用官方客户端（它会上传时锁住未传完的文件）；
+- 只假设「上层是一个普通可读写目录」；盘符/挂载/凭据由部署决定（环境变量 PERSONA_CLOUD）；
 - 两个区：`Hot_Bus\`（各进程独占写自己的分片，客户端不同步它）+ `Cold_Backup\`（压缩冷备）；
 - 写一律 **tmp → rename**（原子），删改一律移进 `Archive\`，不真删；
 - 总索引 `MASTER_INDEX.md` 只在**持锁**时由主节点改写，其余节点只读；
 - 网盘不可用（断网 / 没挂载）时，**写入自动降级成本地排队**，不挂死、不丢；恢复后 `--flush` 补交。
 
 本机约定：
-  $env:PERSONA_CLOUD      网盘根（默认 Z:\SysPersona）
+  $env:PERSONA_CLOUD      网盘根：一个普通可读写目录；不设则一律降级排队
   本地排队                ops\cloud-queue.jsonl
 
 用法：
@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 OPS = os.path.join(ROOT, "ops")
 QUEUE = os.path.join(OPS, "cloud-queue.jsonl")
 STATE = os.path.join(OPS, "cloud-bus.json")
-CLOUD = os.environ.get("PERSONA_CLOUD") or r"Z:\SysPersona"
+CLOUD = os.environ.get("PERSONA_CLOUD", "").strip()
 
 HOT = "Hot_Bus"
 COLD = "Cold_Backup"
