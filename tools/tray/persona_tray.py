@@ -234,9 +234,8 @@ def snapshot():
     rows = client_rows()
     ok, msg, tasks = daemon_health()
 
-    # 图标环：第一个环用最“告急”的客户端，其余依次往里
-    ranked = sorted(rows, key=lambda r: (r["pct"] is None, -(r["pct"] or 0)))
-    rings = [(color_of(r["pct"]), r["pct"]) for r in ranked][:3]
+    # 竖条顺序 = 客户端顺序（位置固定，便于辨认：左=DSH，右=下一个）
+    bars = [(color_of(r["pct"]), r["pct"], r["ctx"] is not None) for r in rows]
 
     parts = []
     for r in rows:
@@ -249,26 +248,39 @@ def snapshot():
     title = "SysPersona · " + (" · ".join(parts) if parts else "没有客户端在跑")
     if not ok:
         title += " · 守护异常"
-    return {"rings": rings, "title": title, "rows": rows, "daemon": (ok, msg, tasks)}
+    return {"bars": bars, "title": title, "rows": rows, "daemon": (ok, msg, tasks)}
 
 
-# ── 画图标：同心进度环 ───────────────────────────────────────────────
-def make_icon(rings):
+# ── 画图标：每个客户端一根竖条，条数随客户端数自动变宽 ───────────────
+def make_icon(bars):
+    """bars = [(color, pct_bytes, 有无水位)]；pct=None 的只画底座。
+
+    64×64 里横向排 n 根竖条：条宽 = (64 - 间隔) / n，一个个从底部往上填充。
+    1 个客户端就是一根满宽的长条，4 个就自动变窄——「长度」随 agent 数量变。
+    """
     S = 64
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    if not rings:
-        d.ellipse((10, 10, S - 10, S - 10), fill=(120, 120, 120, 255))
+    n = len(bars)
+    if n == 0:
+        d.rectangle((8, 24, S - 8, S - 24), fill=(120, 120, 120, 255))
         return img
-    boxes = [(4, 14), (18, 8), (32, 5)]   # (margin, width) 由外到内
-    for i, (color, pct) in enumerate(rings):
-        m, w = boxes[min(i, len(boxes) - 1)]
-        box = (m, m, S - m, S - m)
-        d.ellipse(box, outline=(70, 70, 70, 255), width=w)
-        frac = 0.0 if pct is None else max(0.0, min(1.0, pct / 100.0))
-        if frac > 0:
-            d.arc(box, start=-90, end=-90 + int(360 * frac), fill=color + (255,), width=w)
-    d.ellipse((26, 26, S - 26, S - 26), fill=color_of(rings[0][1]) + (255,))
+    gap = 2 if n > 1 else 0
+    usable = S - gap * (n + 1)
+    bw = max(3, usable // n)
+    top, bottom = 4, S - 4
+    x = gap
+    for color, pct, has in bars[:6]:
+        x2 = x + bw - 1
+        d.rectangle((x, top, x2, bottom), fill=(40, 40, 40, 255))
+        if has and pct is not None:
+            frac = max(0.06, min(1.0, pct / 100.0))
+            y = int(bottom - frac * (bottom - top))
+            d.rectangle((x, y, x2, bottom), fill=color + (255,))
+        else:
+            # 没有水位源的客户端：底部一小块，表示「在跑」
+            d.rectangle((x, bottom - 5, x2, bottom), fill=color + (255,))
+        x = x2 + 1 + gap
     return img
 
 
@@ -331,7 +343,7 @@ def refresh(icon):
     while True:
         try:
             s = snapshot()
-            icon.icon = make_icon(s["rings"])
+            icon.icon = make_icon(s["bars"])
             icon.title = s["title"][:120]
         except Exception:
             pass
@@ -345,7 +357,7 @@ def main():
     s = snapshot()
     icon = pystray.Icon(
         "SysPersona",
-        icon=make_icon(s["rings"]),
+        icon=make_icon(s["bars"]),
         title=s["title"][:120],
         menu=pystray.Menu(
             pystray.MenuItem("状态", show_status, default=True),
