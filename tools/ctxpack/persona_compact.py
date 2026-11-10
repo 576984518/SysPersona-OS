@@ -215,6 +215,13 @@ def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
     save_state(st)
     pi.log({"at": now(), "len": 8, "dry": False, "ok": ok, "msg": msg, "src": "compact"})
     log({"at": now(), "ctx": ctx, "action": "fired" if ok else "fail", "msg": msg})
+    # 压缩之后必须重读设定（2026-11-10 定）：摘要里被压掉的那部分设定，只能回文件读。
+    if ok:
+        try:
+            import persona_wake as _w
+            _w.mark_reread("刚压缩过（%dK → 摘要）" % (ctx // 1000))
+        except Exception:
+            pass
     print(("OK   " if ok else "FAIL ") + "水位 %dK → 发送 /compact：%s" % (ctx / 1000, msg))
     return 0 if ok else 1
 

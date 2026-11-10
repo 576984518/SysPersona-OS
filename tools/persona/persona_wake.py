@@ -198,21 +198,172 @@ def write_brief(rec, k=8):
     return body
 
 
+REREAD = os.path.join(OPS, "reread.json")
+REREAD_LOG = os.path.join(OPS, "reread.jsonl")
+REREAD_EVERY = 300          # 重读提醒的节流：5 分钟（心跳扫描仍是 30 秒，事件唤醒要快）
+REREAD_MAX_AGE = 1800       # 距上次重读超过 30 分钟就再提醒一次
+
 SETTINGS = ["memory\\设定\\00-索引.md", "memory\\设定\\10-人格与红线.md",
             "memory\\设定\\20-交流与要求.md", "memory\\设定\\30-流程与运维.md",
             "memory\\设定\\40-事实与现状.md"]
 
 
+def _sha(path):
+    try:
+        import hashlib
+        return hashlib.sha256(io.open(path, "rb").read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def reread_state():
+    try:
+        return json.load(io.open(REREAD, encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+
+
+def reread_save(st):
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        tmp = REREAD + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(st, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, REREAD)
+    except OSError:
+        pass
+
+
+def reread_need():
+    """该不该重读设定。返回 (bool, 原因)。
+
+    三条触发（2026-11-10 定）：
+      ① 设定文件内容变了（hash 不同）——改了规则却还按旧的办事，最危险；
+      ② 距上次重读超过 30 分钟——防止长会话里慢慢漂；
+      ③ 刚压缩过——压缩把上下文换成摘要，摘要里没有的那部分设定，只能回文件读。
+    """
+    st = reread_state()
+    if st.get("need"):
+        return True, st.get("reason") or "被标记"
+    for rel in SETTINGS:
+        p = os.path.join(ROOT, rel)
+        h = _sha(p)
+        if h and h != (st.get("files") or {}).get(rel):
+            return True, "设定有变：%s" % os.path.basename(rel)
+    last = float(st.get("last_read") or 0)
+    if last and time.time() - last > REREAD_MAX_AGE:
+        return True, "距上次重读 %d 分钟" % int((time.time() - last) / 60)
+    if not last:
+        return True, "从未重读过"
+    return False, ""
+
+
+def mark_reread(reason):
+    """外部喊一声「待会儿记得重读」——压缩之后由 persona_compact 调用。"""
+    st = reread_state()
+    st["need"] = True
+    st["reason"] = reason
+    st["marked"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    reread_save(st)
+
+
+def cmd_reread(a):
+    """--auto：闹钟每 5 分钟调；只**标记**，不刷屏（真正读文件的是 AI）。
+       --check：exit 0 = 不用读，exit 1 = 该读了（把原因打出来）
+       --ack  ：AI 真读完之后调用，清标记并记下文件 hash
+    """
+    if a.ack:
+        st = reread_state()
+        st["need"] = False
+        st["reason"] = ""
+        st["last_read"] = time.time()
+        st["last_read_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        st["files"] = {rel: _sha(os.path.join(ROOT, rel)) for rel in SETTINGS}
+        reread_save(st)
+        try:
+            with io.open(REREAD_LOG, "a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps({"at": st["last_read_at"], "action": "read",
+                                    "files": len(st["files"])}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        print("已记下重读：%d 份设定（%s）" % (len(st["files"]), st["last_read_at"]))
+        return 0
+    need, why = reread_need()
+    if a.check:
+        print(("该重读了：%s" % why) if need else "不用重读（设定没变、且在 30 分钟内）")
+        return 1 if need else 0
+    if a.auto:
+        st = reread_state()
+        last_mark = float(st.get("marked_ts") or 0)
+        if need and time.time() - last_mark >= REREAD_EVERY:
+            mark_reread(why)
+            st = reread_state()
+            st["marked_ts"] = time.time()
+            reread_save(st)
+            try:
+                with io.open(REREAD_LOG, "a", encoding="utf-8", newline="\n") as f:
+                    f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "action": "mark", "why": why},
+                                       ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+            print("已标记重读：%s" % why)
+        else:
+            print("跳过（%s）" % (why or "不需要"))
+        return 0
+    print("用法：reread --auto | --check | --ack")
+    return 0
+
+
+def write_brief(rec, k=8):
+    """写一份唤醒简讯：醒来第一眼看的就是它。"""
+    body = {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "wake_id": rec.get("id", ""), "purpose": rec.get("purpose", ""),
+            "agent": rec.get("agent", ""), "source": rec.get("source", "alarm")}
+    need, why = reread_need()
+    body["reread_need"] = need
+    body["reread_why"] = why
+    body.update(index_brief(k))
+    try:
+        os.makedirs(OPS, exist_ok=True)
+        with io.open(BRIEF, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(body, f, ensure_ascii=False, indent=1)
+        with io.open(BRIEF_HIST, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(body, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    return body
+
+
+def _pack_line():
+    """交接包那一行：醒后也该重读，但得让人一眼看出它新不新（过期了读它等于读旧世界）。"""
+    p = os.path.join(ROOT, "续接", "接续包-最新.md")
+    try:
+        age = (time.time() - os.path.getmtime(p)) / 60.0
+    except OSError:
+        return "④ 交接包：还没生成（先跑 persona_gauge.py --prepare --canonical --no-clip）"
+    if age > 60:
+        return "④ 交接包：续接\\接续包-最新.md（**已过期 %d 分钟**，先刷再读）" % int(age)
+    return "④ 交接包：续接\\接续包-最新.md（%d 分钟前生成，可读）" % int(age)
+
+
 def render_brief(b):
-    lines = ["唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", "")),
-             "",
-             "醒后先做三件（顺序不许换）：",
-             "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
-             "     路径：memory\\设定\\",
-             "  ② 读总索引：python persona_master.py --k 10",
-             "  ③ 认领检查：python persona_claim.py check \"关键词\" --has text",
-             "",
-             "总索引 %d 条来源，最近：" % b.get("index_total", 0)]
+    head = "唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", ""))
+    lines = [head]
+    if b.get("reread_need"):
+        lines.append("⚠ 需要重读设定：%s（读完跑 persona_wake.py reread --ack）"
+                     % (b.get("reread_why") or "被标记"))
+    else:
+        lines.append("设定已重读（30 分钟内、内容没变）")
+    lines += ["",
+              "醒后先做三件（顺序不许换）：",
+              "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
+              "     路径：memory\\设定\\",
+              "  ② 读总索引：python persona_master.py --k 10",
+              "  ③ 认领检查：python persona_claim.py check \"关键词\" --has text",
+              "  " + _pack_line(),
+              "",
+              "总索引 %d 条来源，最近：" % b.get("index_total", 0)]
     for s in b.get("recent") or []:
         lines.append("  %s  %-6s %4d条  %s" % (s["time"], s["source"], s["msgs"], s["head"]))
     if b.get("pending"):
@@ -383,8 +534,13 @@ def main():
     c.add_argument("--purpose", required=True, help="醒来做什么（必填，同闹钟规矩）")
     c.add_argument("--delay", type=int, default=5, help="多少秒后醒（默认 5）")
     c.add_argument("--source", default="dispatch", help="谁触发的（dispatch/task/dep）")
+    c = sub.add_parser("reread", help="重读设定：--auto（闹钟每 5 分钟）/ --check / --ack")
+    c.add_argument("--auto", action="store_true", help="需要就标记，节流 5 分钟")
+    c.add_argument("--check", action="store_true", help="exit 1 = 该重读了")
+    c.add_argument("--ack", action="store_true", help="真读完之后调用，清标记")
     a = ap.parse_args()
     fn = {"add": cmd_add, "list": cmd_list, "rm": cmd_rm, "brief": cmd_brief,
+          "reread": cmd_reread,
           "inject": cmd_inject, "event": cmd_event,
           "fire": lambda _a: print("触发 %d 个" % fire_due())}.get(a.cmd)
     if not fn:
