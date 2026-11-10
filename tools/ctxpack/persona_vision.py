@@ -119,7 +119,9 @@ def deepseek_vl(path, prompt, model="deepseek-flash", max_tokens=1500):
         with urllib.request.urlopen(req, timeout=120) as r:
             d = json.loads(r.read())["choices"][0]["message"]
     except Exception as e:                 # noqa: BLE001
-        return "（DeepSeek 看图失败：%s）" % str(e)[:120]
+        # 只发一次、不自动重试：排队慢的时候重试 = 反复扣钱（人 2026-11-10 提醒）
+        return ("（DeepSeek 看图失败，未重试：%s）\n"
+                "如果是排队/超时：等一会儿再来一次，别脚本里反复重试。" % str(e)[:120])
     out = (d.get("content") or "").strip()
     if not out:
         out = (d.get("reasoning_content") or "").strip()
