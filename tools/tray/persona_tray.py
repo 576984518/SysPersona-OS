@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
-r"""persona_tray.py — 托盘状态灯（只显示与退出，不代办任何活）
+r"""persona_tray.py — 托盘状态灯：看得见「谁在跑」和「水位到哪」
 
-设计（2026-11-09 定）：后台服务为主，人不操作；但必须看得见「它在不在跑」。
-- 绿：全部正常；黄：有任务在忙；红：有任务失败 / 状态文件超过 3 分钟没更新；
-- 双击：弹一个小窗，列出各任务最近一次的状态；
-- 菜单：打开日志 / 打开记忆库 / 退出托盘。
+设计（2026-11-10 重写）：
+- 图标是一圈进度环：外圈颜色=水位等级，环长=占用百分比，中间不用字（16px 看不清）。
+- 悬停提示（title）一行给出：水位 + 哪个客户端在跑 + 守护是否活着。
+- 菜单 →「状态」：列出所有客户端与各任务最近一次结果。
+- 只读不代办：托盘不派活、不改状态，只显示。
 
-启动：快捷方式或开机项，直接跑：
+启动：
   D:\ProgramData\SysPersona-Runtime\python\pythonw.exe persona_tray.py
+
+自检：加上 --probe 只打印一帧状态然后退出（不进托盘）。
 """
-import io
 import json
 import os
 import subprocess
@@ -20,76 +22,258 @@ import time
 import pystray
 from PIL import Image, ImageDraw
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# ── 路径：以记忆库为准（托盘在代码仓库里，ops\ 在记忆库） ──────────────
+def _resolve_root():
+    env = os.environ.get("MEM") or os.environ.get("SYSPERSONA_MEM")
+    if env and os.path.isdir(env):
+        return env
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur = here
+    for _ in range(6):
+        if os.path.isdir(os.path.join(cur, "ops")) and os.path.isdir(os.path.join(cur, "sessions")):
+            return cur
+        cur = os.path.dirname(cur)
+    return r"D:\4590-PC-文件\AI会话检索记录"
+
+
+ROOT = _resolve_root()
 OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
+HCTX = os.path.join(OPS, "hctx.json")
 LOG = os.path.join(OPS, "persona.log")
-STALE = 180  # 秒：状态文件超过这个时间没更新，视为守护挂了
+PY = os.path.join(os.path.dirname(sys.executable), "python.exe")
+GAUGE = os.path.join(ROOT, "persona_gauge.py")
 
-_state = {"color": (120, 120, 120), "text": "SysPersona · 读取中"}
+STALE = 180          # 秒：状态文件多久没更新算守护挂了
+GAUGE_EVERY = 60     # 秒：DSH 水位多久测一次（gauge 一次约 1.7 秒，别太勤）
+TICK = 5             # 秒：托盘刷新间隔
+
+# pythonw 是 GUI 进程，直接 spawn 控制台程序会弹黑窗——必须一律带上这个标志。
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+# 客户端识别：进程名 → 显示名
+CLIENTS = [
+    ("DeepSeek Harness.exe", "DSH"),
+    ("hermes.exe", "Hermes"),
+    ("Hermes.exe", "Hermes"),
+    ("cherry-studio.exe", "Cherry"),
+    ("Cursor.exe", "Cursor"),
+]
+_CLI_CACHE = {"at": 0.0, "rows": []}
+_DSH = {"at": 0.0, "ctx": None, "max": None, "pct": None}
+_LOCK = threading.Lock()
 
 
-def read_status():
+# ── 小工具 ───────────────────────────────────────────────────────────
+def read_json(path):
     try:
-        with open(STATUS, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
 
 
-def evaluate(st):
-    if not st:
-        return (150, 150, 150), "SysPersona · 状态文件缺失", []
-    tasks = st.get("tasks") or {}
-    lines = []
-    busy = failed = False
+def file_age(path):
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return 1e9
+
+
+def human(n):
+    if n is None:
+        return "?"
+    if n < 1000:
+        return str(n)
+    return "%.0fK" % (n / 1000.0)
+
+
+# ── 客户端：谁在跑 ───────────────────────────────────────────────────
+def running_clients():
+    """tasklist 一次 100ms，缓存 20 秒（越少 spawn 越安静）。"""
     now = time.time()
-    for name, t in sorted(tasks.items()):
-        ok = t.get("ok", True)
-        msg = (t.get("msg") or "").strip()
-        age = now - (t.get("last") or 0)
-        lines.append("%-10s %s  %s" % (name, "OK " if ok else "FAIL", msg[:60]))
-        if not ok:
-            failed = True
-        if t.get("busy"):
-            busy = True
-    age = now - (st.get("at_ts") or 0)
-    if failed:
-        return (220, 60, 60), "SysPersona · 有任务失败", lines
-    if not st.get("at_ts"):
-        # 老格式没有时间戳，用文件的 mtime 兜底
-        try:
-            age = now - os.path.getmtime(STATUS)
-        except OSError:
-            age = 0
+    with _LOCK:
+        if now - _CLI_CACHE["at"] < 20 and _CLI_CACHE["rows"]:
+            return _CLI_CACHE["rows"]
+    rows = []
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=8,
+                             encoding="mbcs", errors="replace",
+                             creationflags=NO_WINDOW).stdout
+        names = {}
+        for line in out.splitlines():
+            parts = line.strip().strip('"').split('","')
+            if not parts or not parts[0]:
+                continue
+            names[parts[0]] = names.get(parts[0], 0) + 1
+        for img, label in CLIENTS:
+            n = names.get(img, 0)
+            if n:
+                rows.append((label, True, "%d 进程" % n))
+    except Exception as e:
+        rows.append(("进程表读取失败", False, str(e)[:40]))
+    with _LOCK:
+        _CLI_CACHE["at"], _CLI_CACHE["rows"] = now, rows
+    return rows
+
+
+# ── 水位：DSH 走 gauge，Hermes 走 hctx.json ──────────────────────────
+def dsh_watermark(force=False):
+    now = time.time()
+    with _LOCK:
+        if not force and now - _DSH["at"] < GAUGE_EVERY and _DSH["ctx"] is not None:
+            return dict(_DSH)
+    ctx = mx = pct = None
+    try:
+        out = subprocess.run([PY, GAUGE], capture_output=True, text=True,
+                             timeout=60, encoding="utf-8", errors="replace",
+                             creationflags=NO_WINDOW).stdout or ""
+        for line in out.splitlines():
+            if "[上下文]" in line:
+                # [上下文] 123K · OK（12.3% / 上限 1.00M）· 调用 245 次
+                seg = line.split("·")
+                ctx = _parse_k(seg[0].split("]")[-1].strip())
+                for s in seg[1:]:
+                    if "%" in s:
+                        try:
+                            pct = float(s.split("（")[1].split("%")[0])
+                        except Exception:
+                            pass
+                    if "上限" in s:
+                        mx = _parse_k(s.split("上限")[-1].split("）")[0].strip())
+                break
+    except Exception:
+        pass
+    with _LOCK:
+        _DSH.update({"at": now, "ctx": ctx, "max": mx, "pct": pct})
+        return dict(_DSH)
+
+
+def _parse_k(s):
+    s = s.strip().replace(",", "")
+    try:
+        if s.upper().endswith("K"):
+            return int(float(s[:-1]) * 1000)
+        if s.upper().endswith("M"):
+            return int(float(s[:-1]) * 1000000)
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def hermes_watermark():
+    d = read_json(HCTX)
+    if not d:
+        return None
+    if file_age(HCTX) > 600:
+        return None
+    return {"ctx": d.get("ctx"), "max": d.get("max"), "pct": d.get("pct"),
+            "model": d.get("model")}
+
+
+# ── 守护健康 ─────────────────────────────────────────────────────────
+def daemon_health():
+    st = read_json(STATUS)
+    if not st:
+        return False, "状态文件缺失", {}
+    tasks = st.get("tasks") or {}
+    failed = [k for k, v in tasks.items() if v.get("ok") is False]
+    busy = [k for k, v in tasks.items() if v.get("busy")]
+    age = file_age(STATUS)
     if age > STALE:
-        return (220, 60, 60), "SysPersona · 守护可能已停（%d 分钟未更新）" % int(age // 60), lines
+        return False, "守护可能已停（%d 分钟未更新）" % int(age // 60), tasks
+    if failed:
+        return False, "任务失败：%s" % ",".join(failed[:3]), tasks
     if busy:
-        return (230, 170, 40), "SysPersona · 忙碌中", lines
-    return (60, 170, 90), "SysPersona · 正常", lines
+        return True, "忙碌中：%s" % ",".join(busy[:3]), tasks
+    return True, "正常", tasks
 
 
-def make_icon(rgb):
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+# ── 汇总一帧 ─────────────────────────────────────────────────────────
+def snapshot():
+    clients = running_clients()
+    dsh = dsh_watermark()
+    hm = hermes_watermark()
+    ok, msg, tasks = daemon_health()
+
+    wm = dsh if dsh.get("ctx") else hm
+    pct = (wm or {}).get("pct")
+    ctx = (wm or {}).get("ctx")
+    mx = (wm or {}).get("max")
+    who = "DSH" if dsh.get("ctx") else ("Hermes" if hm else "—")
+
+    if not ok:
+        color = (220, 60, 60)
+    elif pct is not None and pct >= 80:
+        color = (220, 60, 60)
+    elif pct is not None and pct >= 35:
+        color = (230, 170, 40)
+    else:
+        color = (60, 170, 90)
+
+    title = "SysPersona · 水位 %s/%s (%s) · %s" % (
+        human(ctx), human(mx), ("%.0f%%" % pct) if pct is not None else "?", who)
+    if not ok:
+        title += " · 守护异常"
+    return {"color": color, "title": title, "pct": pct, "clients": clients,
+            "dsh": dsh, "hermes": hm, "daemon": (ok, msg, tasks)}
+
+
+# ── 画图标：进度环 ───────────────────────────────────────────────────
+def make_icon(color, pct):
+    S = 64
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.ellipse((6, 6, 58, 58), fill=rgb + (255,), outline=(20, 20, 20, 255), width=3)
+    d.ellipse((6, 6, S - 6, S - 6), outline=(70, 70, 70, 255), width=7)
+    frac = 0.0 if pct is None else max(0.0, min(1.0, pct / 100.0))
+    if frac > 0:
+        d.arc((6, 6, S - 6, S - 6), start=-90, end=-90 + int(360 * frac),
+              fill=color + (255,), width=7)
+    d.ellipse((24, 24, S - 24, S - 24), fill=color + (255,))
     return img
 
 
+# ── 弹窗：详细状态 ───────────────────────────────────────────────────
+def detail_text(s):
+    out = [s["title"], ""]
+    out.append("【客户端】")
+    if s["clients"]:
+        for name, alive, note in s["clients"]:
+            out.append("  %s %s" % ("●" if alive else "○", name) + ("  " + note if note else ""))
+    else:
+        out.append("  （没检测到已知客户端）")
+    out.append("")
+    out.append("【水位】")
+    d, h = s["dsh"], s["hermes"]
+    out.append("  DSH    %s" % ("%s / %s" % (human(d.get("ctx")), human(d.get("max")))
+                                if d.get("ctx") else "未测到"))
+    out.append("  Hermes %s" % ("%s / %s" % (human(h.get("ctx")), human(h.get("max")))
+                                if h else "未在跑"))
+    out.append("")
+    ok, msg, tasks = s["daemon"]
+    out.append("【守护】%s %s" % ("●" if ok else "●", msg))
+    for name in ("hctx", "export", "index", "backup2", "todo", "proxy"):
+        t = tasks.get(name)
+        if not t:
+            continue
+        out.append("  %-8s %s  %s" % (name, "OK " if t.get("ok") else "FAIL",
+                                      (t.get("msg") or "")[:50]))
+    return "\n".join(out)
+
+
 def show_status(icon=None, item=None):
-    st = read_status()
-    rgb, text, lines = evaluate(st)
-    body = text + "\n\n" + ("\n".join(lines) if lines else "（无任务）")
+    text = detail_text(snapshot())
     try:
         import tkinter as tk
         from tkinter import messagebox
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        messagebox.showinfo("SysPersona", body)
+        messagebox.showinfo("SysPersona 状态", text)
         root.destroy()
     except Exception:
-        print(body)
+        print(text)
 
 
 def open_log(icon=None, item=None):
@@ -110,54 +294,29 @@ def quit_app(icon, item=None):
     icon.stop()
 
 
+# ── 主循环 ───────────────────────────────────────────────────────────
 def refresh(icon):
     while True:
-        rgb, text, _ = evaluate(read_status())
-        if (rgb, text) != (_state["color"], _state["text"]):
-            _state["color"], _state["text"] = rgb, text
-            icon.icon = make_icon(rgb)
-            icon.title = text
-        time.sleep(5)
-
-
-def pool_summary():
-    """任务池只读摘要（v5.5）：只显示，不决策。"""
-    p = os.path.join(OPS, "tasks.jsonl")
-    if not os.path.exists(p):
-        return "任务池：空"
-    st = {}
-    for line in io.open(p, encoding="utf-8", errors="replace"):
-        line = line.strip()
-        if not line:
-            continue
         try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        st[r.get("id")] = r
-    rows = [r for r in st.values() if r.get("status") in ("pending", "claimed", "running")]
-    if not rows:
-        return "任务池：空"
-    out = ["任务池 %d 条：" % len(rows)]
-    for r in sorted(rows, key=lambda x: x.get("prio", 5))[:5]:
-        out.append("  p%s %s %s" % (r.get("prio", 5), r.get("status", ""), (r.get("title") or "")[:18]))
-    return "\n".join(out)
-
-
-def show_pool(icon=None, item=None):
-    import ctypes
-    ctypes.windll.user32.MessageBoxW(0, pool_summary(), "任务池（只读）", 0x40)
+            s = snapshot()
+            icon.icon = make_icon(s["color"], s["pct"])
+            icon.title = s["title"][:120]
+        except Exception:
+            pass
+        time.sleep(TICK)
 
 
 def main():
-    rgb, text, _ = evaluate(read_status())
+    if "--probe" in sys.argv:
+        print(detail_text(snapshot()))
+        return
+    s = snapshot()
     icon = pystray.Icon(
         "SysPersona",
-        icon=make_icon(rgb),
-        title=text,
+        icon=make_icon(s["color"], s["pct"]),
+        title=s["title"][:120],
         menu=pystray.Menu(
-            pystray.MenuItem("查看状态", show_status, default=True),
-            pystray.MenuItem("任务池", show_pool),
+            pystray.MenuItem("状态", show_status, default=True),
             pystray.MenuItem("打开日志", open_log),
             pystray.MenuItem("打开记忆库", open_mem),
             pystray.Menu.SEPARATOR,
