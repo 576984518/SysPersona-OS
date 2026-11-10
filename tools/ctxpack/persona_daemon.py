@@ -157,11 +157,12 @@ DEFAULTS = {
     "sfbalance": 21600,          # 硅基余额快照：6 小时一班（脚本自己还有 6 小时闸门，重复调用不重复抓）
     "dsbalance": 1800,           # DeepSeek 余额：官方接口，半小时一次（不花 token，只防见底）
     "dr": 60,                    # 容灾：每分钟读一次 dr-plan.json，条件到了触发预建任务
+    "drpreflight": 1800,        # 容灾自检：半小时一遍，查版本/当前会话备胎/任务是否齐
 }
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
                 "watermark": 120, "cost": 120, "selfcheck": 60, "sfbalance": 240,
-                "dsbalance": 120, "dr": 90}
+                "dsbalance": 120, "dr": 90, "drpreflight": 120}
 
 
 def now():
@@ -1212,6 +1213,19 @@ def t_dr():
     return d.get("action") == "ok", "%s ｜ %s" % (d.get("action"), why[:60])
 
 
+def t_drpreflight():
+    r"""容灾自检（2026-11-10 加）：三套版本在不在、当前会话的备胎是谁、任务齐不齐。
+
+    人问的：「每次心跳唤醒还有维护任务不是有检查吗？检查当前会话是否有容灾备份配置。」
+    它只读、不动手；结果落 ops\dr-preflight.json，唤醒简讯里也带一行。
+    """
+    sys.path.insert(0, ROOT)
+    import persona_watchdog as W
+    d = W.preflight()
+    line = W.preflight_line()
+    return bool(d.get("ok")), line[:120]
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -1241,6 +1255,7 @@ TASKS = {
     "sfbalance": t_sfbalance,
     "dsbalance": t_dsbalance,
     "dr": t_dr,
+    "drpreflight": t_drpreflight,
 }
 
 

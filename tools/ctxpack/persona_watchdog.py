@@ -768,6 +768,112 @@ def enact(what, dry=False):
     return 0 if all(x["ok"] for x in out) else 4
 
 
+def preflight():
+    r"""容灾自检：只看、不动手。回答「现在这台机器上，容灾这套东西是齐的吗」。
+
+    人 2026-11-10 要的：「每次心跳唤醒还有维护任务不是有检查吗？检查当前会话是否有容灾备份配置。」
+    所以每次唤醒/每次维护都该问一遍：
+      1. 三套固定版本在不在、解出来的 provider/model 对不对；
+      2. 当前会话记住的是哪个模型（它自己记的，不是配置里的），在链上第几格、备胎是谁；
+      3. 预建任务齐不齐、开关开没开、有没有蹲住闸。
+    """
+    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "ok": True, "problems": []}
+    # 1) 版本文件
+    vers = []
+    prof_dir = os.path.join(OPS, "profiles")
+    for name in ("paid", "cloud", "local"):
+        p = os.path.join(prof_dir, name + ".yml")
+        item = {"name": name, "ok": False, "provider": "", "model": ""}
+        try:
+            with io.open(p, encoding="utf-8") as f:
+                txt = f.read()
+            prov = model = ""
+            in_blk = False
+            for ln in txt.splitlines():
+                if ln.startswith("- id: agent-default-model"):
+                    in_blk = True
+                    continue
+                if in_blk:
+                    if ln.startswith("- id:"):
+                        in_blk = False
+                    elif ln.strip().startswith("provider:"):
+                        prov = ln.split(":", 1)[1].strip()
+                    elif ln.strip().startswith("model:"):
+                        model = ln.split(":", 1)[1].strip()
+            item.update({"ok": bool(prov and model), "provider": prov, "model": model})
+        except OSError:
+            item["error"] = "缺文件"
+        if not item["ok"]:
+            out["ok"] = False
+            out["problems"].append("版本 %s 不可用" % name)
+        vers.append(item)
+    out["versions"] = vers
+
+    # 2) 当前会话记住的模型 + 它在链上的下一格
+    ch = chain()
+    sess = {"file": "", "provider": "", "model": "", "next": "", "on_chain": False}
+    try:
+        sys.path.insert(0, ROOT)
+        import persona_session_model as SM
+        f = SM.find("")
+        if f:
+            lu = SM.get_last_used(SM.load(f))
+            sess.update({"file": os.path.basename(f),
+                         "provider": lu.get("provider") or "",
+                         "model": lu.get("model") or ""})
+    except Exception as e:                 # noqa: BLE001
+        sess["error"] = str(e)[:80]
+    idx = next((i for i, c in enumerate(ch)
+                if c.get("provider") == sess["provider"] and c.get("model") == sess["model"]), None)
+    if idx is None:
+        sess["on_chain"] = False
+        # 记着的模型不在链上（比如手选的奇怪组合）→ 下一格就是链头
+        sess["next"] = (ch[0].get("label") if ch else "")
+    else:
+        sess["on_chain"] = True
+        nxt = ch[(idx + 1) % len(ch)]
+        sess["next"] = nxt.get("label") or ""
+    out["session"] = sess
+    if not sess["provider"]:
+        out["problems"].append("读不到当前会话记的模型")
+        out["ok"] = False
+
+    # 3) 任务 / 开关 / 蹲住闸
+    names = [t["name"] for t in plan_tasks()]
+    miss = [n for n in names if not task_exists(n)]
+    out["tasks"] = {"total": len(names), "missing": miss}
+    if miss:
+        out["ok"] = False
+        out["problems"].append("任务缺失：%s" % "、".join(miss))
+    out["switch_on"] = switch()["on"]
+    out["hold"] = os.path.exists(HOLD)
+    out["stale_after"] = stale_after()
+    out["beat_s"] = heartbeat_interval()
+
+    try:
+        _write_json(os.path.join(OPS, "dr-preflight.json"), out)
+    except OSError:
+        pass
+    return out
+
+
+def preflight_line():
+    """自检结果压成一行，给唤醒简讯/日志用。"""
+    d = _read_json(os.path.join(OPS, "dr-preflight.json"), {}) or {}
+    if not d:
+        return "容灾自检：还没跑过"
+    vers = "、".join("%s%s" % (v["name"], "✔" if v.get("ok") else "✘")
+                    for v in d.get("versions") or [])
+    s = d.get("session") or {}
+    tk = d.get("tasks") or {}
+    total = int(tk.get("total") or 0)
+    ready = total - len(tk.get("missing") or [])
+    return ("容灾自检：版本 %s ｜ 当前会话 %s/%s → 备胎「%s」｜ 任务 %d/%d ｜ 开关%s"
+            % (vers, s.get("provider") or "?", s.get("model") or "?",
+               s.get("next") or "?", ready, total,
+               "开" if d.get("switch_on") else "关"))
+
+
 def pick(which, dry=False):
     """手动选一个模型档并执行：cloud（云端免费）/ local（本地）/ paid（云端收费）。
 
@@ -878,7 +984,7 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
 def main(argv=None):
     ap = argparse.ArgumentParser(description="看门狗 / 容灾保底（心跳 → 网络 → 模型链 → 动作）")
     ap.add_argument("cmd", nargs="?", default="check",
-                    choices=["check", "dr", "install", "enact", "pick", "verify", "tasks"])
+                    choices=["check", "dr", "install", "enact", "pick", "verify", "tasks", "preflight"])
     ap.add_argument("arg", nargs="?", default="")
     ap.add_argument("--stale", type=float, default=None,
                     help="心跳超过多少秒算死（默认取 dr-plan.json 的 stale_after）")
@@ -910,6 +1016,16 @@ def main(argv=None):
 
     if a.cmd == "pick":
         return pick(a.arg, dry=a.dry)
+
+    if a.cmd == "preflight":
+        d = preflight()
+        if a.as_json:
+            print(json.dumps(d, ensure_ascii=False, indent=1))
+        else:
+            print(preflight_line())
+            for x in d.get("problems") or []:
+                print("  ⚠ " + x)
+        return 0 if d.get("ok") else 3
 
     if a.cmd == "verify":
         if not task_exists("SysPersona-DR-Restart"):

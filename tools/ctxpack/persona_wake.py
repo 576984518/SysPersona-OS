@@ -465,6 +465,31 @@ def _dr_line():
         return "🛟 容灾：（判不出来：%s）" % str(e)[:40]
 
 
+def _drcheck_line():
+    """🩺 容灾自检：读后台落下的 ops\\dr-preflight.json（谁跑谁写，这里只读）。"""
+    try:
+        import io as _io
+        import json as _json
+        p = os.path.join(ROOT, "ops", "dr-preflight.json")
+        if not os.path.exists(p):
+            return "🩺 容灾自检：还没跑过（python persona_watchdog.py preflight）"
+        with _io.open(p, encoding="utf-8-sig") as f:
+            d = _json.load(f) or {}
+        sess = d.get("session") or {}
+        tk = d.get("tasks") or {}
+        total = int(tk.get("total") or 0)
+        miss = len(tk.get("missing") or [])
+        vers = "、".join("%s%s" % (v.get("name"), "✔" if v.get("ok") else "✘")
+                         for v in (d.get("versions") or []))
+        return ("🩺 容灾自检（%s）：版本 %s ｜ 本会话 %s/%s → 备胎「%s」｜ 任务 %d/%d%s"
+                % (str(d.get("at") or "")[11:16], vers,
+                   sess.get("provider") or "?", sess.get("model") or "?",
+                   sess.get("next") or "?", total - miss, total,
+                   ("（缺 %d）" % miss) if miss else ""))
+    except Exception as e:                     # noqa: BLE001
+        return "🩺 容灾自检：（判不出来：%s）" % str(e)[:40]
+
+
 def render_brief(b):
     head = "唤醒简讯 %s（%s）" % (b.get("at", ""), b.get("purpose", ""))
     lines = [head]
@@ -475,6 +500,7 @@ def render_brief(b):
         lines.append("设定已重读（30 分钟内、内容没变）")
     lines.append(_fallback_line())
     lines.append(_dr_line())
+    lines.append(_drcheck_line())
     lines += ["",
               "醒后先做三件（顺序不许换）：",
               "  ① 读设定（按序）：" + " → ".join(s.split("\\")[-1] for s in SETTINGS),
