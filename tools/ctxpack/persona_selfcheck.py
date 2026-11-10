@@ -2,16 +2,21 @@
 r"""persona_selfcheck.py — 心跳自检：7 项，单项失败不拖垮整体，目标 < 8 秒
 
 每次心跳（守护 TASK selfcheck，120 秒）跑一遍，逐项判定后写 `ops\selfcheck.json`：
-    {at, items: {名: {ok, detail}}, summary}
+    {at, items: {名: {ok, status, detail}}, summary}
+status 三态：`ok` / `skip`（平台不符，非 Windows 上判不了）/ `fail`。
 
 七项：
-    tray      托盘进程在不在（命令行含 persona_tray.py）
-    daemon    守护进程 + ops\persona.log 最后一行是否 < 5 分钟
+    tray      托盘进程在不在（命令行含 persona_tray.py）       ← 仅 Windows
+    daemon    守护进程 + ops\persona.log 最后一行是否 < 5 分钟  ← 仅 Windows（进程表）
     watermark 壳口径 pressureTokens 与 ops\dsh-ctx.json 最近一次读数是否一致（≤5%）
     cdp       127.0.0.1:9222/json/version 是否有响应；recapture.lock 超 35 分钟只报 lock_stale
-    inject    注入闸：连续失败 ≥3 或距上次成功 >60 分钟（阈值只认 persona_inject）
+    inject    注入闸：连续失败 ≥3 或距上次成功 >60 分钟（阈值只认 persona_inject）← 仅 Windows
     queue     inflight 条数 / tasks 未完成条数（只报数字，不判红）
     cost      今日 ¥ + calls + 余额（ledger 读不到就判红；余额 < ¥5 每天一次 warn）
+
+平台归类：托盘/守护靠 wmic/PowerShell 枚举进程表，注入闸依赖 ctypes.wintypes + user32，
+这三项在非 Windows 上判 `skip`（detail 写「平台不符（非 Windows）：…」），不判 `fail`；
+Windows 上照旧判 fail，真失败不许降级成 skip。
 
 用法：
     python persona_selfcheck.py --once     # 一行汇总（心跳用 --quiet）
@@ -30,6 +35,7 @@ import time
 import urllib.request
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+WIN = os.name == "nt"
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
@@ -95,6 +101,18 @@ BALANCE_LOW = 5.0        # 元
 ORDER = ("tray", "daemon", "watermark", "cdp", "inject", "queue", "cost")
 LABEL = {"tray": "托盘", "daemon": "守护", "watermark": "水位", "cdp": "CDP",
          "inject": "注入", "queue": "队列", "cost": "成本"}
+
+# 平台归类：判据本身只能在 Windows 上取到的项。非 Windows 上判 skip、不判 fail——
+# 把「平台没这个能力」记成缺陷，会把真正的失败淹掉。Windows 上这里完全不生效。
+WIN_ONLY = {
+    "tray": "托盘进程靠 wmic/PowerShell 枚举进程表，非 Windows 上取不到",
+    "daemon": "守护进程靠 wmic/PowerShell 枚举进程表，非 Windows 上取不到",
+    "inject": "注入闸依赖 ctypes.wintypes / user32，非 Windows 上导入不了",
+}
+
+STATUS_OK = "ok"
+STATUS_SKIP = "skip"
+STATUS_FAIL = "fail"
 
 
 # ── 小工具 ───────────────────────────────────────────────────────────
@@ -464,14 +482,27 @@ ITEMS = {"tray": item_tray, "daemon": item_daemon, "watermark": item_watermark,
 def run():
     items = {}
     for name in ORDER:
-        try:
-            ok, detail = ITEMS[name]()
-        except Exception as e:                       # 单项失败不许拖垮整体
-            ok, detail = False, "自检项异常：%s" % str(e)[:100]
-        items[name] = {"ok": bool(ok), "detail": str(detail)}
+        why = WIN_ONLY.get(name)
+        if why and not WIN:
+            status, detail = STATUS_SKIP, "平台不符（非 Windows）：" + why
+        else:
+            try:
+                ok, detail = ITEMS[name]()
+            except Exception as e:                   # 单项失败不许拖垮整体
+                ok, detail = False, "自检项异常：%s" % str(e)[:100]
+            status = STATUS_OK if ok else STATUS_FAIL
+        items[name] = {"ok": status == STATUS_OK, "status": status, "detail": str(detail)}
     doc = {"at": _now(), "items": items, "summary": ""}
     doc["summary"] = _summary(doc)
     return doc
+
+
+def _status(v):
+    """三态；兼容旧 selfcheck.json（只有 ok 布尔）。"""
+    st = (v or {}).get("status")
+    if st in (STATUS_OK, STATUS_SKIP, STATUS_FAIL):
+        return st
+    return STATUS_OK if (v or {}).get("ok") else STATUS_FAIL
 
 
 def _short(name, detail):
@@ -498,19 +529,31 @@ def _short(name, detail):
 def _summary(doc):
     items = doc.get("items") or {}
     total = len(items)
-    ok = sum(1 for v in items.values() if v.get("ok"))
-    if total and ok == total:
-        return "%d/%d OK" % (ok, total)
+    counts = {STATUS_OK: 0, STATUS_SKIP: 0, STATUS_FAIL: 0}
+    for name in ORDER:
+        counts[_status(items.get(name))] += 1
+    # Windows 全绿时保持老格式（守护面板/log 都按 7/7 读）。
+    if total and counts[STATUS_OK] == total:
+        return "%d/%d OK" % (counts[STATUS_OK], total)
+    line = "OK %d · SKIP %d · FAIL %d" % (
+        counts[STATUS_OK], counts[STATUS_SKIP], counts[STATUS_FAIL])
+    skipped = [LABEL.get(n, n) for n in ORDER
+               if _status(items.get(n)) == STATUS_SKIP]
+    if skipped:
+        line += " · 跳过 " + "/".join(skipped)
     bad = []
     for name in ORDER:
         v = items.get(name) or {}
-        if not v.get("ok"):
-            short = _short(name, v.get("detail") or "")
-            if name == "cost" and short.startswith("余额 "):
-                bad.append(short)          # 例：[自检] 5/7 · 托盘 缺 · 余额 ¥4.20
-            else:
-                bad.append("%s %s" % (LABEL.get(name, name), short))
-    return "%d/%d · %s" % (ok, total, " · ".join(bad) or "—")
+        if _status(v) != STATUS_FAIL:
+            continue
+        short = _short(name, v.get("detail") or "")
+        if name == "cost" and short.startswith("余额 "):
+            bad.append(short)          # 例：[自检] 5/7 · 托盘 缺 · 余额 ¥4.20
+        else:
+            bad.append("%s %s" % (LABEL.get(name, name), short))
+    if bad:
+        line += " · " + " · ".join(bad)
+    return line
 
 
 def _append_log(line):
@@ -531,7 +574,8 @@ def _same_state(a, b):
     ai, bi = a.get("items") or {}, b.get("items") or {}
     if set(ai) != set(bi):
         return False
-    return all(bool(ai[k].get("ok")) == bool(bi[k].get("ok")) for k in ai)
+    # 比三态而不是 ok 布尔：fail → skip（或反过来）也算状态变了，要落一行日志。
+    return all(_status(ai[k]) == _status(bi[k]) for k in ai)
 
 
 def main(argv):

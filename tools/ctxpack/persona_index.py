@@ -7,6 +7,9 @@
   3. 非对话文件（README/SKILL/DECISIONS/报告）按段落切块，不再被整份丢弃；
   4. 先写 .tmp 再原子替换，重建期间旧索引始终可用。
 
+numpy 是可选依赖（只向量路用）：缺失时跳过向量索引、不碰 vectors.npy/meta.jsonl，
+一级索引（persona_index_l1.py）与 FTS（persona_fts.py）照常；两者都是纯标准库。
+
 用法：
   python persona_index.py            # 增量（第一次等于全量）
   python persona_index.py --dry-run  # 只报要嵌多少块
@@ -22,7 +25,15 @@ import time
 import urllib.error
 import urllib.request
 
-import numpy as np
+# numpy 只在向量索引路用；一级索引（persona_index_l1.py）和 FTS（persona_fts.py）
+# 都不需要它。没装 numpy 的机器上，这里必须能 import 成功、然后跳过向量索引——
+# 别让「索引」因为一个可选依赖整个起不来。
+try:
+    import numpy as np
+except Exception:                       # 没装 numpy 是正常状态，不是错误
+    np = None
+if os.environ.get('PERSONA_NO_NUMPY'):
+    np = None                           # 验证降级路径：等价于这台机器没装 numpy
 
 from persona_root import find_root as _find_root  # noqa: E402  唯一实现：persona_root.py
 
@@ -36,10 +47,29 @@ SEP_BLOCK = re.compile(r'\n\n---\n\n')
 MSG_HEAD = re.compile(r'##\s*(用户|助手)\s*\n(.*)', re.S)
 
 sys.path.insert(0, ROOT)
-import vs  # noqa: E402
+try:
+    import vs  # noqa: E402
+except Exception as _e:                 # vs 自己 import numpy，缺依赖时也走跳过
+    vs = None
+    _VS_ERR = str(_e)[:80]
+else:
+    _VS_ERR = ''
+    if os.environ.get('VS_API'):
+        vs.API = os.environ['VS_API']
 
-if os.environ.get('VS_API'):
-    vs.API = os.environ['VS_API']
+
+# 向量路是否可用：numpy 与嵌入后端都在才算。缺一样就跳过，不落到 AttributeError。
+def vec_ready():
+    return np is not None and vs is not None
+
+
+def _say_no_vec():
+    """一行人话，说明跳过的只是向量索引，文本索引与 FTS 不受影响。"""
+    if np is None:
+        print('[index] numpy 未安装 → 跳过向量索引，文本索引与 FTS 仍可用', flush=True)
+    elif vs is None:
+        print('[index] 嵌入后端不可用（%s）→ 跳过向量索引，文本索引与 FTS 仍可用'
+              % _VS_ERR, flush=True)
 
 
 def sha(path):
@@ -169,6 +199,10 @@ def backfill_fields(dry_run=False):
 
 def safe_embed(texts, depth=0):
     """单条坏样本不能拖垮整轮 8 万字的嵌入：失败就对半拆，最后兜底截断重试。"""
+    if np is None:
+        raise RuntimeError('numpy 未安装，向量路不可用')
+    if vs is None:
+        raise RuntimeError('嵌入后端不可用：%s' % _VS_ERR)
     try:
         return vs.embed(texts)
     except Exception as e:
@@ -196,6 +230,8 @@ TOKENS = [0]
 
 
 def _cloud_post(batch):
+    if np is None:
+        raise RuntimeError('numpy 未安装，向量路不可用')
     payload = json.dumps({'model': CLOUD_MODEL, 'input': batch}, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(CLOUD_API, data=payload, headers={
         'Content-Type': 'application/json',
@@ -209,6 +245,8 @@ def _cloud_post(batch):
 
 
 def cloud_embed(texts):
+    if np is None:
+        raise RuntimeError('numpy 未安装，向量路不可用')
     for attempt in range(5):
         try:
             return _cloud_post(texts)
@@ -231,6 +269,10 @@ def fill_missing_main():
     全量重嵌 1.5 万块要 2 个多小时；补首句只有一两百块，一两分钟。
     幂等：跑第二遍时这些块已在，直接报 0。
     """
+    if np is None or vs is None:
+        _say_no_vec()
+        print('（--fill-missing 只补向量块，已跳过；文本索引与 FTS 不受影响）', flush=True)
+        return 0
     mp = os.path.join(IDX, 'meta.jsonl')
     vp = os.path.join(IDX, 'vectors.npy')
     if not (os.path.exists(mp) and os.path.exists(vp)):
@@ -327,7 +369,9 @@ def main():
 
     old_vecs = None
     old_metas = []
-    if os.path.exists(os.path.join(IDX, 'vectors.npy')):
+    if np is None:
+        old_vecs, old_metas = None, []        # 没有 numpy：旧向量读不了，按全量统计
+    elif os.path.exists(os.path.join(IDX, 'vectors.npy')):
         try:
             old_vecs = np.load(os.path.join(IDX, 'vectors.npy'))
             old_metas = [json.loads(l) for l in io.open(os.path.join(IDX, 'meta.jsonl'), encoding='utf-8') if l.strip()]
@@ -365,6 +409,17 @@ def main():
 
     print('文件 %d｜未变 %d｜待重嵌 %d 个文件 / %d 块｜总块 %d'
           % (len(files), len(files) - len(todo), len(todo), len(new_texts), len(keep) + len(new_texts)), flush=True)
+
+    if not vec_ready():
+        # 没有 numpy（或嵌入后端导入不了）：跳过向量索引，**不写** vectors.npy /
+        # meta.jsonl / manifest.json。meta 必须和 vectors 行数一一对应，只写文本那半
+        # 会让下一次有 numpy 的增量把旧行当成「已是最新」，反而丢块；manifest 同理。
+        # 文本侧（一级索引 L1、FTS）由 persona_index_l1.py / persona_fts.py 负责，
+        # 两者都只用标准库，不受这里影响。
+        _say_no_vec()
+        print('向量索引未更新（%d 块待嵌）；文本索引与 FTS 照常可用（都不依赖 numpy）'
+              % len(new_texts), flush=True)
+        return 0
     if a.dry_run:
         return
 

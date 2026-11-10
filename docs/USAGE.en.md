@@ -41,7 +41,7 @@ permissions all differ.
 
 | Layer | Needs | Without it |
 |---|---|---|
-| Core: index / retrieval / self-test | **standard library only** (Python 3.10+) | nothing |
+| Core: index / retrieval / self-test | **core paths are stdlib-first; the vector path optionally needs `numpy` (auto-skipped if missing), Chinese tokenization optionally uses `jieba` (falls back to char bigrams if missing)** (Python 3.10+) | nothing |
 | Local semantic retrieval (optional) | `bge-m3` + vector deps | falls back to keyword search |
 | Tray | `pystray` + `Pillow` | no tray icon; background jobs still run |
 | Platform | Windows (`msvcrt` / `winreg`) | will not run elsewhere - by design, not a bug |

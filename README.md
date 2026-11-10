@@ -148,7 +148,7 @@ python tools/persona/selftest.py
 python tools/ctxpack/persona_daemon.py --once <任务名>   # 例如 hctx / tasks / daily / observe
 ```
 
-**依赖**：核心（索引/检索/自检）= 纯标准库；托盘要 `pystray` + `Pillow`；本地语义检索要 `bge-m3`，没有就自动退回关键词；`msvcrt` / `winreg` 属 Windows 专有，别的平台跑不了（本仓库只承诺 Windows 端）。
+**依赖**：核心链路以标准库为主；向量路可选依赖 numpy（缺失自动跳过），中文分词可选 jieba（缺失自动回落字二元）；托盘要 `pystray` + `Pillow`；本地语义检索要 `bge-m3`，没有就自动退回关键词；`msvcrt` / `winreg` 属 Windows 专有，别的平台跑不了（本仓库只承诺 Windows 端）。
 
 ## 怎么读这个仓库
 
