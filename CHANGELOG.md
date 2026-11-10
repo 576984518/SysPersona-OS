@@ -16,6 +16,21 @@
 
 ---
 
+## 日常降级到免费底座（不占新号）— 2026-11-10：重要才花钱
+
+**范围**：`tools/ctxpack/persona_llm.py` 加任务分级与自动退路；`persona_fallback.py` 支持多来源余额（硅基自动 + DeepSeek 手工）与警戒线。不发版。
+
+**规则（人定）**：**日常任务一律降级到免费底座**——自检、索引、观察、抓取、整理、摘要、翻译这类，本机能跑就跑本机，本机没有在跑的对话模型就退硅基**免费**档；**重要任务不自动选路**（发布、审计、改代码、删除、迁移、决策），必须显式给 `--provider/--model`，免得默认烧钱。`--task 日常` 会打印选路理由，`--task 重要` 直接拒（退出码 2）。
+
+**实测**：Herdsman 的模型停着时，`--task 日常` 自动退到硅基免费档 `Qwen/Qwen2.5-7B-Instruct`，首字 **0.27 秒**、费用 0。顺手修了两处：免费名单里优先挑"纯对话"模型（有些免费模型只吐思考过程、content 为空）；只有思考内容时把思考当正文返回并标注，不再装作没回。
+
+**余额两条线**：`ops\fallback.json` 的 `balance_sources` 现在支持多家、每家自带 `warn`（警戒）与 `threshold`（降级）：
+- 硅基：`ops/sf-balance.json`（`sf_balance.js` 自动读页面，6 小时一班）；
+- DeepSeek：`ops/ds-balance.json`（官方接口读不到，`python persona_fallback.py balance --set 2.7306` 人工记一笔）；
+- 现值：硅基 ¥9.76、DeepSeek ¥2.73 → 唤醒简讯写「⚠ DeepSeek ¥2.73 偏低（警戒 5.00）」，但**不到 ¥1 不降级**，免得余额一低就把联网活全停掉。
+
+---
+
 ## 余额可读了（不占新号）— 2026-11-10：硅基余额改页面读，欠费降级才有真数据
 
 **范围**：新增 `tools/cdp_capture/sf_balance.js`；`persona_daemon` 加 `sfbalance` 任务（6 小时一班、脚本自带 6 小时闸门 + 24 小时最多 6 次）；`ops\fallback.json` 的 `balance_file` 指向 `ops\sf-balance.json`、阈值 ¥1。不发版。

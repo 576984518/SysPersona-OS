@@ -110,20 +110,70 @@ def _tcp_ok(ep, timeout=1.0):
         return False
 
 
+def _resolve(path):
+    """相对路径按库根解析（配置里写 `ops/sf-balance.json` 就够，不写死机器路径）。"""
+    p = str(path or "").strip()
+    if not p:
+        return ""
+    return p if os.path.isabs(p) else os.path.join(root_of(), p)
+
+
 def _balance(cfg):
-    """(数值, 说明)；读不到返回 (None, 原因)。绝不猜。"""
-    path = str(cfg.get("balance_file") or "").strip()
+    """(数值, 说明, 明细)；读不到返回 (None, 原因, {})。绝不猜。
+
+    支持两种写法：
+      * 老：`balance_file` + `balance_threshold`（单个来源）；
+      * 新：`balance_sources` = [{"path": ..., "threshold": 1.0, "label": "硅基"}, …]
+        任一来源低于自己的阈值 → 降级，原因里写清是哪家、多少、阈值多少。
+    """
+    sources = cfg.get("balance_sources")
+    if isinstance(sources, list) and sources:
+        lowest = None
+        detail = {"sources": []}
+        for s in sources:
+            if not isinstance(s, dict):
+                continue
+            path = _resolve(s.get("path"))
+            try:
+                thr = float(s.get("threshold") or 0)
+            except (TypeError, ValueError):
+                thr = 0.0
+            label = str(s.get("label") or os.path.basename(path) or "余额")
+            try:
+                warn = float(s.get("warn") or 0)
+            except (TypeError, ValueError):
+                warn = 0.0
+            data = _read_json(path, None) if path else None
+            val = None
+            if isinstance(data, dict):
+                for key in ("balance", "total", "available", "remaining"):
+                    try:
+                        val = float(data.get(key)); break
+                    except (TypeError, ValueError):
+                        continue
+            detail["sources"].append({"label": label, "value": val,
+                                      "threshold": thr, "warn": warn, "path": path})
+            if val is None:
+                continue
+            if lowest is None or val < lowest[0]:
+                lowest = (val, label, thr)
+        if lowest and lowest[2] > 0 and lowest[0] < lowest[2]:
+            return lowest[0], "余额 %.2f < 阈值 %.2f（%s）" % (
+                lowest[0], lowest[2], lowest[1]), detail
+        return (lowest[0] if lowest else None), "", detail
+
+    path = _resolve(cfg.get("balance_file"))
     if not path:
-        return None, "没配余额快照"
+        return None, "没配余额快照", {}
     data = _read_json(path, None)
     if not isinstance(data, dict):
-        return None, "余额文件读不到：%s" % path
+        return None, "余额文件读不到：%s" % path, {}
     for key in ("balance", "total", "available", "remaining"):
         try:
-            return float(data.get(key)), "来自 %s" % os.path.basename(path)
+            return float(data.get(key)), "来自 %s" % os.path.basename(path), {}
         except (TypeError, ValueError):
             continue
-    return None, "余额文件里没有可认的数字字段"
+    return None, "余额文件里没有可认的数字字段", {}
 
 
 def _decide(cfg):
@@ -138,12 +188,14 @@ def _decide(cfg):
         thr = float(cfg.get("balance_threshold") or 0)
     except (TypeError, ValueError):
         thr = 0.0
-    bal, why = _balance(cfg)
+    bal, why, bal_detail = _balance(cfg)
     detail["balance"] = bal
     detail["balance_why"] = why
     detail["balance_threshold"] = thr
-    if bal is not None and thr > 0 and bal < thr:
-        return True, "余额 %.2f < 阈值 %.2f（%s）" % (bal, thr, why), detail
+    if bal_detail:
+        detail["balance_sources"] = bal_detail.get("sources")
+    if bal is not None and why:
+        return True, why, detail
 
     targets = [t for t in (cfg.get("offline_targets") or []) if str(t).strip()]
     if cfg.get("probe") and targets:
@@ -181,17 +233,52 @@ def line(root=None):
         return ("⛑ 保底：%s —— 只做本机活（索引/检索/自检/压缩/重载），"
                 "抓取·联网检索·付费动作一律跳过；本地模型在线就它上"
                 % (s.get("why") or "已降级"))
+    srcs = s.get("balance_sources") or []
+    if srcs:
+        bits, warns = [], []
+        for r in srcs:
+            v = r.get("value")
+            txt = "¥%.2f" % v if isinstance(v, (int, float)) else "不可读"
+            bits.append("%s %s" % (r.get("label"), txt))
+            w = r.get("warn") or 0
+            if isinstance(v, (int, float)) and w and v < w:
+                warns.append("%s %s 偏低（警戒 %.2f）" % (r.get("label"), txt, w))
+        tail = " · ".join(bits)
+        if warns:
+            tail += "；⚠ " + "；".join(warns)
+        return "⛑ 保底：关（联网正常；%s）" % tail
     bal = s.get("balance")
     tail = "余额 %.2f" % bal if isinstance(bal, (int, float)) else "余额不可读"
     return "⛑ 保底：关（联网正常，%s）" % tail
 
 
+def ds_balance_path(root=None):
+    return os.path.join(root_of(root), "ops", "ds-balance.json")
+
+
+def set_ds_balance(value, source="", root=None):
+    """人工记一笔 DeepSeek 余额（接口读不到，只能人念数字）。
+
+    人 2026-11-10 在客户端余额行看到 `¥2.7306` —— 这类数字程序拿不到，
+    所以给一条明路：看见就记一笔，落 `ops\\ds-balance.json`，降级判定照用。
+    """
+    p = ds_balance_path(root)
+    snap = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "balance": float(value),
+            "currency": "CNY", "source": source or "人工录入"}
+    _write_json(p, snap)
+    return snap
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="保底判定：欠费或断网时唤醒自动降级")
-    ap.add_argument("cmd", nargs="?", default="state", choices=["state", "set"])
+    ap.add_argument("cmd", nargs="?", default="state",
+                    choices=["state", "set", "balance"])
     ap.add_argument("--root", default="")
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--force", action="store_true", help="state 强制重探，不用缓存")
+    ap.add_argument("--set", type=float, default=None, dest="set_value",
+                    help="balance 子命令：记一笔 DeepSeek 余额（客户端里看到的数字）")
+    ap.add_argument("--source", default="", help="balance 子命令：数字从哪来")
     ap.add_argument("--manual", default=None, help='set 钉住降级（如 "欠费"）/ off 表示恢复')
     ap.add_argument("--threshold", type=float, default=None, help="set 余额阈值")
     ap.add_argument("--balance-file", default=None, dest="balance_file",
@@ -199,6 +286,17 @@ def main(argv=None):
     ap.add_argument("--no-probe", action="store_true", help="set 关掉断网探测")
     a = ap.parse_args(argv)
     root = a.root or None
+
+    if a.cmd == "balance":
+        if a.set_value is None:
+            snap = _read_json(ds_balance_path(root), None)
+            print(json.dumps(snap or {"note": "还没记过"}, ensure_ascii=False, indent=1))
+            return 0
+        snap = set_ds_balance(a.set_value, a.source, root)
+        print("已记：DeepSeek 余额 ¥%.4f（%s）→ %s"
+              % (snap["balance"], snap["at"], ds_balance_path(root)))
+        print(line(root))
+        return 0
 
     if a.cmd == "set":
         cfg = load(root)

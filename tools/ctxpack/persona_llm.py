@@ -36,6 +36,23 @@ SF_ENV = "SILICONFLOW_API_KEY"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SF_FREE = os.path.join(ROOT, "ops", "sf-free.json")      # 日更的免费名单（persona_sf_models.py 抓）
 
+# 任务分级（人 2026-11-10 定）：**日常任务一律降级到免费底座**，重要任务才值得花钱。
+# 这里只给「日常」一个默认；「重要」不自动选路——得显式指定 provider/model，免得默认烧钱。
+ROUTINE = ("日常", "routine", "daily", "自检", "索引", "index", "观察", "observe",
+           "抓取", "capture", "整理", "归档", "summary", "摘要", "翻译", "分类")
+IMPORTANT = ("重要", "important", "发布", "release", "审计", "audit", "改代码",
+             "重构", "删除", "迁移", "决策")
+
+
+def route(task):
+    """任务名 → (provider, 说明)。日常=local；重要=不自动选（返回空）。"""
+    t = str(task or "").strip().lower()
+    if any(k in t for k in IMPORTANT):
+        return "", "重要任务不自动选底座：显式给 --provider/--model（或走客户端里的贵模型）"
+    if any(k in t for k in ROUTINE):
+        return "local", "日常任务 → 本机免费底座（失败再试硅基免费档）"
+    return "local", "没标级别，按日常处理 → 本机免费底座"
+
 # 铁律（人 2026-11-10 定）：硅基只用**免费模型**。名单来自日更缓存，不写死在代码里。
 # 要花钱必须显式 `--allow-paid`，默认一律拒。
 
@@ -72,6 +89,12 @@ def mask(k):
 
 def sf_free():
     """(免费模型 id 列表, 缓存时间, 是否过期)。名单来自 ops\\sf-free.json。"""
+    ids, at, stale = _read_free()
+    return ids, at, stale
+
+
+def _read_free(max_hours=20.0):
+    """读免费名单缓存；(ids, at, 是否过期)。超过 max_hours 就算过期。"""
     try:
         with open(SF_FREE, encoding="utf-8-sig") as f:
             d = json.load(f)
@@ -83,10 +106,50 @@ def sf_free():
     try:
         import datetime as _dt
         stamp = _dt.datetime.fromisoformat(at)
-        stale = (_dt.datetime.now() - stamp).total_seconds() > 36 * 3600
+        stale = (_dt.datetime.now() - stamp).total_seconds() > max_hours * 3600
     except (TypeError, ValueError):
         stale = not at
     return ids, at, stale
+
+
+def refresh_free(force=False):
+    """用之前先抓一次（人 2026-11-10 定）。
+
+    调 `persona_sf_models.py --refresh`，它自己带 20 小时闸门与 24 小时 2 次上限，
+    所以这里多叫几次也不会多抓。返回 (ok, 一句话)。
+    """
+    script = os.path.join(ROOT, "persona_sf_models.py")
+    if not os.path.exists(script):
+        return False, "找不到 persona_sf_models.py"
+    cmd = [sys.executable, script, "--refresh"]
+    if force:
+        cmd.append("--force")
+    try:
+        import subprocess
+        p = subprocess.run(cmd, capture_output=True, timeout=240,
+                           cwd=ROOT)
+        out = (p.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+        tail = out[-1] if out else ""
+        return p.returncode == 0, tail[:160] or ("退出码 %d" % p.returncode)
+    except Exception as e:                 # noqa: BLE001
+        return False, "抓取失败：%s" % str(e)[:120]
+
+
+def ensure_free(refresh=True):
+    """确保免费名单是新的：(ids, at, 说明)。
+
+    过期就当场抓一次；抓完还是过期 → 返回过期标记，调用方据此**拒绝**花钱的调用。
+    """
+    ids, at, stale = _read_free()
+    if not stale:
+        return ids, at, ""
+    if not refresh:
+        return ids, at, "名单已过期（%s），且本次 --no-refresh 不抓" % (at or "无缓存")
+    ok, msg = refresh_free()
+    ids2, at2, stale2 = _read_free()
+    if not stale2:
+        return ids2, at2, "已现抓：%s" % msg
+    return ids2, at2, "抓了但仍过期/没抓到（%s）：%s" % (at2 or "无缓存", msg)
 
 
 def pick_chat(rows):
@@ -119,25 +182,29 @@ def sf_models():
 
 
 def chat(prompt, provider="local", model="", max_tokens=256, timeout=180,
-         allow_paid=False):
+         allow_paid=False, refresh=True, fallback=True):
     """发一句、按流式收。返回 {provider, model, first_s, total_s, text, usage}。
 
     硅基一侧**只走免费模型**：不给 `--model` 就取免费名单第一个；
     给了但不在名单里，除非 `allow_paid=True`，否则直接拒（不花一分钱）。
+    动硅基之前先确保名单是新的（人 2026-11-10：要用之前最好抓一次）；
+    抓不到且名单过期 → **宁可不打**（陈旧名单可能把已收费的模型当免费）。
     """
     if provider == "sf":
         k, _ = sf_key()
         if not k:
             raise SystemExit("--provider sf 需要 %s（环境变量或用户注册表）" % SF_ENV)
-        free_ids, at, stale = sf_free()
+        free_ids, at, note = ensure_free(refresh=refresh)
+        if note:
+            print("· %s" % note, file=sys.stderr)
+        if not free_ids:
+            raise SystemExit("没有免费名单（%s）；先跑 python persona_sf_models.py --refresh"
+                             % SF_FREE)
         if not model:
-            if not free_ids:
-                raise SystemExit("没有免费名单缓存（%s）；先跑 python persona_sf_models.py --refresh"
-                                 % SF_FREE)
-            if stale:
-                print("⚠ 免费名单是 %s 抓的，可能已过期；建议先跑 persona_sf_models.py --refresh"
-                      % (at or "未知时间"), file=sys.stderr)
-            model = free_ids[0]
+            # 免费名单里优先挑"纯对话"的（有些免费模型只吐思考过程，content 是空的）
+            pref = [m for m in free_ids if any(k in m.lower() for k in
+                                               ("instruct", "-chat", "glm-4-9b"))]
+            model = (pref or free_ids)[0]
         elif model not in free_ids and not allow_paid:
             raise SystemExit("硅基只用免费模型：%s 不在免费名单里。\n免费的有（%d 个）：%s\n"
                              "确实要花钱就加 --allow-paid"
@@ -145,8 +212,16 @@ def chat(prompt, provider="local", model="", max_tokens=256, timeout=180,
         base, key = SF_BASE, k
         headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
     else:
-        base, model = LOCAL_BASE, model or pick_chat(local_models())
+        base = LOCAL_BASE
         if not model:
+            try:
+                model = pick_chat(local_models())
+            except Exception:             # noqa: BLE001
+                model = ""
+        if not model:
+            if fallback:
+                print("· 本机没有在跑的对话模型 → 退到硅基免费档", file=sys.stderr)
+                return chat(prompt, "sf", "", max_tokens, timeout, allow_paid, refresh)
             raise SystemExit("本机没有在跑的对话模型（只有 TTS/OCR 之类）；"
                              "在 Herdsman 里启动一个再试，或 --provider sf")
         headers = {"Content-Type": "application/json"}
@@ -156,7 +231,7 @@ def chat(prompt, provider="local", model="", max_tokens=256, timeout=180,
     req = urllib.request.Request(base + "/chat/completions",
                                  data=json.dumps(body).encode("utf-8"),
                                  headers=headers)
-    t0, first, chunks, usage = time.time(), None, [], {}
+    t0, first, chunks, usage, reasoning = time.time(), None, [], {}, []
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
@@ -173,14 +248,21 @@ def chat(prompt, provider="local", model="", max_tokens=256, timeout=180,
                 usage = d["usage"]
             delta = ((d.get("choices") or [{}])[0].get("delta") or {})
             txt = delta.get("content") or ""
+            think = delta.get("reasoning_content") or ""
+            if think:
+                reasoning.append(think)
             if txt:
                 if first is None:
                     first = time.time() - t0
                 chunks.append(txt)
+    text = "".join(chunks)
+    if not text and reasoning:        # 只有思考过程（有些免费模型就这样），别装作没回
+        text = "".join(reasoning)
+        usage = dict(usage or {}, note="只有思考内容（无正文）", model=model)
     return {"provider": provider, "model": model,
             "first_s": round(first, 2) if first is not None else None,
             "total_s": round(time.time() - t0, 2),
-            "text": "".join(chunks), "usage": usage}
+            "text": text, "usage": usage}
 
 
 def main(argv=None):
@@ -194,6 +276,9 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true", dest="as_json")
     ap.add_argument("--allow-paid", action="store_true", dest="allow_paid",
                     help="硅基：允许用不在免费名单里的模型（默认拒，一分钱不花）")
+    ap.add_argument("--task", default="", help="任务级别：日常/自检/索引… 走免费；重要 不自动选")
+    ap.add_argument("--no-refresh", action="store_true", dest="no_refresh",
+                    help="硅基：名单过期也不现抓（默认会先抓一次）")
     a = ap.parse_args(argv)
 
     if a.cmd == "check":
@@ -247,9 +332,17 @@ def main(argv=None):
     if not a.prompt.strip():
         print('chat 要一句话：python persona_llm.py chat "你好" --provider local')
         return 2
+    if a.task:
+        provider, why = route(a.task)
+        if not provider:
+            print(why)
+            return 2
+        print("· %s" % why, file=sys.stderr)
+        a.provider = provider
+
     try:
         r = chat(a.prompt.strip(), a.provider, a.model, a.max_tokens,
-                 allow_paid=a.allow_paid)
+                 allow_paid=a.allow_paid, refresh=not a.no_refresh)
     except SystemExit as e:
         print(str(e))
         return 2
