@@ -1,7 +1,10 @@
-# 全局索引（GLOBAL INDEX）
+﻿# 全局索引（GLOBAL INDEX）
 
 > 一句话：**索引是前置放大器——模型再聪明，也答不出没被喂进去的那段。**
 > 状态：v5.1.0 起为默认链路；实现在 `tools/ctxpack/persona_index.py` + `persona_index_l1.py` + `persona_search.py`。
+
+> **第一次来？先看 [`USAGE.md`](USAGE.md)。** 这套东西不发程序：把仓库交给一个 AI 智能体，
+> 让它按你的环境生成、并按验收七步自证。
 
 ## 一、四层，各管一段
 
