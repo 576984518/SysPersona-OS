@@ -10,6 +10,19 @@
 
 ---
 
+## 2026-11-10 — v5.7.0 网盘索引总线（**未发版**，tag / Release 待拍板）
+
+**范围**：新增 `tools/ctxpack/persona_cloud_bus.py`、`tools/ctxpack/persona_win.py`；新增 `docs/CLOUD_BUS_SPEC.md`；重写 `docs/TRAY_SPEC.md`（改名「托盘状态显示」，仍是 v5.2）。
+
+- 总线：`Hot_Bus\` 分片独占写、`Cold_Backup\` 冷备、`Archive\` 只移不删；写盘一律 tmp→rename。
+- 总索引 `MASTER_INDEX.md` 单写手：`msvcrt.locking` 非阻塞 + 10 秒超时，拿不到锁宁可这次不写。
+- 断网降级：盘符不存在或写入异常 → 追加 `ops\cloud-queue.jsonl`，`--flush` 幂等补交。
+- `persona_win.py`：`import` 即让本进程所有子进程带 `CREATE_NO_WINDOW`（修 pythonw 里 spawn 弹黑窗）。
+
+**证据**：指向不存在的盘 → `QUEUED` 且队列 +1；目录一出现 → `--flush` 全量补交、队列清空；3 进程并发写 → 0 个 `.conflict`、0 个残留 `.tmp`；总索引无重复表头、按时间倒序。
+
+---
+
 ## 2026-11-09 — B82 落地：分身 ID（avatar）与三层溯源（**未发版**）
 
 **范围**：新增 `tools/ctxpack/persona_avatar.py`；改 `persona_index_l1.py`、`persona_search.py`、`tools/persona/persona_master.py`。
