@@ -304,6 +304,21 @@ def detail_text(s):
     return "\n".join(out)
 
 
+
+def _dialog(text, title):
+    """独立线程弹框：托盘线程的消息泵不能被占住。"""
+    import threading
+    import ctypes
+
+    def run():
+        try:
+            ctypes.windll.user32.MessageBoxW(0, text, title, 0x40 | 0x40000)
+        except Exception:
+            print(text)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def show_status(icon=None, item=None):
     """原生 MessageBox。
 
@@ -312,11 +327,7 @@ def show_status(icon=None, item=None):
     改用 Win32 的 MessageBoxW：MB_ICONINFORMATION | MB_TOPMOST，一定能关。
     """
     text = detail_text(snapshot())
-    try:
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(0, text, "SysPersona 状态", 0x40 | 0x40000)
-    except Exception:
-        print(text)
+    _dialog(text, "SysPersona 状态")
 
 
 def open_log(icon=None, item=None):
@@ -397,8 +408,7 @@ def pool_text(limit=8):
 
 
 def show_pool(icon=None, item=None):
-    import ctypes
-    ctypes.windll.user32.MessageBoxW(0, pool_text(), "任务池（只读）", 0x40 | 0x40000)
+    _dialog(pool_text(), "任务池（只读）")
 
 
 def _ask(prompt, title="SysPersona"):
@@ -439,8 +449,7 @@ def submit_task(icon=None, item=None):
         msg = (r.stdout or r.stderr or "").strip()[:300] or "已提交"
     except Exception as e:
         msg = "提交失败：%s" % e
-    import ctypes
-    ctypes.windll.user32.MessageBoxW(0, msg, "派活", 0x40 | 0x40000)
+    _dialog(msg, "派活")
 
 
 def main():
