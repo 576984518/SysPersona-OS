@@ -36,8 +36,14 @@ STATE = os.path.join(OPS, "compact-state.json")
 LOG = os.path.join(OPS, "compact.jsonl")
 PY = sys.executable
 GAUGE = os.path.join(ROOT, "persona_gauge.py")
+HOME = os.path.expanduser("~")
+NODE = os.environ.get("PERSONA_NODE") or r"D:\ProgramData\SysPersona-Runtime\node\bin\node.exe"
+EXPORTER = os.path.join(ROOT, "dsh_export.js")
+MIRROR = os.path.join(ROOT, "persona_mirror.py")
 DEFAULT_THRESHOLD = 350_000      # 到 350K 就该压了（壳的自动线是 ~367K，这里提前一点）
 DEFAULT_COOLDOWN = 900           # 15 分钟内不连压
+FRESH_EXPORT = 60                # 1 分钟内导过就不再导（同一分钟重试别重复落盘）
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def now():
@@ -103,7 +109,74 @@ def log(rec):
         pass
 
 
-def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False):
+def latest_session_dir():
+    """最近在写的 DSH 会话文件（导出入口）。"""
+    import glob
+    best, best_t = "", 0.0
+    for f in glob.glob(os.path.join(HOME, ".dsh", "sessions", "*", "*", "session.v4.jsonl.zstd")):
+        try:
+            t = os.path.getmtime(f)
+        except OSError:
+            continue
+        if t > best_t:
+            best, best_t = f, t
+    return best
+
+
+def _decode(raw):
+    for enc in ("utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def ensure_mirror(trigger=""):
+    """**压之前先把原文落盘**（`BACKGROUND_SPEC` §七 唯一不可降级的一条）。
+
+    顺序：导出当前 DSH 会话 → 镜像进 `archive\\` 并校验 sha256。
+    返回 (ok, msg)。ok=False 时调用方**不许压缩**。
+
+    为什么每次开火都现导，而不是复用半小时前那份：
+    差的这几十分钟，正好是刚刚聊出来的内容——把它压掉，等于把最该留的丢了。
+    """
+    import glob
+    sess = latest_session_dir()
+    if not sess:
+        return False, "找不到 DSH 会话，无法落盘"
+    srcs = glob.glob(os.path.join(ROOT, "sessions", "*", "电脑会话", "续接前-*.md"))
+    srcs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    src = ""
+    if srcs and (time.time() - os.path.getmtime(srcs[0])) < FRESH_EXPORT:
+        src = srcs[0]
+    if not src:
+        stamp = time.strftime("%Y%m%d-%H%M")
+        src = os.path.join(ROOT, "sessions", time.strftime("%Y-%m-%d"), "电脑会话",
+                           "续接前-%s.md" % stamp)
+        try:
+            os.makedirs(os.path.dirname(src), exist_ok=True)
+            r = subprocess.run([NODE, EXPORTER, os.path.dirname(sess), src],
+                               capture_output=True, timeout=300, cwd=ROOT,
+                               creationflags=NO_WINDOW)
+            if r.returncode != 0 or not os.path.exists(src):
+                return False, "导出失败（rc=%s）：%s" % (r.returncode, _decode(r.stderr)[:160])
+        except Exception as e:
+            return False, "导出异常：%s" % e
+    try:
+        r = subprocess.run([PY, MIRROR, src, "--trigger", trigger or "compact"],
+                           capture_output=True, timeout=180, cwd=ROOT,
+                           creationflags=NO_WINDOW)
+        out = _decode(r.stdout).strip()
+        if r.returncode != 0:
+            return False, "镜像校验失败：%s" % (out[:200] or _decode(r.stderr)[:200])
+        return True, out.splitlines()[-1] if out else "已镜像"
+    except Exception as e:
+        return False, "镜像异常：%s" % e
+
+
+def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False,
+          do_mirror=True):
     ctx, err = measure()
     if err:
         print("FAIL " + err)
@@ -121,8 +194,16 @@ def check(threshold=DEFAULT_THRESHOLD, cooldown=DEFAULT_COOLDOWN, dry_run=False)
         log({"at": now(), "ctx": ctx, "action": "cooldown"})
         return 0
     if dry_run:
-        print("DRY  水位 %dK ≥ 线 %dK，会发 /compact（冷却已过）" % (ctx / 1000, threshold / 1000))
+        print("DRY  水位 %dK ≥ 线 %dK，会先导出并镜像原文，再发 /compact（冷却已过）"
+              % (ctx / 1000, threshold / 1000))
         return 0
+    if do_mirror:
+        mok, mmsg = ensure_mirror()
+        if not mok:
+            print("FAIL 镜像没落盘，按规矩不许压：%s" % mmsg)
+            log({"at": now(), "ctx": ctx, "action": "no-mirror", "msg": mmsg})
+            return 1
+        print("MIRROR " + mmsg)
     try:
         import persona_inject as pi
     except Exception as e:
@@ -145,11 +226,13 @@ def main():
     c.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD)
     c.add_argument("--cooldown", type=int, default=DEFAULT_COOLDOWN)
     c.add_argument("--dry-run", action="store_true")
+    c.add_argument("--no-mirror", action="store_true",
+                   help="跳过镜像（只用于测试；生产环境不许用——没落盘就压等于拿记忆赌运气）")
     a = ap.parse_args()
     if a.cmd != "check":
         ap.print_help()
         return 0
-    return check(a.threshold, a.cooldown, a.dry_run)
+    return check(a.threshold, a.cooldown, a.dry_run, not a.no_mirror)
 
 
 if __name__ == "__main__":
