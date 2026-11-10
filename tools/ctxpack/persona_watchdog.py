@@ -1323,6 +1323,68 @@ def proxy_clear():
         pass
 
 
+def reload_all():
+    r"""改完代码一键重载：重启守护 + 重建预建任务 + 报状态。
+
+    今晚一半的「没成功」是旧代码还在跑（守护/任务进程不重启就不吃新代码）。这步专门消灭它。
+    """
+    pid, _ = daemon_pid()
+    killed = False
+    if pid:
+        _run(["taskkill", "/F", "/PID", str(pid)], timeout=20)
+        time.sleep(2)
+        killed = True
+    ok, msg = revive_daemon()
+    rows = install(quiet=True)
+    bad = [r for r in rows if not r[1]]
+    print("守护：%s（%s）" % ("已重启" if killed else "本来没跑", msg))
+    print("任务：%d/%d 就绪" % (len(rows) - len(bad), len(rows)))
+    print("开关：%s ｜ 蹲住闸：%s" % ("开" if switch()["on"] else "关",
+                                     "有" if os.path.exists(HOLD) else "无"))
+    return 0 if not bad else 4
+
+
+def rollback():
+    r"""把「最后一次动手」退回去：配置套回 prev 版本、清掉意图/代班/冷却记账。
+
+    只看 dr-actions.jsonl 最后一条的 prev（切换前是哪套版本）。没有就不动。
+    """
+    rows = []
+    try:
+        with io.open(os.path.join(OPS, "dr-actions.jsonl"), encoding="utf-8") as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln:
+                    try:
+                        rows.append(json.loads(ln))
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    if not rows:
+        print("没有动作台账，没什么可退的")
+        return 2
+    last = rows[-1]
+    prev = (last.get("prev") or "").strip()
+    if not prev:
+        print("最后一次动作（%s）没记 prev，退不了" % last.get("at"))
+        return 2
+    prov, model = current_model()
+    print("现在：%s / %s" % (prov, model))
+    ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", prev])
+    print("配置退回 %s：%s" % (prev, "ok" if ok else msg))
+    intent_clear()
+    proxy_clear()
+    if os.path.exists(STATE):
+        try:
+            os.remove(STATE)
+            print("冷却记账已清（可以立刻再试）")
+        except OSError:
+            pass
+    print("提示：会话/UI 记录不在回滚范围内（它们由客户端自己管）")
+    return 0 if ok else 4
+
+
 def _gate(d):
     """动手前的闸门。返回 (allowed, reason)。阈值来自 dr-plan.json。"""
     if not d.get("switch"):
@@ -1453,7 +1515,7 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
 def main(argv=None):
     ap = argparse.ArgumentParser(description="看门狗 / 容灾保底（心跳 → 网络 → 模型链 → 动作）")
     ap.add_argument("cmd", nargs="?", default="check",
-                    choices=["check", "dr", "install", "enact", "pick", "request", "verify", "tasks", "preflight"])
+                    choices=["check", "dr", "install", "enact", "pick", "request", "verify", "tasks", "preflight", "reload", "rollback"])
     ap.add_argument("arg", nargs="?", default="")
     ap.add_argument("--stale", type=float, default=None,
                     help="心跳超过多少秒算死（默认取 dr-plan.json 的 stale_after）")
@@ -1489,6 +1551,12 @@ def main(argv=None):
 
     if a.cmd == "request":
         return request_switch(a.arg, by=a.by, dry=a.dry)
+
+    if a.cmd == "reload":
+        return reload_all()
+
+    if a.cmd == "rollback":
+        return rollback()
 
     if a.cmd == "preflight":
         d = preflight()
