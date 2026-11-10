@@ -72,6 +72,8 @@ NET_STATE = os.path.join(OPS, "dr-net.json")      # 网络连续不通的拍数
 DR_SESS_DIR = os.path.join(OPS, "session-dr")      # 每个会话一份容灾档案（建一次）
 REQ = os.path.join(OPS, "switch-request.json")     # 切档请求（谁都能写，后台认）
 REQ_LOG = os.path.join(OPS, "switch-requests.jsonl")  # 谁下的、什么时候、成没成
+INTENT = os.path.join(OPS, "client-intent.json")     # 「这个窗口应该活着」的持久意图
+GIVEUP = os.path.join(OPS, "client-giveup.json")     # 连续拉不起才写，写给人看
 PY_EXE = sys.executable
 PYW = os.path.join(os.path.dirname(PY_EXE), "pythonw.exe")
 
@@ -812,6 +814,8 @@ def enact(what, dry=False):
         return 0
 
     prev = _version_of(*current_model())      # 记下切换前是哪套，用来回滚
+    if what != "daemon":
+        intent_set("enact %s" % what)         # 从此「窗口该活着」，下一拍也会接着拉
     out = []
     for label, kind in todo:
         if kind == "daemon":
@@ -851,6 +855,7 @@ def enact(what, dry=False):
                         "msg": "窗口没起来 → 回滚 %s 再拉：%s" % (prev or "（无）", msg2)})
         else:
             out.append({"step": "事后校验", "ok": True, "msg": "窗口在"})
+            intent_clear()
     try:
         with io.open(os.path.join(OPS, "dr-actions.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "what": what,
@@ -1098,6 +1103,57 @@ def pick(which, dry=False):
                           by="human", dry=dry)
 
 
+def intent_set(why):
+    """动手前先记下「这个窗口应该是活的」——哪怕执行到一半进程没了，下一拍也会接着拉。"""
+    _write_json(INTENT, {"want": "up", "why": why,
+                         "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                         "attempts": 0, "last_try": 0})
+
+
+def intent_clear():
+    try:
+        os.remove(INTENT)
+    except OSError:
+        pass
+
+
+def ensure_client_up():
+    r"""每一拍都看：有「应该活着」的意图、但窗口不在 → 再拉一次（带退避和上限）。
+
+    这是人 2026-11-10 担心的那件事：「怕的是拉起失败，然后没有拉第二次。」
+    所以重试**不依赖某一次动作还活着**：意图写盘，谁来跑下一拍谁接着拉。
+    """
+    d = _read_json(INTENT, None)
+    if not isinstance(d, dict):
+        return ""
+    if client_alive():
+        intent_clear()
+        try:
+            os.remove(GIVEUP)
+        except OSError:
+            pass
+        return "窗口已经起来了 → 意图消掉"
+    n = int(d.get("attempts") or 0)
+    last = float(d.get("last_try") or 0)
+    backoff = min(300.0, 20.0 * (1.6 ** n))
+    now = time.time()
+    if now - last < backoff:
+        return "窗口还没起，等退避（%.0f 秒后第 %d 次重试）" % (backoff - (now - last), n + 1)
+    if n >= 12:
+        _write_json(GIVEUP, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "attempts": n,
+                             "why": "连续 12 次拉不起，停手等人看"})
+        return "连续 %d 次拉不起 → 停手（见 ops\\client-giveup.json）" % n
+    ok, msg = launch_client()
+    d["attempts"] = n + 1
+    d["last_try"] = now
+    d["last_msg"] = msg
+    _write_json(INTENT, d)
+    if ok:
+        intent_clear()
+        return "第 %d 次重试拉起成功" % (n + 1)
+    return "第 %d 次重试仍失败：%s" % (n + 1, msg)
+
+
 def _gate(d):
     """动手前的闸门。返回 (allowed, reason)。阈值来自 dr-plan.json。"""
     if not d.get("switch"):
@@ -1169,10 +1225,13 @@ def run_once(act=True, dry=False, stale=None, net_override=None, prov_override=N
             pass
         return d
 
+    retry = ensure_client_up()      # 「应该活着」的意图还挂着，就继续拉（不依赖上一次动作）
     d = decide(stale, net_override=net_override, prov_override=prov_override)
     acted = []
     if manual:
         acted.append({"step": "手动请求", "ok": True, "msg": manual})
+    if retry:
+        acted.append({"step": "重试拉起", "ok": True, "msg": retry})
     if act and d["action"] != "ok":
         if dry:                            # 演练不动手，就不看冷却
             acted = execute(d, dry=True)
