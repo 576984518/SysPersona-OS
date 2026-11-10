@@ -19,23 +19,28 @@
 
 ## 一、怎么装
 
-### 0. 先看路径
+### 0. 先看路径（不用改脚本）
 
-`install-service.ps1` 顶部写死了这台机器的四个路径；换机器只改这四行：
+> 本文档里出现的 `$Repo` / `$Mem` / `$Py` / `$Pyw` 是**占位变量**，不是某台机器的固定路径：
+> `$Repo` = 仓库目录，`$Mem` = 记忆库根（`SYSPERSONA_ROOT`），`$Py` / `$Pyw` = 你的 python / pythonw。
+> PowerShell 里请照 §0 那三行设成环境变量或你自己的变量，别把示例字符串直接照抄。
+
+`install-service.ps1` **不写死路径**：它从环境变量取，缺了就 `[FAIL]` 并 `exit 2`，不会拿别处的默认值硬跑。
 
 ```powershell
-$Repo    = 'D:\文档\SysPersona-OS'
-$Mem     = 'D:\4590-PC-文件\AI会话检索记录'
-$Py      = 'D:\ProgramData\SysPersona-Runtime\python\python.exe'
-$Pyw     = 'D:\ProgramData\SysPersona-Runtime\python\pythonw.exe'
+$env:SYSPERSONA_ROOT = '<记忆库目录>'          # 必填：库根（含 ops\ sessions\ index\）
+$env:PERSONA_PY      = '<pythonw.exe 绝对路径>' # 可选：不给就用 PATH 里的 pythonw
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\persona\install-service.ps1 -DryRun
 ```
+
+`-DryRun` 会先把你设的两个值、四条计划任务的目标、以及每个待装文件的实际解析路径全打印一遍；确认无误再去掉 `-DryRun` 真装。
 
 确认这三个脚本都在：
 
 ```powershell
-Test-Path 'D:\文档\SysPersona-OS\tools\tray\persona_tray.py'
-Test-Path 'D:\4590-PC-文件\AI会话检索记录\persona_daemon.py'
-Test-Path 'D:\4590-PC-文件\AI会话检索记录\persona_digest.py'
+Test-Path "$Repo\tools\tray\persona_tray.py"
+Test-Path "$Mem\persona_daemon.py"
+Test-Path "$Mem\persona_digest.py"
 ```
 
 三个都应为 `True`。
@@ -43,7 +48,7 @@ Test-Path 'D:\4590-PC-文件\AI会话检索记录\persona_digest.py'
 ### 1. 先演练，不改系统
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\文档\SysPersona-OS\tools\persona\install-service.ps1" -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\tools\persona\install-service.ps1" -DryRun
 ```
 
 看到 `[DRY] 将创建计划任务 ...` 和最后四行 `[现状]` 才算读懂了它要做什么。
@@ -52,7 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\文档\SysPersona-OS\too
 ### 2. 真装
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\文档\SysPersona-OS\tools\persona\install-service.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\tools\persona\install-service.ps1"
 ```
 
 它会做四件事，每件都先 `Get` 再判：
@@ -60,13 +65,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\文档\SysPersona-OS\too
 1. **托盘自启**：在
    `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\` 下建
    `SysPersona-Tray.lnk`，目标 `pythonw.exe`，参数
-   `"D:\文档\SysPersona-OS\tools\tray\persona_tray.py"`，工作目录 `tools\tray`。
+   `"$Repo\tools\tray\persona_tray.py"`，工作目录 `tools\tray`。
 2. **守护自愈**：计划任务 `SysPersona-Daemon`，每 15 分钟运行
-   `pythonw.exe "D:\4590-PC-文件\AI会话检索记录\persona_daemon.py" --daemon`；
+   `pythonw.exe "$Mem\persona_daemon.py" --daemon`；
    `IgnoreNew`（上一轮没退就不叠新的）、`StartWhenAvailable`、`RunLevel Limited`、
    `LogonType Interactive`。
 3. **每日自检**：计划任务 `SysPersona-Digest`，每天 23:50 运行
-   `pythonw.exe "D:\4590-PC-文件\AI会话检索记录\persona_digest.py" --once`。
+   `pythonw.exe "$Mem\persona_digest.py" --once`。
 4. **体检**：打印四行现状（托盘 lnk、两个任务的 State/NextRunTime、pythonw 进程数）。
 
 重复跑不会重复建：已存在且正确 → `[OK] 已存在...`；存在但目标不对 → 修正；
@@ -77,8 +82,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "D:\文档\SysPersona-OS\too
 托盘本来要等下次登录才自启；想立刻看到状态灯：
 
 ```powershell
-Start-Process 'D:\ProgramData\SysPersona-Runtime\python\pythonw.exe' `
-  -ArgumentList '"D:\文档\SysPersona-OS\tools\tray\persona_tray.py"'
+Start-Process "$Pyw" `
+  -ArgumentList '"$Repo\tools\tray\persona_tray.py"'
 ```
 
 守护不用手动开——15 分钟内计划任务会自己拉起；想立刻跑一轮：
@@ -111,9 +116,9 @@ $s | Select-Object TargetPath, Arguments, WorkingDirectory
 
 应看到：
 
-- `TargetPath` = `D:\ProgramData\SysPersona-Runtime\python\pythonw.exe`
-- `Arguments` = `"D:\文档\SysPersona-OS\tools\tray\persona_tray.py"`
-- `WorkingDirectory` = `D:\文档\SysPersona-OS\tools\tray`
+- `TargetPath` = `$Pyw`
+- `Arguments` = `"$Repo\tools\tray\persona_tray.py"`
+- `WorkingDirectory` = `$Repo\tools\tray`
 
 ### 2. 验两个计划任务
 
@@ -156,8 +161,8 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
 手动跑一遍（用 `python.exe`，能在终端看到表）：
 
 ```powershell
-& 'D:\ProgramData\SysPersona-Runtime\python\python.exe' `
-  'D:\4590-PC-文件\AI会话检索记录\persona_digest.py' --once
+& "$Py" `
+  "$Mem\persona_digest.py" --once
 $LASTEXITCODE
 ```
 
@@ -165,17 +170,17 @@ $LASTEXITCODE
 
 - 退出码 `0` = 六项全是 OK/WARN；
 - 退出码 `1` = 至少一项 FAIL（表里 `判定` 列会写 `FAIL`）；
-- 文件应落在 `D:\4590-PC-文件\AI会话检索记录\ops\daily-status.md`。
+- 文件应落在 `$Mem\ops\daily-status.md`。
 
 ```powershell
-Get-Content 'D:\4590-PC-文件\AI会话检索记录\ops\daily-status.md' -Encoding UTF8
+Get-Content "$Mem\ops\daily-status.md" -Encoding UTF8
 ```
 
 只想拿机器可读结果、不写文件：
 
 ```powershell
-& 'D:\ProgramData\SysPersona-Runtime\python\python.exe' `
-  'D:\4590-PC-文件\AI会话检索记录\persona_digest.py' --json
+& "$Py" `
+  "$Mem\persona_digest.py" --json
 ```
 
 ### 5. 验自愈（想验证时再做，会短暂停掉守护）
@@ -283,7 +288,8 @@ Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SysPerso
   最多写 `ops/daily-status.md`。
 - **不装依赖、不联网**：假设 Python 运行时、`pystray` / `Pillow` 已就绪；脚本不执行 pip，
   也不从网络拉东西。
-- **路径是这台机器的**：换机器先改 `install-service.ps1` 顶部四个路径，再跑 `-DryRun` 核对。
+- **路径来自环境变量，不是这台机器的**：`SYSPERSONA_ROOT`（必填）与 `PERSONA_PY`（可选）；
+  缺变量时脚本打 `[FAIL]` 并 `exit 2`，先 `-DryRun` 核对再真装。
 
 ---
 
@@ -384,7 +390,7 @@ Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SysPerso
 命令行等价物：
 
 ```powershell
-python "D:\4590-PC-文件\AI会话检索记录\persona_logs.py" 重载 --tail 30
+python "$Mem\persona_logs.py" 重载 --tail 30
 python ...\persona_logs.py 后台 --tail 80
 python ...\persona_logs.py --scan        # 44 个日志的真实编码一次列清
 python ...\persona_logs.py --fix         # 非 UTF-8 的就地转好（先存 .bak）

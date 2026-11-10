@@ -166,9 +166,11 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 
 | 日期 | 被测模型 | 环境 | 跑到哪一步 | 结果 | 证据 / 卡点 |
 |---|---|---|---|---|---|
-| | 千问（qianwen.com） | | | 待测 | |
-| | DeepSeek（chat.deepseek.com） | | | 待测 | |
-| | 豆包（doubao.com） | | | 待测 | |
+| 2026-11-10 | 千问（qianwen.com） | Linux 沙箱（它自己的执行环境，仓库 clone 自 GitHub） | 第 3 步：`selftest.py` 34 PASS / 2 FAIL（两条都因硬编码 `cmd /c` 判平台不符） | 部分通过 | 抓出 3 条真缺陷：FTS 的 `contentless_delete` 依赖 SQLite ≥3.43、`persona_gauge` 直读 `~/.dsh` 无守卫、`persona_pack._drop_archived` 静默删旧归档——**三条均已修**（见 CHANGELOG 同日条目）；另有文档漂移若干，一并改了 |
+| — | DeepSeek（chat.deepseek.com） | — | 未测 | 无记录 | 只在本机（Windows）跑过抓取与索引，没做过「第三方按 USAGE 从零部署」的实测 |
+| — | 豆包（doubao.com） | — | 未测 | 无记录 | 同上；抓取器也还没有豆包版本 |
+
+> 这张表**谁跑通谁补一行**，贴命令与输出；没有记录就写「未测」，不要填"应该可以"。
 
 **三条判定（缺一条就不算"部署成功"）**：
 
@@ -195,7 +197,7 @@ Windows 通知区、系统计划任务、本机浏览器、某个具体的对话
 |---|---|---|---|
 | `README.md` | 136 | `$env:SYSPERSONA_ROOT = 'D:\SysPersona'` | 快速开始里的占位写法 |
 | `CHANGELOG.md` | 522 / 791 | `C:\hermes-mem`、`Z:\…` / `D:\…` | 历史记录，只说明当年踩过的坑 |
-| `docs/SERVICE.md` | 27–30、36–38、46、55、63–69、80–81、114–116、159–160、168、171、177–178、387 | `D:\文档\SysPersona-OS`、`D:\4590-PC-文件\AI会话检索记录`、`D:\ProgramData\SysPersona-Runtime` | 按旧机器写的操作步骤；照它落地前先换成 `$env:SYSPERSONA_ROOT` / `$env:PERSONA_PY` |
+| `docs/SERVICE.md` | 全文 | 已无裸路径 | **2026-11-10 已修**：机器路径全部换成 `$Repo` / `$Mem` / `$Py` / `$Pyw` 占位变量（变量来源见该文 §0） |
 | `docs/SERVICE.md` | 298–300、363 | `%LOCALAPPDATA%\SysPersona\…` | 变量写法，任何机器都成立 |
 | `docs/PERSONA_SPEC.md` | 165 | `%LOCALAPPDATA%\SysPersona\persona` | 规范里的默认位置，变量占位 |
 | `docs/PROJECT_MEMO.md` | 21 / 56 | `C:\Users`、`C:\Windows\win.ini` | 一个是提交前扫描用的正则，一个是路径判定的测试断言 |

@@ -119,9 +119,11 @@ No Linux/macOS implementation exists. No cloud service is required; offline, eve
 
 | Date | Model tested | Environment | Reached step | Result | Evidence / blocker |
 |---|---|---|---|---|---|
-| | Qwen (qianwen.com) | | | pending | |
-| | DeepSeek (chat.deepseek.com) | | | pending | |
-| | Doubao (doubao.com) | | | pending | |
+| 2026-11-10 | Qwen (qianwen.com) | Linux sandbox (its own runtime, repo cloned from GitHub) | step 3: `selftest.py` 34 PASS / 2 FAIL (both FAILs hard-code `cmd /c`, i.e. platform mismatch) | partial pass | found 3 real defects: FTS `contentless_delete` needs SQLite >= 3.43, `persona_gauge` read `~/.dsh` unguarded, `persona_pack._drop_archived` silently deleted old archives — **all three fixed** (same-day CHANGELOG entry); several doc drifts fixed too |
+| — | DeepSeek (chat.deepseek.com) | — | not tested | no record | only exercised capture + index on this Windows machine, never a from-scratch third-party deploy per USAGE |
+| — | Doubao (doubao.com) | — | not tested | no record | same; there is no Doubao capturer either |
+
+> Anyone who gets it running **adds a row here** with the command and its output. No record means "not tested" — do not write "should work".
 
 **Three checks (all required before "deployment succeeded")**: the repo can be obtained; `SYSPERSONA_ROOT`
 is set correctly and index + retrieval return `file:line`; `selftest.py` runs and every failure is
@@ -147,7 +149,7 @@ drift as the docs change.
 |---|---|---|---|
 | `README.md` | 136 | `$env:SYSPERSONA_ROOT = 'D:\SysPersona'` | Placeholder in the quick start |
 | `CHANGELOG.md` | 522 / 791 | `C:\hermes-mem`, `Z:\…` / `D:\…` | Historical notes about past pitfalls |
-| `docs/SERVICE.md` | 27-30, 36-38, 46, 55, 63-69, 80-81, 114-116, 159-160, 168, 171, 177-178, 387 | `D:\文档\SysPersona-OS`, `D:\4590-PC-文件\AI会话检索记录`, `D:\ProgramData\SysPersona-Runtime` | Operations steps written for the old machine; replace with `$env:SYSPERSONA_ROOT` / `$env:PERSONA_PY` before following them |
+| `docs/SERVICE.md` | whole file | no bare paths left | **fixed 2026-11-10**: machine paths replaced by `$Repo` / `$Mem` / `$Py` / `$Pyw` placeholders (see section 0 of that file) |
 | `docs/SERVICE.md` | 298-300, 363 | `%LOCALAPPDATA%\SysPersona\…` | Variable form, valid on any machine |
 | `docs/PERSONA_SPEC.md` | 165 | `%LOCALAPPDATA%\SysPersona\persona` | Default location from the spec, variable placeholder |
 | `docs/PROJECT_MEMO.md` | 21 / 56 | `C:\Users`, `C:\Windows\win.ini` | One is a pre-commit scan regex, the other a path-validation test assertion |

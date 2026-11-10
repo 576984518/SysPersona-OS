@@ -5,7 +5,12 @@
     "我喜欢简洁的回答。",
     "回答简洁一点。",
     "简洁最好。"
-   ]
+   ],
+   "expect": {
+    "pref_short": 81.5,
+    "pref_verbose": 70.0,
+    "pref_longpost": 18.0
+   }
   },
   {
    "messages": []
@@ -272,7 +277,14 @@
    "messages": []
   },
   {
-   "messages": []
+   "messages": [],
+   "expect": {
+    "pref_short": 81.5,
+    "pref_verbose": 63.0
+   }
   }
- ]
+ ],
+ "expect_final": {
+  "pending_flips": 0
+ }
 }
