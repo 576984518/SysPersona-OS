@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_claim.py — 任务认领登记（防重复劳动）
 r"""persona_claim.py — 任务认领登记（防重复劳动）
 
 问题（2026-11-09）：多端记忆汇总后，A 端已经做过的事，B 端读到后当成新任务又做一遍。

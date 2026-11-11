@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：maint.py — 记忆库与本地缓存的维护：扫描 / 压缩 / 清理
 r"""
 maint.py — 记忆库与本地缓存的维护：扫描 / 压缩 / 清理
 

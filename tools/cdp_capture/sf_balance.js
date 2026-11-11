@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：sf_balance.js — 读硅基流动「余额充值 / 费用明细」页上的余额（只读，一天最多几次）
 /*
  * sf_balance.js — 读硅基流动「余额充值 / 费用明细」页上的余额（只读，一天最多几次）
  *

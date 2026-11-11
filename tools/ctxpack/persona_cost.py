@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_cost.py — DSH token 成本尺子：日账 / 单价折算 / 超线告警
 r"""persona_cost.py — DSH token 成本尺子：日账 / 单价折算 / 超线告警
 
 数据源（**只读**，一个字节都不写壳的目录）：

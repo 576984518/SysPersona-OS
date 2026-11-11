@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_llm.py — 一个入口，两种底座：本机 Herdsman（免费）与硅基流动（花钱）
 r"""persona_llm.py — 一个入口，两种底座：本机 Herdsman（免费）与硅基流动（花钱）
 
 为什么要有它：记忆层自己不产字，字要底座出。底座有两条路，

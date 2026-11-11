@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：embeddings 表：与 examples/schema.sql 对齐，补 content_sha256 / norm。
 """embeddings 表：与 examples/schema.sql 对齐，补 content_sha256 / norm。"""
 
 from __future__ import annotations

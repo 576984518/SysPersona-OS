@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_recapture.py — 心跳驱动的随机重抓 + 本次增量摘要（B40）
 r"""persona_recapture.py — 心跳驱动的随机重抓 + 本次增量摘要（B40）
 
 为什么这么做：新内容不会自己走到待办里，必须有人在抓完之后把它翻译成任务。

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：分身主键 avatar：`<agent>-<model>[-<version>]`，以及性格目录的唯一入口。
 r"""分身主键 avatar：`<agent>-<model>[-<version>]`，以及性格目录的唯一入口。
 
 规范：`docs/AVATAR_SPEC.md` §1.2（性格隔离，2026-11-09 人定）

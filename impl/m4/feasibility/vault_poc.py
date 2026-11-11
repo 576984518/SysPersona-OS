@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：SysPersona 加密容器 —— 可行性验证原型（不是产品代码）。
 """SysPersona 加密容器 —— 可行性验证原型（不是产品代码）。
 
 它只回答《SECURITY_SPEC.md》里那些「能不能做到」的问题：

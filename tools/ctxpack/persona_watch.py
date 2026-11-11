@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_watch.py — Hermes 会话实时导出守护
 r"""persona_watch.py — Hermes 会话实时导出守护
 
 问题：Hermes 把对话存在它自己的 state.db 里，keeper 每 30 分钟才导一次；

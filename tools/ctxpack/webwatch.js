@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：webwatch.js — 跟着浏览器自动抓（CDP，零依赖）
 /*
  * webwatch.js — 跟着浏览器自动抓（CDP，零依赖）
  *

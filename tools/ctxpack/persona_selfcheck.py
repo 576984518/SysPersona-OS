@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_selfcheck.py — 心跳自检：7 项，单项失败不拖垮整体，目标 < 8 秒
 r"""persona_selfcheck.py — 心跳自检：7 项，单项失败不拖垮整体，目标 < 8 秒
 
 每次心跳（守护 TASK selfcheck，120 秒）跑一遍，逐项判定后写 `ops\selfcheck.json`：

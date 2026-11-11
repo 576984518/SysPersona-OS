@@ -1,3 +1,4 @@
+// SysPersona-OS · 本文件：SysPersona 安全规范 —— 可行性验证用密码学 oracle。
 // SysPersona 安全规范 —— 可行性验证用密码学 oracle。
 // 目的：用 OpenSSL（Node 24）作为「独立于 Python 参考代码」的实现，
 // 验证容器格式、KDF 参数与失败语义。它不是产品代码。

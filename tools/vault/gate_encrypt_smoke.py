@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：沙箱：加密开关打开时，写进磁盘的必须是密文，读回来必须一致。
 """沙箱：加密开关打开时，写进磁盘的必须是密文，读回来必须一致。"""
 import hashlib
 import io

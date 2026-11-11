@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：M1 能力面与拒绝落库的最小自测（对应 PERSONA_SPEC §2.1 / §5）。
 """M1 能力面与拒绝落库的最小自测（对应 PERSONA_SPEC §2.1 / §5）。
 
 跑法：python impl/m1/test_policy.py

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：任务池（v5.5 B81）：outbox + 合并器 + 三个本地接口。
 """任务池（v5.5 B81）：outbox + 合并器 + 三个本地接口。
 
 规范：`docs/SCHEDULER_SPEC.md` §4.1（任务 JSON）/ §4.2（三接口）/ §3.1（合并规则）。

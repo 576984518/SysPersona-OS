@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
 r"""persona_wake.py — 闹钟登记与唤醒简讯（v5.3）
 
 唤醒分三类（2026-11-10 他重新定的口径，以此为准）：

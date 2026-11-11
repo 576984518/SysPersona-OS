@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_todo.py — 把 BACKLOG 摊成一份「待办备忘」
 r"""persona_todo.py — 把 BACKLOG 摊成一份「待办备忘」
 
 为什么要有它：交接包有字节上限，待办一多就会被截断；被截断的那几条，正是下次最容易丢的。

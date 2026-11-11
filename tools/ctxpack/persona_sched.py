@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_sched.py — 闹钟 / 守护的优先级仲裁（租约，v1）
 r"""persona_sched.py — 闹钟 / 守护的优先级仲裁（租约，v1）
 
 同一件事（job）两边都想干时，不是「先到先得」，而是**按优先级让位**：

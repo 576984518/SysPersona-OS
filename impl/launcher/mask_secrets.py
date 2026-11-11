@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：mask_secrets.py — 上云前的本地脱敏（DLP）。
 """mask_secrets.py — 上云前的本地脱敏（DLP）。
 
 原则：**先脱敏，再出本地**。命中即打码，保留上下文语义，不删整段。

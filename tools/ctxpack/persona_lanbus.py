@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_lanbus.py — SysPersona 记忆层「局域网节点服务」（服务端 + 客户端）
 r"""persona_lanbus.py — SysPersona 记忆层「局域网节点服务」（服务端 + 客户端）
 
 为什么存在：persona_cloud_bus.py 只管"多个程序共用一个目录时怎么写不坏"，

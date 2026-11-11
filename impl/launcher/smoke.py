@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：Launcher L2 冒烟测试 —— 对应 docs/LAUNCHER_SPEC.md §17 的 TC-C / TC-M / TC-S 组。
 """
 Launcher L2 冒烟测试 —— 对应 docs/LAUNCHER_SPEC.md §17 的 TC-C / TC-M / TC-S 组。
 

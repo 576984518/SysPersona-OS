@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：device_gate.py — 物理接入授权（v2.2.0 的最小实现）
 """
 device_gate.py — 物理接入授权（v2.2.0 的最小实现）
 

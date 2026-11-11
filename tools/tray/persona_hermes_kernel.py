@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_hermes_kernel.py — 只重启 Hermes 的「内核」（:9120），不动桌面窗口
 r"""persona_hermes_kernel.py — 只重启 Hermes 的「内核」（:9120），不动桌面窗口
 
 人 2026-11-11 定：「其实最简单就是这里重启内核」+「不用动前端」。

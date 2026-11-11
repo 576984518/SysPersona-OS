@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_gauge.py — 上下文守卫：测当前上下文、到线就准备"接续包"
 r"""
 persona_gauge.py — 上下文守卫：测当前上下文、到线就准备"接续包"
 

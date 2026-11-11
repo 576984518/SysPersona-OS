@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：vs.py — 本地向量检索（bge-m3 + bge-reranker-v2-m3，走 Herdsman 本地 API）
 """
 vs.py — 本地向量检索（bge-m3 + bge-reranker-v2-m3，走 Herdsman 本地 API）
 

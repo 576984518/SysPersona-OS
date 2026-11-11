@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_inject.py — 把一段文字「注入」到正在运行的壳（DSH）里，当作他发的一句话
 r"""persona_inject.py — 把一段文字「注入」到正在运行的壳（DSH）里，当作他发的一句话
 
 为什么这么做（2026-11-10 定，B71）：

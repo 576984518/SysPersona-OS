@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_sched.py — 服务端重派与排队的最小实现（v5.5 §四）
 r"""persona_sched.py — 服务端重派与排队的最小实现（v5.5 §四）
 
 一句话：**节点有拒绝权，服务端就只剩两条路——换一个，或者先记着。**

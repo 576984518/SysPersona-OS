@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_compact.py — 水位到线就自己压缩（用注入通道发 /compact）
 r"""persona_compact.py — 水位到线就自己压缩（用注入通道发 /compact）
 
 链路（2026-11-10 定）：

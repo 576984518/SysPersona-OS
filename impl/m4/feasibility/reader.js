@@ -1,3 +1,4 @@
+// SysPersona-OS · 本文件：独立读取器：只用 Node 内置能力，按《SECURITY_SPEC.md》解一个由 Python 写出的容器。
 // 独立读取器：只用 Node 内置能力，按《SECURITY_SPEC.md》解一个由 Python 写出的容器。
 // 目的不是做产品，而是证明「格式不依赖某种语言/某个库」。
 // 用法：node reader.js '{"container":"...","passphrase":"..."}'

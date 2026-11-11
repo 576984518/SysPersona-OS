@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：余弦检索与 RRF 融合。
 """余弦检索与 RRF 融合。
 
 性能：

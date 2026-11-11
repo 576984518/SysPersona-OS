@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_settings_backup.py — 设定/宪法级文件的多副本定时快照
 r"""persona_settings_backup.py — 设定/宪法级文件的多副本定时快照
 
 人 2026-11-11：「每一个设定文件都不能只有一份。前面不是说交接文件按设定时间备份吗？

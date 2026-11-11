@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 秒、不出网）
 r"""persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 秒、不出网）
 
 背景：Hermes 主模型是纯文本；壳自带 vision_analyze 慢且会卡在工具返回后。

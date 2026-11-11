@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：handoff_rotate.py — 交接文件分级保留 + 目录归拢
 r"""handoff_rotate.py — 交接文件分级保留 + 目录归拢
 
 规则（2026-11-08 用户定）：

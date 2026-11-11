@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：高层流程：封装 / 解封 / 校验 / 改口令 / 恢复 / 迁移。
 """高层流程：封装 / 解封 / 校验 / 改口令 / 恢复 / 迁移。"""
 
 from __future__ import annotations

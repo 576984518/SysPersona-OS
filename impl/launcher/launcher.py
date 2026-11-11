@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：SysPersona Launcher — L2 最小实现（PoC）
 """
 SysPersona Launcher — L2 最小实现（PoC）
 

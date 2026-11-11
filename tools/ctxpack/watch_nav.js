@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：watch_nav.js — 页面跳转监听器（替代每分钟轮询）
 /**
  * watch_nav.js — 页面跳转监听器（替代每分钟轮询）
  *

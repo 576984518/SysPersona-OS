@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_crosscheck.py — 交叉核对：两个模型各自总结，只列差异，不判对错
 r"""persona_crosscheck.py — 交叉核对：两个模型各自总结，只列差异，不判对错
 
 背景（2026-11-09 定）：单模型总结会漏信息，而且漏掉的会被当成「没有」。

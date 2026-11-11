@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_vault_bulk.py — 整目录加密/解密（带 manifest、可回滚、可核对）
 r"""persona_vault_bulk.py — 整目录加密/解密（带 manifest、可回滚、可核对）
 
 人 2026-11-11：「迁移可以现在做，以后所有客户端都读链接。」

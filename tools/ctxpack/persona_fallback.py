@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_fallback.py — 保底判定：欠费或断网时，唤醒自动降级
 r"""persona_fallback.py — 保底判定：欠费或断网时，唤醒自动降级
 
 只做判定，不改任何东西。三路输入，**命中任一即降级**：

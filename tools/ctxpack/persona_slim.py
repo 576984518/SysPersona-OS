@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_slim.py — 滚动上下文头（抽取式，不调用模型）
 r"""persona_slim.py — 滚动上下文头（抽取式，不调用模型）
 
 从最新归档里压出一份 ≤2.5KB 的 CONTEXT.md：

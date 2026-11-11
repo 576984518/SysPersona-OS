@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_keepalive.py — 保活（v5.3）：盯进程、没在就跑起来、记原因
 r"""persona_keepalive.py — 保活（v5.3）：盯进程、没在就跑起来、记原因
 
 不认死某个壳：目标写在 `ops/keepalive.json` 里（name / match / exe / args），

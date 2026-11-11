@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：可行性验证：把《SECURITY_SPEC.md》的每一条硬要求，变成一条可运行的检查。
 """可行性验证：把《SECURITY_SPEC.md》的每一条硬要求，变成一条可运行的检查。
 
 输出三样东西：

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：§12.2 助记词：32 字节恢复种子 ↔ BIP39 24 词。
 """§12.2 助记词：32 字节恢复种子 ↔ BIP39 24 词。"""
 
 from __future__ import annotations

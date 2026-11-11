@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：M2 语义检索：向量索引 + RRF 融合。
 """M2 语义检索：向量索引 + RRF 融合。
 
 设计见 impl/m2/README.md。

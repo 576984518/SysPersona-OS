@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_dispatch.py — 派发生命周期（v5.3）
 r"""persona_dispatch.py — 派发生命周期（v5.3）
 
 一条派发的生命周期：

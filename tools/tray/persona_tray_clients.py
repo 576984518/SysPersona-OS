@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_tray_multi.py — 托盘：一个我们自己的图标 + **按客户端动态生成**的菜单
 r"""persona_tray_multi.py — 托盘：一个我们自己的图标 + **按客户端动态生成**的菜单
 
 人 2026-11-11 定的三条（这一版就是照这个写的）：

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：M2 向量检索测试（零依赖，使用 hash / fake provider）。
 """M2 向量检索测试（零依赖，使用 hash / fake provider）。
 
 运行：python -m unittest discover -s impl/m2/tests -v

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：eval.py — 检索召回自测
 """eval.py — 检索召回自测
 
 给一份题库，分别跑几条路，报 recall@K：

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：中间层自身开销测量（不含模型生成）。运行：python bench.py
 """中间层自身开销测量（不含模型生成）。运行：python bench.py"""
 
 import json

@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：§15 Provider 协议 + 原生实现。
 """§15 Provider 协议 + 原生实现。
 
 核心格式与流程不依赖第三方库；密码学原语必须由 Provider 提供。

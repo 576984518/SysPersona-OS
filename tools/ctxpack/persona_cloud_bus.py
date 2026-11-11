@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_cloud_bus.py — 简易网络同步（写分片 / 读总索引 / 断网降级）
 r"""persona_cloud_bus.py — 简易网络同步（写分片 / 读总索引 / 断网降级）
 
 设计（2026-11-10，来源见 `docs/CLOUD_BUS_SPEC.md`）：

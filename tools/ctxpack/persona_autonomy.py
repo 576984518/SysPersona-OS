@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_autonomy.py — 自主的次数闸（免费/收费两档）
 r"""persona_autonomy.py — 自主的次数闸（免费/收费两档）
 
 只做一件事：按**底座模型花不花钱**决定空闲时每小时/每天最多自己做几次。

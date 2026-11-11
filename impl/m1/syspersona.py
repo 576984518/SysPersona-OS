@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：SysPersona M1 — 最小闭环参考实现。
 """SysPersona M1 — 最小闭环参考实现。
 
 只依赖 Python 标准库（sqlite3 / json / argparse），用于验证四件事：

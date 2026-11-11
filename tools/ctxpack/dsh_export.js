@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：dsh_export.js — 把 DSH 会话文件导出成可读 Markdown
 /*
  * dsh_export.js — 把 DSH 会话文件导出成可读 Markdown
  *

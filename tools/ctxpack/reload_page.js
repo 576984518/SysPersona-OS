@@ -1,3 +1,4 @@
+// SysPersona-OS · 本文件：reload_page.js — CDP 强制刷新网页会话（读会话铁律的"重试"那一步）
 // reload_page.js — CDP 强制刷新网页会话（读会话铁律的"重试"那一步）
 // 用法：node reload_page.js [url子串]      默认 chat.deepseek.com
 // 退出码：0 = 至少刷了一页；1 = 没找到页面或 CDP 不通

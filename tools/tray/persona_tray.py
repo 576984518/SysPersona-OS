@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_tray.py — 托盘状态灯：多客户端并列显示 + 实时水位
 r"""persona_tray.py — 托盘状态灯：多客户端并列显示 + 实时水位
 
 设计（2026-11-10 重写）：

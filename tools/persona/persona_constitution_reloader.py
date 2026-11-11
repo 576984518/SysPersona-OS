@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_constitution_reloader.py — 设定重载器（Constitution Reloader）
 r"""persona_constitution_reloader.py — 设定重载器（Constitution Reloader）
 
 **独立于心跳**。心跳（30 秒）只管"系统还活着"，本脚本只管"把宪法重新装回来"。

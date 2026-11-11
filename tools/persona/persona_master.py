@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_master.py — 总索引速览（唤醒后的第一件事）
 r"""persona_master.py — 总索引速览（唤醒后的第一件事）
 
 规矩（v5.3 硬规则）：**唤醒 ≠ 拉起**。醒来先读总索引（所有来源汇总），

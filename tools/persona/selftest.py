@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：selftest.py — v5.3 自检（不碰真库）
 r"""selftest.py — v5.3 自检（不碰真库）
 
 在临时目录造一个小记忆库（`index/L1.jsonl` + 两条会话），把 `PERSONA_ROOT` 指过去，

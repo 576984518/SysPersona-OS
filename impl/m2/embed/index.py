@@ -1,4 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：索引：写入时增量、睡眠时补缺、命令行全量重建。
 """索引：写入时增量、睡眠时补缺、命令行全量重建。"""
 
 from __future__ import annotations

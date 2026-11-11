@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_hermes.py — 换 Hermes 客户端的模型（它是文件驱动的，不跟 DSH 一样把选择藏在数据库里）
 r"""persona_hermes.py — 换 Hermes 客户端的模型（它是文件驱动的，不跟 DSH 一样把选择藏在数据库里）
 
 背景（2026-11-10 实测）：

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：vault 命令行：seal / unlock / verify / inspect / passwd / recover / import。
 """vault 命令行：seal / unlock / verify / inspect / passwd / recover / import。
 
 口令绝不进 argv：只走 TTY 或 stdin。

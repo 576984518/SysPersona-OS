@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打开后才自动动手）
 r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打开后才自动动手）
 
 人 2026-11-10 定（原话）：

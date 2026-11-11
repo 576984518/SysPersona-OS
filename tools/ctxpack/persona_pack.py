@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_pack.py — 上下文提取与归档（MVP，v2.5.0）
 """
 persona_pack.py — 上下文提取与归档（MVP，v2.5.0）
 

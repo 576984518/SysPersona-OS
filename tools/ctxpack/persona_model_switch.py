@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_model_switch.py — 把客户端的「默认模型」在 收费 / 免费 / 本地 之间切换（只改一个 patch 文件）
 r"""persona_model_switch.py — 把客户端的「默认模型」在 收费 / 免费 / 本地 之间切换（只改一个 patch 文件）
 
 背景：DSH 的模型选择不看 UI，而看

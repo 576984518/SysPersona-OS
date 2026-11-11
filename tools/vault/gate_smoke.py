@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：I/O 门客户端冒烟：真发请求，比对哈希。
 """I/O 门客户端冒烟：真发请求，比对哈希。"""
 import hashlib
 import io

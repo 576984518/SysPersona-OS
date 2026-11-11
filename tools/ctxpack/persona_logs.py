@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_logs.py — 日志查看器（专治「打开全是乱码」）
 r"""persona_logs.py — 日志查看器（专治「打开全是乱码」）
 
 为什么要有它：

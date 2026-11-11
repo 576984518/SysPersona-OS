@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：工作目录：收集、SQLite 生命周期、原子解包、单写者锁（§10、§17）。
 """工作目录：收集、SQLite 生命周期、原子解包、单写者锁（§10、§17）。"""
 
 from __future__ import annotations

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：§8 规范化 JSON：签名与 MAC 依赖字节级一致。
 """§8 规范化 JSON：签名与 MAC 依赖字节级一致。"""
 
 from __future__ import annotations

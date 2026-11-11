@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：capabilities.py 的自测。跑法：python impl/launcher/test_capabilities.py
 """capabilities.py 的自测。跑法：python impl/launcher/test_capabilities.py"""
 import os
 import sys

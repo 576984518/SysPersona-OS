@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：cdp_capture.js — 从已登录的 DeepSeek 网页会话里全量抓取消息（参考实现）
 /*
  * cdp_capture.js — 从已登录的 DeepSeek 网页会话里全量抓取消息（参考实现）
  *

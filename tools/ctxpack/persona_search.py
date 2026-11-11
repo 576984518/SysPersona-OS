@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_search.py — Zero-Miss 混合检索原型
 """persona_search.py — Zero-Miss 混合检索原型
 
 两条路并行，谁也别想漏：

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_index.py — 增量向量索引（与实时抓取共存）
 """persona_index.py — 增量向量索引（与实时抓取共存）
 
 和 vs.py build 的差别：

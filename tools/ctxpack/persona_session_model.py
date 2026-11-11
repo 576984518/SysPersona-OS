@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_session_model.py — 改「当前会话记住的模型」（让切档对正在用的对话也生效）
 r"""persona_session_model.py — 改「当前会话记住的模型」（让切档对正在用的对话也生效）
 
 为什么需要它（2026-11-10 实测）：

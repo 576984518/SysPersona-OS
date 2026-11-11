@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：fts_bench.py — 五引擎对照台（只用于实测，不是运行时依赖）
 r"""fts_bench.py — 五引擎对照台（只用于实测，不是运行时依赖）
 
 引擎：

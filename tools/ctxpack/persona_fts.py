@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_fts.py — 不依赖模型/向量的本地检索层（SQLite FTS5）
 r"""persona_fts.py — 不依赖模型/向量的本地检索层（SQLite FTS5）
 
 设计目标只有一句：**没有 jieba、没有 bge-m3、没有网络时，中文记忆仍然查得到。**

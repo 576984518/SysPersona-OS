@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：avatar_poc.py — 人格分身记忆合并的最小可行性实验
 """
 avatar_poc.py — 人格分身记忆合并的最小可行性实验
 

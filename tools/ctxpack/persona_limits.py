@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：上下文水位阈值：唯一出处。
 """上下文水位阈值：唯一出处。
 
 规范定义见 `docs/BACKGROUND_SPEC.md` §二（三档水位）；这里只是那份规范的代码映射，

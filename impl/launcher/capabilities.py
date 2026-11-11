@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：能力面裁决与最小执行器（LAUNCHER_SPEC §11 的最小实现）。
 """能力面裁决与最小执行器（LAUNCHER_SPEC §11 的最小实现）。
 
 只做两件事，且都可测：

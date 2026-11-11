@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：webdump.js — 通过 CDP 抓 DeepSeek deepseek网页，存成可读 Markdown（零依赖）
 /*
  * webdump.js — 通过 CDP 抓 DeepSeek deepseek网页，存成可读 Markdown（零依赖）
  *

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_report.py — 报到 + 派发 + 超时回收（心跳的另一半）
 r"""persona_report.py — 报到 + 派发 + 超时回收（心跳的另一半）
 
 规则（v5.3）：唤醒 = 心跳。醒来做三件事：

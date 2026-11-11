@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_bridge.py — 把 Hermes 的对话从 state.db 导出成记忆库格式
 r"""persona_bridge.py — 把 Hermes 的对话从 state.db 导出成记忆库格式
 
 迁移后日常在 Hermes 里聊，那些对话存在它自己的 SQLite 里；

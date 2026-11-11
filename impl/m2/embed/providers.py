@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：Embedding Provider：hash（零依赖基线）/ ollama / fastembed。
 """Embedding Provider：hash（零依赖基线）/ ollama / fastembed。
 
 选择顺序（auto）：

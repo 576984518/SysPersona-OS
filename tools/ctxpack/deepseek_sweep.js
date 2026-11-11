@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SysPersona-OS · 本文件：deepseek_sweep.js — 用调试端口把侧边栏里的 DeepSeek 会话逐个抓成 Markdown
 /*
  * deepseek_sweep.js — 用调试端口把侧边栏里的 DeepSeek 会话逐个抓成 Markdown
  *

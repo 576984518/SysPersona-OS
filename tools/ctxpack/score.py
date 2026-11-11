@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：score.py — 记忆三维权重打分器（原型）
 r"""
 score.py — 记忆三维权重打分器（原型）
 

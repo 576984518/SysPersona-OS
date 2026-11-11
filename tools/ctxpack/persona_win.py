@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_win.py — 让本进程 spawn 的所有子进程都不弹控制台窗口（Windows）
 """persona_win.py — 让本进程 spawn 的所有子进程都不弹控制台窗口（Windows）
 
 背景（2026-11-10）：常驻进程是 `pythonw`（GUI 子系统，没有控制台）。它一旦 spawn

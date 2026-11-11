@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_digest.py — 每日自检：六项一起看，结论落到一张纸上。
 r"""persona_digest.py — 每日自检：六项一起看，结论落到一张纸上。
 
 为什么要有它：水位、派发、告警、抓取、备份、索引分散在六个地方，平时一项一项查，

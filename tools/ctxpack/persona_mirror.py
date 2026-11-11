@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：镜像（v5.4 B80）：把会话全文原样落盘，再谈压缩。
 r"""镜像（v5.4 B80）：把会话全文原样落盘，再谈压缩。
 
 规范：`docs/BACKGROUND_SPEC.md` §四（镜像文件规范）。要点：

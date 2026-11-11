@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_autoloop.py — 空闲时的全局自主循环（v2，自述意图版）
 r"""persona_autoloop.py — 空闲时的全局自主循环（v2，自述意图版）
 
 不是「管理员往里加任务」，是**记忆 + 底座里的那个自己，平常把想做的事写下来，

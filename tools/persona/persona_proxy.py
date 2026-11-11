@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_proxy.py — 交互代理（v5.3）：智能体里的 AI 通过它调用本机
 r"""persona_proxy.py — 交互代理（v5.3）：智能体里的 AI 通过它调用本机
 
 为什么要有它：智能体直接拿 shell，等于每次都在「什么都可能被执行」的前提下工作，

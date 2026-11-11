@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_client_probe.py — 认得出客户端在哪：exe / 配置 / 工作目录 / 会话库
 r"""persona_client_probe.py — 认得出客户端在哪：exe / 配置 / 工作目录 / 会话库
 
 人 2026-11-11：「建议用程序自动拉起，重载。所以程序需要自动检测客户端配置文件和工作目录的能力」

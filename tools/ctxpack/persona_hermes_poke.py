@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：persona_hermes_poke.py — 让 Hermes 自己「开口读交接卡」（不靠人打字）
 r"""persona_hermes_poke.py — 让 Hermes 自己「开口读交接卡」（不靠人打字）
 
 怎么做：Hermes 是 Electron 壳，带 `--remote-debugging-port=9333` 启动后就能用 CDP

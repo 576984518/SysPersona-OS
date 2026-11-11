@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SysPersona-OS · 本文件：cache_report.py — 报本会话的 token / 缓存 / 成本（与 DSH 状态栏同源）
 """cache_report.py — 报本会话的 token / 缓存 / 成本（与 DSH 状态栏同源）
 
 用法：
