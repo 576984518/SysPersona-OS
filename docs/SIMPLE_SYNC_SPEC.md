@@ -1,5 +1,8 @@
 # 简易网络同步 — SIMPLE_SYNC_SPEC
 
+> **SysPersona-OS** · 本文件定义：简易网络同步：共目录/网盘的边界，以及节点服务那条线
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 状态：**v5.7.0 交付；2026-11-11 定"适用范围"（推荐其中一种场景，其余两种明确不建议）**。
 > 参考实现 `tools/ctxpack/persona_cloud_bus.py`。
 >

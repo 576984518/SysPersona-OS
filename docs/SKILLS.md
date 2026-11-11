@@ -1,5 +1,8 @@
 # 技能总结（SKILLS）
 
+> **SysPersona-OS** · 本文件定义：技能清单：每个技能管什么、什么时候用
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 一句话：**技能是把"做过一次"变成"下次不用想"。**
 > 状态：v5.1.0 起成文；实体在 `%USERPROFILE%\.dsh\skills\<名字>\SKILL.md`，本页只做索引与判据。
 

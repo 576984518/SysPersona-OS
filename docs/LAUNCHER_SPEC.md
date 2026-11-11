@@ -1,5 +1,8 @@
 # SysPersona Runtime 规范（现行）
 
+> **SysPersona-OS** · 本文件定义：运行时现行规范：唯一在场、租约与 epoch、条件写、多设备共处
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 **Persona Runtime Specification — 加载、组装、路由、执行、归档**
 
 > 状态：**规范（Normative）**，与 v1.0.0 方法规范同级。

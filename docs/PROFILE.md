@@ -1,5 +1,8 @@
 # 画像生成（PROFILE）
 
+> **SysPersona-OS** · 本文件定义：画像：从记忆里长出来的偏好与习惯，怎么生成、怎么用
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 一句话：**画像不是一个模型"觉得你是什么人"，而是一串可追溯的观察。**
 > 状态：v5.1.0 起为默认链路；实现在 `tools/ctxpack/persona_daemon.py`。
 

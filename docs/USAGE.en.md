@@ -1,5 +1,8 @@
 # Usage: hand the repo to an AI agent
 
+> **SysPersona-OS** · 本文件定义：使用说明（英文版）
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > This is **not a program package**. No installer, no binaries, no `setup.exe` — and no
 > runnable product is shipped.
 >

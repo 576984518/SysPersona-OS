@@ -1,5 +1,8 @@
 # 加密与鉴权 — VAULT & AUTH（v6.2）
 
+> **SysPersona-OS** · 本文件定义：密箱与门：加密分档、凭据、审计、失败回滚
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 状态：**v6.2 成文 + 同日勘误（2026-11-11 13:40）**——加密不再"一律全封"，改成**按需分档**；
 > 默认落回**档 1（全明文）**。实现：`persona_vault.py`（密箱）、`persona_vault_gate.py`（本机 I/O 门）、
 > `persona_auth.py`（凭据）、`persona_vault_io.py`（客户端入口）、`persona_vault_bulk.py`（整目录封/解）、

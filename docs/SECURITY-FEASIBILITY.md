@@ -1,5 +1,8 @@
 # 加密层可行性验证报告
 
+> **SysPersona-OS** · 本文件定义：加密可行性验证报告：46 项实测结果与代价
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 配套文档：[`SECURITY_SPEC.md`](SECURITY_SPEC.md) · 日期：2026-11-04
 > 结论先行：**规范可实施，46/46 项检查通过，Python ↔ Node 双实现可互读。**
 > 唯一硬约束：**Python 标准库没有 AEAD**，加密层必须引入一个 Provider（§9 给出选型）。

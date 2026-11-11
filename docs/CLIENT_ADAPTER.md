@@ -1,5 +1,8 @@
 # 客户端接入 — CLIENT_ADAPTER
 
+> **SysPersona-OS** · 本文件定义：客户端接入契约：一个客户端 = 一段配置 + 一份能力声明
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 状态：**v6.1 实现**（2026-11-11）。参考实现 `tools/tray/persona_tray_clients.py`、
 > `tools/tray/persona_hermes_kernel.py`（运行版在记忆库根，依赖同目录的 `persona_*` 模块）。
 > 这份文档只讲一件事：**本项目怎么和一个具体的第三方客户端配合，以及怎么再添加一个**。

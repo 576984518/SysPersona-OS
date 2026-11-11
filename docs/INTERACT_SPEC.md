@@ -1,5 +1,8 @@
 # 交互代理规范（INTERACT SPEC）
 
+> **SysPersona-OS** · 本文件定义：交互规格：前台在聊后台在干、先说结论、事件插播
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 一句话：**AI 要碰本机，走这张动词表；表外的东西，默认不存在。**
 > 状态：v5.3.0 起为默认链路；实现在 `tools/persona/persona_proxy.py`，自检在 `selftest.py` T5。
 

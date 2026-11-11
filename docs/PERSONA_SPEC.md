@@ -1,5 +1,8 @@
 # SysPersona 设定文件规范 v1.1（现行）
 
+> **SysPersona-OS** · 本文件定义：人格规格：以文件形式存在的人格、加载与漂移边界
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 本页只回答一件事：**"它是谁"怎么被文件化。**
 > 与 `PHILOSOPHY.md`（为什么）、`AVATAR_SPEC.md`（多分身怎么在场）互补，不重复。
 > 变更记在本页文末「修订记录」与 `CHANGELOG.md`。

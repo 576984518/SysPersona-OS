@@ -1,5 +1,8 @@
 # SysPersona Runtime 参考实现（Annex A）
 
+> **SysPersona-OS** · 本文件定义：Launcher 中间件附录：接口、错误码、部署形态
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > **Annex 说明**：本文件写于 Runtime 加入「能力面」之前，正文里的「Runtime」在早期版本叫「中间层」，已统一改名。
 > 凡是与 `docs/LAUNCHER_SPEC.md` 冲突的地方，以规范为准；工具与媒体相关的部分见规范 §11。
 

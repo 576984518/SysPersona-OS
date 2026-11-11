@@ -1,5 +1,8 @@
 # 网页会话抓取：虚拟列表的三个坑
 
+> **SysPersona-OS** · 本文件定义：会话抓取与导出：来源、落盘位置、去重与失败处理
+> 规范全文以仓库 `main` 为准；改了要同步 README / CHANGELOG / 台账。
+
 > 2026-11-09 实测。适用对象是 DeepSeek 网页会话（`chat.deepseek.com`）这类**虚拟列表**界面。
 > 参考实现：[`tools/cdp_capture/capture.js`](../tools/cdp_capture/capture.js)。
 
