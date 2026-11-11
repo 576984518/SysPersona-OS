@@ -58,7 +58,7 @@
 
 | 层 | 回答什么 | 在哪看 |
 |---|---|---|
-| **资产层** | 它是什么、存在哪、怎么带走、怎么不被人读 | [`SECURITY_SPEC`](docs/SECURITY_SPEC.md) · [`PRIVACY_SPEC`](docs/PRIVACY_SPEC.md) |
+| **资产层** | 它是什么、存在哪、怎么带走、怎么不被人读 | [`SECURITY_SPEC`](docs/SECURITY_SPEC.md) · [`PRIVACY_SPEC`](docs/PRIVACY_SPEC.md) · [`VAULT_SPEC`](docs/VAULT_SPEC.md)（本地加密 / 门 / 凭据，v6.2） |
 | **运行层** | 它怎么醒来、能做什么、多设备怎么共处 | [`LAUNCHER_SPEC`](docs/LAUNCHER_SPEC.md)（Runtime 现行）· [`WORK_MODE`](docs/WORK_MODE.md) |
 | **接入层** | 它怎么和具体的第三方客户端配合、换一个客户端怎么加、出事后怎么降 | [`CLIENT_ADAPTER`](docs/CLIENT_ADAPTER.md) · [`RESILIENCE`](docs/RESILIENCE.md) |
 | **存在层** | 几个分身、身体是谁的、能对世界做什么（v1.3 分身规范、v2.x 存在层） | [`AVATAR_SPEC`](docs/AVATAR_SPEC.md) · [`PHILOSOPHY`](docs/PHILOSOPHY.md) |
@@ -112,9 +112,12 @@
 
 ## 现在到哪了
 
-**v5.9.0（当前）**：v6.0.0 把七块串成一台每天真在跑的机器（**Windows 10/11 端可用**，实测 Edge 157 +
+**v6.2.0（当前）**：v6.0.0 把七块串成一台每天真在跑的机器（**Windows 10/11 端可用**，实测 Edge 157 +
 PowerShell 5.1 + DeepSeek Harness 壳，抓取/索引/压缩/重载/调度/托盘全在本机，**没有任何一项依赖云服务**）；
-v5.8.0 加了「几台机器接成一个记忆体」；v5.9.0 加了「没人发话时它自己找事做」。
+v5.8.0 加了「几台机器接成一个记忆体」；v5.9.0 加了「没人发话时它自己找事做」；
+v6.1.0 把「和外部客户端怎么相处、出事怎么降」写成契约；
+**v6.2.0 把「本地这一份」变成密文**——会话/记忆落盘即加密，客户端不拿路径只拿句柄，
+凭据决定权限（本机密钥 / 强密码 / 令牌 / 手机令牌），**同步不归我们**（外部链路 本机 → NAS → 网盘 → 镜像盘）。
 
 | 模块 | 状态 | 证据 |
 |---|---|---|
