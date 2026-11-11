@@ -60,6 +60,7 @@
 |---|---|---|
 | **资产层** | 它是什么、存在哪、怎么带走、怎么不被人读 | [`SECURITY_SPEC`](docs/SECURITY_SPEC.md) · [`PRIVACY_SPEC`](docs/PRIVACY_SPEC.md) |
 | **运行层** | 它怎么醒来、能做什么、多设备怎么共处 | [`LAUNCHER_SPEC`](docs/LAUNCHER_SPEC.md)（Runtime 现行）· [`WORK_MODE`](docs/WORK_MODE.md) |
+| **接入层** | 它怎么和具体的第三方客户端配合、换一个客户端怎么加、出事后怎么降 | [`CLIENT_ADAPTER`](docs/CLIENT_ADAPTER.md) · [`RESILIENCE`](docs/RESILIENCE.md) |
 | **存在层** | 几个分身、身体是谁的、能对世界做什么（v1.3 分身规范、v2.x 存在层） | [`AVATAR_SPEC`](docs/AVATAR_SPEC.md) · [`PHILOSOPHY`](docs/PHILOSOPHY.md) |
 
 只做资产层，它是一个能搬走的文件；加上后两层，它才是一个**住在某具身体里、受边界约束、可以被托管也可以被解放**的主体。
