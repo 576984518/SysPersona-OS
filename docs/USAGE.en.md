@@ -103,6 +103,24 @@ Verified on **Windows 10/11 only** (notification area, scheduled tasks, local fi
 No Linux/macOS implementation exists. No cloud service is required; offline, everything except
 "fetching new content from the web" keeps working.
 
+### Local encryption and auth (v6.2.0, Chinese-only spec for now)
+
+From v6.2.0 the local copy can be stored as ciphertext, and "who may read it" is a credential:
+
+- one file = one sealed blob (`SPV1`): SHAKE256 keystream + HMAC-SHA256 (encrypt-then-MAC),
+  **AAD = path relative to the repository root**, so renaming or moving a file makes it undecryptable;
+- the 32-byte key is wrapped by **Windows DPAPI** (same machine + same user), with an optional
+  scrypt passphrase copy for reading on another machine;
+- clients never receive a path: a local **I/O gate** (`127.0.0.1:8738`) hands out a 120-second
+  **handle URL**, re-authenticated on every read (`/open /read /write /close /list /ingest /health`);
+- credentials carry scopes: `device` (machine fingerprint, auto-authenticated) / `password` (scrypt) /
+  `token` (`spr_…`, GitHub-style) / `totp` (phone token); 8 failures lock for 300 seconds;
+- **sync is out of scope**: local → NAS → cloud → mirrored disk (with version history) is an external chain.
+
+The full specification is `docs/VAULT_SPEC.md` (written in Chinese; an English translation is not yet available).
+The switch `ops\vault.json → enabled` defaults to `false`, because readers must be migrated to
+`persona_vault_io` first — see §10 of that spec for the switch-over order.
+
 ## Common misconceptions
 
 | Misconception | Reality |
