@@ -19,7 +19,7 @@
 
 ## 二、契约：一个客户端 = 一段配置
 
-真源 `ops/tray-clients.json`（运行版在记忆库）。四个字段，缺一个就少一项能力：
+真源 `ops/tray-clients.json`（运行版在记忆库）。**五个字段**，缺一个就少一项能力：
 
 | 字段 | 回答什么 | 例（Hermes） |
 |---|---|---|
@@ -27,6 +27,30 @@
 | `wm` | 水位从哪读 | `hermes`（读守护写的 `ops/hctx.json`；没有就只报"在跑"） |
 | `actions` | 能对它做什么、用哪种方法 | `compact: cdp`、`kernel: restart-kernel`、`gateway: keeper` |
 | `open` | 它的会话/日志在哪 | `hermes-home\sessions` |
+| **`detect`** | **它装在哪、配置在哪、工作目录在哪**（2026-11-11 新增） | exe / `config.yaml` / `hermes-home` |
+
+`detect` 是为了「程序自动拉起、重载」而加的——**认不出路径，就谈不上拉起和重载**。
+形状（`persona_client_probe.py` 读它）：
+
+```json
+"detect": {
+  "exe":     ["%LOCALAPPDATA%\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe"],
+  "home":    ["%USERPROFILE%\\.dsh"],
+  "config":  ["%USERPROFILE%\\.dsh\\.credentials.yaml"],
+  "workdir": ["%USERPROFILE%\\.dsh"],
+  "auto_launch": false
+}
+```
+
+- 路径支持 `%ENV%` 与 `~`，多个候选**取第一个存在的**；`config` 支持通配（取最新一个）；
+- `auto_launch` **默认 `false`**：先做到"认得出来、报得出来"；自动开窗口会打断人正在做的事，
+  与「不抢焦点」是同一条纪律，要开得人显式改这一项；
+- 版本从 exe 的资源段读（`GetFileVersionInfo`），不靠 exe 名猜；
+- 验证：`python persona_client_probe.py check` 一屏给出 exe/配置/工作目录/是否在跑/版本；
+  托盘里每个客户端二级菜单有「打开配置文件」和「看它认路的结果」。
+
+> 踩过的坑（2026-11-11）：托盘读配置时**按白名单合并**，把 `detect`/`open` 这类新字段直接砍掉、
+> 还把文件重写回去 —— 已改成**全量合并**。加新字段时别再写白名单。
 
 ```json
 "Hermes": {
