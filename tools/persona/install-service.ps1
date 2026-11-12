@@ -68,9 +68,25 @@ if (-not $Pyw) {
     exit 2
 }
 
-$Tray    = Join-Path $Repo 'tools\tray\persona_tray.py'
-$DaemonPy = Join-Path $Mem 'persona_daemon.py'
-$DigestPy = Join-Path $Mem 'persona_digest.py'
+# 脚本可能平铺在库根，也可能在 库根\脚本\（2026-11-12 主目录整理后）——按顺序找第一个真实存在的；
+# 找不到就返回第一个候选，好让后面的报错指向"本来应该在的位置"。
+function Pick([string]$what, [string[]]$cands) {
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+    }
+    return ($cands | Where-Object { $_ } | Select-Object -First 1)
+}
+
+$Tray = Pick '托盘' @(
+    (Join-Path $Mem '脚本\persona_tray.py'),
+    (Join-Path $Mem 'persona_tray.py'),
+    (Join-Path $Repo 'tools\tray\persona_tray.py'))
+$DaemonPy = Pick '守护' @(
+    (Join-Path $Mem '脚本\persona_daemon.py'),
+    (Join-Path $Mem 'persona_daemon.py'))
+$DigestPy = Pick '自检' @(
+    (Join-Path $Mem '脚本\persona_digest.py'),
+    (Join-Path $Mem 'persona_digest.py'))
 $Startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
 $Lnk     = Join-Path $Startup 'SysPersona-Tray.lnk'
 $DaemonTask = 'SysPersona-Daemon'
