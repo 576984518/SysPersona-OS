@@ -51,6 +51,8 @@
 
 提示词模板、环境盘点清单、验收七步、常见误解 → **[`docs/USAGE.md`](docs/USAGE.md)**
 
+**装好之后怎么用**——客户端怎么接、第一次怎么让它读到设定、以后每次怎么续 → **[`docs/USAGE-DAILY.md`](docs/USAGE-DAILY.md)**
+
 ### 第三方测试报告（Linux 沙箱 · 千问，2026-11-11）
 
 > **[`docs/test-reports/2026-11-11-qwen-linux-sandbox-v6.2.docx`](docs/test-reports/2026-11-11-qwen-linux-sandbox-v6.2.docx)**
