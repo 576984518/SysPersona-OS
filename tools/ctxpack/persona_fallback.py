@@ -29,6 +29,7 @@ r"""persona_fallback.py — 保底判定：欠费或断网时，唤醒自动降�
 库根：--root > SYSPERSONA_ROOT > PERSONA_ROOT > 本文件目录。
 """
 import argparse
+import persona_io as _pio  # 原子读写（v6.11.0，B85 第一批）
 import io
 import json
 import os
@@ -66,28 +67,12 @@ def state_path(root=None):
 
 
 def _read_json(path, default):
-    try:
-        with io.open(path, encoding="utf-8-sig") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
+    return _pio.read_json_any(path, default)
 
 
 def _write_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    try:
-        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+    """原子写：委托 persona_io（临时文件 → os.replace，Windows 上重试）。"""
+    return _pio.write_json(path, data, indent=2)
 
 
 def load(root=None):

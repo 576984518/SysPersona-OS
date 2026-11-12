@@ -1938,3 +1938,16 @@ v3.9.0 上线后第一轮实测暴露三个问题，都是"能触发但抓不到
 
 **教训**：批量替换**字符串字面量**时，必须连**前缀**一起看（`r` / `f` / `b`），
 否则改出来的是"能编译、跑起来才炸"的代码——这类错误最贵。
+
+### refactor · B85 第一批：`_read_json/_write_json` 收进 persona_io（2026-11-12，不占新号）
+
+同名的 `_read_json` 在十几个脚本里各有一份，但**契约不同**：读失败有的返回 `{}`、有的返回 `None`、
+有的抛异常；有的要求顶层是 dict，有的不要求。**按名字批量合并一定会改掉某处的错误语义**。
+
+所以先立规矩（写进 `tools/ctxpack/persona_io.py` 的文件头）：**按契约分批收，不按名字收**。
+本批只收三份契约完全一致的（`persona_autoloop` / `persona_autonomy` / `persona_fallback`）：
+读 = `read_json_any(path, default)`（utf-8-sig，失败返 default，不强制 dict），
+写 = `write_json(path, data, indent=…)`（临时文件 → `os.replace`，Windows 上重试）。
+
+验证：编译 OK、三个模块 import OK、`_read_json` 缺失文件返回默认值、写后读回一致、
+`selftest` PASS 36 / FAIL 0、两个脚本的 `--help` 正常。

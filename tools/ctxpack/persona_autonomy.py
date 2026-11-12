@@ -37,6 +37,7 @@ git push —— 在 `persona_autoloop.py` 的 GUARDS 里逐条写死，与档位
 库根：--root > SYSPERSONA_ROOT > PERSONA_ROOT > 本文件目录。
 """
 import argparse
+import persona_io as _pio  # 原子读写（v6.11.0，B85 第一批）
 import copy
 import fnmatch
 import io
@@ -100,11 +101,7 @@ def ledger_path():
 
 
 def _read_json(path, default):
-    try:
-        with io.open(path, encoding="utf-8-sig") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
+    return _pio.read_json_any(path, default)
 
 
 def _read_jsonl(path):
@@ -127,27 +124,8 @@ def _read_jsonl(path):
 
 
 def _write_json(path, data):
-    """原子写：同目录临时文件 → os.replace。"""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), time.time_ns())
-    try:
-        with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        for _ in range(5):
-            try:
-                os.replace(tmp, path)
-                return
-            except PermissionError:
-                time.sleep(0.05)
-        os.replace(tmp, path)
-    finally:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+    """原子写：委托 persona_io（临时文件 → os.replace，Windows 上重试）。"""
+    return _pio.write_json(path, data, indent=2)
 
 
 def _num(v, default):
