@@ -614,7 +614,7 @@ def t_backed():
 
     # ③ 外部链路第一站：NAS 通不通（同步/备份/镜像盘都不归我们，但断了就没有异地副本）
     try:
-        nas = r_loc.mirror()
+        nas = _loc.mirror()
         if os.path.isdir(nas):
             msgs.append("NAS 可达")
         else:

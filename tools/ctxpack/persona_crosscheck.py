@@ -14,11 +14,9 @@ r"""persona_crosscheck.py — 交叉核对：两个模型各自总结，只列�
 输出：
   ops/crosscheck-<时间>.md   —— 两份要点 + 差异清单
   ops/crosscheck.jsonl       —— 每条一行，只追加
-
-环境变量：PERSONA_HERMES_HOME = Hermes 家目录（从中读 .env / config.yaml 的 API key）；
-不设就只认环境变量里的 SILICONFLOW_API_KEY，不猜机器路径。输出落在本脚本所在目录的 ops\。
 """
 import argparse
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 import difflib
 import io
 import json
@@ -28,10 +26,8 @@ import sys
 import time
 import urllib.request
 
-from persona_root import hermes_home as _hermes_home
-
-ROOT = os.path.dirname(os.path.abspath(__file__))
-HOME = _hermes_home()
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOME = _loc.hermes_home()
 API = "https://api.siliconflow.cn/v1/chat/completions"
 MODEL_A = "deepseek-ai/DeepSeek-V4-Flash"
 MODEL_B = "Qwen/Qwen3-8B-Instruct"
@@ -49,8 +45,6 @@ def find_key():
     k = os.getenv("SILICONFLOW_API_KEY", "").strip()
     if k:
         return k
-    if not HOME:
-        return None      # 没配 PERSONA_HERMES_HOME：只认环境变量
     envf = os.path.join(HOME, ".env")
     if os.path.exists(envf):
         for line in io.open(envf, encoding="utf-8", errors="replace"):

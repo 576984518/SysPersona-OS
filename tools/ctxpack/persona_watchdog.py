@@ -90,7 +90,7 @@ CLIENT_IMG = os.path.basename(CLIENT_EXE)
 
 # Hermes 客户端（另一条命：它的模型写在 config.yaml 里，改文件就生效）
 HERMES_EXE = os.environ.get("SYSPERSONA_HERMES_EXE") or \
-    r_loc.hermes_exe()
+    _loc.hermes_exe()
 HERMES_IMG = os.path.basename(HERMES_EXE)
 
 DEFAULT_CHAIN = [
@@ -590,7 +590,7 @@ RELAY_END = "<!-- syspersona-relay:end -->"
 def hermes_memory_path():
     """Hermes 起会话会读的记忆文件（在它的 hermes-home\\memories 下）。"""
     home = os.environ.get("SYSPERSONA_HERMES_HOME") or \
-        r_loc.hermes_home()
+        _loc.hermes_home()
     p = os.path.join(home, "memories", "MEMORY.md")
     return p if os.path.isdir(os.path.dirname(p)) else ""
 

@@ -29,7 +29,7 @@ except Exception:
 import sys
 import urllib.request
 
-HOME = r_loc.hermes_home()
+HOME = _loc.hermes_home()
 API = "https://api.siliconflow.cn/v1/chat/completions"
 MODEL = "PaddlePaddle/PaddleOCR-VL-1.5"
 OCR_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops", "winocr.ps1")

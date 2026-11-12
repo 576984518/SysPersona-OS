@@ -1,20 +1,32 @@
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_index_l1.py — 一级索引（每个来源一行，给"交接时只读一次"用）
-r"""persona_index_l1.py — 一级索引（每个来源一行，给"交接时只读一次"用）
+"""persona_index_l1.py — 一级索引（每个来源一行，给"交接时只读一次"用）
 
 为什么要它：交接包如果每次都从 150 个文件里现抽摘要，要么慢、要么越抽越长。
 一级索引把"有哪些记忆、各多大、第一句说什么"压成一张几十行的表；
 交接只读这张表，要看细节再去二级索引（`persona_search.py` / `HANDOFF.md`）。
 
+2026-11-10 补：memory 目录下的**常驻文件**（设定 / 备忘 / 清单式摘要）也编进来，
+source 标「记忆设定 / 记忆备忘 / 记忆常驻」，avatar 记 `memory`——它们不属于某个分身。
+这样"壳记忆里的指针"和"检索能查到的内容"是同一批文件，不会写了却搜不到。
+
 用法：
   python persona_index_l1.py            # 全量重建 index/L1.jsonl 与 index/L1.md
   python persona_index_l1.py --quiet    # 只写文件，不打印
-
-环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认）；不设就按本文件所在
-目录向上找含 archive\ 或 index\ 的目录，再找不到直接抛错——**不会退回某台机器的路径**。
 """
 import argparse
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 import io
+
+try:
+    import persona_vault_io as _VIO
+
+    def _vio_text(p):
+        return _VIO.text_of(p)
+except Exception:  # 没有保险箱也能跑
+    def _vio_text(p):
+        return io.open(p, encoding="utf-8", errors="replace").read()
+
 import json
 import os
 import re
@@ -22,11 +34,25 @@ import sys
 import time
 
 import persona_avatar as av
-from persona_root import root as _persona_root
 
-ROOT = _persona_root()
+ROOT = os.environ.get("SYSPERSONA_ROOT") or _loc.vault()
 ARCHIVE = os.path.join(ROOT, "archive")
 INDEX = os.path.join(ROOT, "index")
+
+# memory\ 下的常驻目录与文件（不进 archive，但必须能被索引到）
+EXTRA_DIRS = [
+    (os.path.join(ROOT, "memory", "设定"), "记忆设定"),
+    (os.path.join(ROOT, "memory", "备忘"), "记忆备忘"),
+    # 文档\ 是说明与结论的正式归处（人 2026-11-12 定的目录规矩）。
+    # 这些页不进 archive，但同样必须能被检索到——写完搜不到等于没写。
+    (os.path.join(ROOT, "文档"), "文档"),
+]
+EXTRA_FILES = [
+    os.path.join(ROOT, "memory", n) for n in (
+        "MEMORY.md", "CONTEXT.md", "USER.md", "INDEX.md", "REENTRY.md",
+        "SOP-壳运维.md", "身份与分工.md", "运行环境.md",
+    )
+]
 
 MSG = re.compile(r"(?m)^## (用户|助手)\s*$")
 
@@ -57,7 +83,7 @@ def scan():
             day = parts[1] if len(parts) > 2 else ""
             src = parts[2] if len(parts) > 3 else ""
             try:
-                text = io.open(p, encoding="utf-8", errors="replace").read()
+                text = _vio_text(p)
                 st = os.path.getmtime(p)
             except OSError:
                 continue
@@ -84,13 +110,56 @@ def scan():
     return rows
 
 
+def _extra_row(p, src):
+    """常驻文件的一行：没有消息计数，身份归 memory（不参与分身判定）。"""
+    try:
+        text = _vio_text(p)
+        st = os.path.getmtime(p)
+    except OSError:
+        return None
+    rel = os.path.relpath(p, ROOT).replace("\\", "/")
+    return {
+        "day": time.strftime("%Y-%m-%d", time.localtime(st)),
+        "source": src,
+        "file": rel,
+        "msgs": 0,
+        "chars": len(text),
+        "head": first_line(text),
+        "agent": "memory",
+        "model": "",
+        "avatar": "memory",
+        "family": "",
+        "model_version": "",
+        "persona_key": "memory",
+        "mtime": int(st),
+    }
+
+
+def scan_extra():
+    rows = []
+    for d, src in EXTRA_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if fn.endswith(".md"):
+                r = _extra_row(os.path.join(d, fn), src)
+                if r:
+                    rows.append(r)
+    for p in EXTRA_FILES:
+        if os.path.isfile(p):
+            r = _extra_row(p, "记忆常驻")
+            if r:
+                rows.append(r)
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
 
     os.makedirs(INDEX, exist_ok=True)
-    rows = scan()
+    rows = scan() + scan_extra()
     out = os.path.join(INDEX, "L1.jsonl")
     with io.open(out, "w", encoding="utf-8", newline="\n") as f:
         for r in rows:
@@ -106,7 +175,9 @@ def main():
     io.open(md, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
 
     if not a.quiet:
-        print("一级索引：%d 个来源 → %s" % (len(rows), out))
+        print("一级索引：%d 条（会话 %d + 常驻 %d）→ %s"
+              % (len(rows), len(rows) - len([r for r in rows if r["avatar"] == "memory"]),
+                 len([r for r in rows if r["avatar"] == "memory"]), out))
         print("人读版：%s" % md)
     return 0
 

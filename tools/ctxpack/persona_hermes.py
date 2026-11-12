@@ -25,7 +25,7 @@ import time
 
 CONF = os.environ.get("SYSPERSONA_HERMES_CONF") or os.path.join(
     os.environ.get("SYSPERSONA_HERMES_HOME")
-    or r_loc.hermes_home(),
+    or _loc.hermes_home(),
     "config.yaml")
 
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops", "profiles-hermes")

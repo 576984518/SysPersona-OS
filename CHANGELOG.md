@@ -1925,3 +1925,16 @@ v3.9.0 上线后第一轮实测暴露三个问题，都是"能触发但抓不到
   `python persona_locate.py` 六项全部解析到真实位置（`mirror` 未设就老实"没有"）；
 - B85 只做了这一半：`_read_json/_write_json` 之类的小工具仍各有一份，合并它们要动加载顺序与异常语义，
   留到下一版单独做。
+
+### 勘误 · v6.11.0 的替换留下两处语法尾巴（2026-11-12，同日修）
+
+字面量原来是 `r"D:\…"` 这种 **raw 字符串**，替换脚本只换了引号里的内容，
+于是前缀 `r` 被留下，变成 `r_loc.vault()`、`ros.path.join(...)`——编译期不报（名字合法），
+**运行时才炸**：`dr` 报 `NameError: name 'r_loc' is not defined`，`export` 报 `ros is not defined`。
+
+抓到它的是一次常规冒烟（重启守护后看 `persona_daemon.TASKS['export']()` 与 `['dr']()`），
+不是靠"改完看起来没事"。修法：把 `r_loc.` → `_loc.`、`ros.path.join(` → `os.path.join(`，
+两个仓库根共 24 个文件。修完：编译失败 0、`selftest` PASS 36 / FAIL 0、`export` 与 `dr` 均 OK。
+
+**教训**：批量替换**字符串字面量**时，必须连**前缀**一起看（`r` / `f` / `b`），
+否则改出来的是"能编译、跑起来才炸"的代码——这类错误最贵。

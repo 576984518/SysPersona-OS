@@ -25,7 +25,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = int(os.environ.get("SYSPERSONA_HERMES_CDP_PORT") or 9333)
 RELAY = os.path.join(ROOT, "ops", "hermes-relay.md")
-NODE = os.environ.get("SYSPERSONA_NODE") or r_loc.dsh_exe()
+NODE = os.environ.get("SYSPERSONA_NODE") or _loc.dsh_exe()
 POKE_JS = os.path.join(ROOT, "ops", "cdp_poke.js")
 
 

@@ -70,7 +70,7 @@ try:
     from persona_root import node as _node
     NODE = _node()
 except Exception:
-    NODE = os.environ.get("PERSONA_NODE") or r_loc.node()
+    NODE = os.environ.get("PERSONA_NODE") or _loc.node()
 EXPORTER = os.path.join(ROOT, "tools/js/dsh_export.js")
 MIRROR = os.path.join(ROOT, "脚本/persona_mirror.py")
 HANDOFF_DIR = os.path.join(ROOT, "续接")

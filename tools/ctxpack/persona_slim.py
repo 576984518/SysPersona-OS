@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_slim.py — 滚动上下文头（抽取式，不调用模型）
-r"""persona_slim.py — 滚动上下文头（抽取式，不调用模型）
+"""persona_slim.py — 滚动上下文头（抽取式，不调用模型）
 
 从最新归档里压出一份 ≤2.5KB 的 CONTEXT.md：
   最近 N 条原文截断 + 更早的每条首句 + 事实锚点（版本号/条数/路径/日期）
@@ -9,15 +9,11 @@ r"""persona_slim.py — 滚动上下文头（抽取式，不调用模型）
   python persona_slim.py                 # 用今天最新的归档
   python persona_slim.py --file x.md     # 指定归档
   python persona_slim.py --recent 6      # 最近几条保留全文
-
-环境变量：SYSPERSONA_ROOT 指记忆库根（旧名 PERSONA_ROOT 也认），产出写到
-`<根>\memory\CONTEXT.md`；不设就按脚本所在目录推导，推不出来直接抛错。
 """
 import argparse, glob, json, os, re, time, urllib.request
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 
-from persona_root import root as _persona_root
-
-ROOT = _persona_root()
+ROOT = os.environ.get("SYSPERSONA_ROOT") or _loc.vault()
 OUTDIR = os.path.join(ROOT, "memory")
 STATE = os.path.join(OUTDIR, ".persona_slim.state.json")
 HERDSMAN = "http://127.0.0.1:8080/v1"

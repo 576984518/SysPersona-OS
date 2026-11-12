@@ -10,18 +10,12 @@ r"""persona_bridge.py — 把 Hermes 的对话从 state.db 导出成记忆库格
   python persona_bridge.py              # 导出今天的会话
   python persona_bridge.py --days 3     # 最近 3 天
   python persona_bridge.py --dry-run    # 只看有几条
-
-环境变量：SYSPERSONA_ROOT = 记忆库根（旧名 PERSONA_ROOT 也认），PERSONA_HERMES_HOME =
-Hermes 家目录（里面有 state.db）。前者缺了直接抛错；后者缺了就报一句
-「没配置 PERSONA_HERMES_HOME」并退出，不再猜某台机器的 ProgramData。
 """
 import argparse, io, json, os, re, sqlite3, sys, time
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 
-from persona_root import hermes_home as _hermes_home, root as _persona_root
-
-ROOT = _persona_root()
-_HERMES = _hermes_home()
-DB = os.path.join(_HERMES, "state.db") if _HERMES else None
+ROOT = _loc.vault()
+DB = os.path.join(_loc.hermes_home(), "state.db")
 
 sys.path.insert(0, ROOT)
 
@@ -186,9 +180,6 @@ if __name__ == "__main__":
     ap.add_argument("--no-archive", action="store_true")
     a = ap.parse_args()
 
-    if not DB:
-        raise SystemExit("没配置 PERSONA_HERMES_HOME（Hermes 家目录，里面要有 state.db）；"
-                         "本脚本不再猜某台机器的路径。")
     if not os.path.exists(DB):
         raise SystemExit("找不到 state.db: %s" % DB)
 

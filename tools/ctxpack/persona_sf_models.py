@@ -43,16 +43,14 @@ CLI：--refresh 抓一次（20h 内有缓存则直接退出）/ --list 看缓存
 开机自启（按项目习惯放启动文件夹；装一次就自动了，不装就手动跑）：
   $ws = New-Object -ComObject WScript.Shell
   $lnk = $ws.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\SysPersona-SFModels.lnk")
-  $lnk.TargetPath = "$env:PERSONA_PY"                       # 或 <runtime>\python\pythonw.exe
-  $lnk.Arguments = '"<记忆库根>\persona_sf_models.py" --refresh --boot'
-  $lnk.WorkingDirectory = "<记忆库根>"
+  $lnk.TargetPath = "D:\ProgramData\SysPersona-Runtime\python\pythonw.exe"
+  $lnk.Arguments = '"D:\4590-PC-文件\AI会话检索记录\persona_sf_models.py" --refresh --boot'
+  $lnk.WorkingDirectory = _loc.vault()
   $lnk.Save()
   （或登录型计划任务：schtasks /Create /SC ONLOGON /TN "SysPersona-SFModels" /TR "…" /F）
-
-环境变量：PERSONA_NODE = node（不设就找 <runtime>\node\bin\node.exe、再找 PATH）；
-PERSONA_PY = 上面快捷方式用的解释器；记忆库根取本脚本所在目录。
 """
 import argparse
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 import io
 import json
 import os
@@ -63,9 +61,7 @@ import tempfile
 import time
 import urllib.request
 
-from persona_root import node as _node
-
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPS = os.path.join(ROOT, "ops")
 CACHE = os.path.join(OPS, "sf-free.json")
 LOG = os.path.join(OPS, "sf-models.jsonl")
@@ -76,9 +72,9 @@ CACHE_GATE_HOURS = 20   # 闸门：缓存 20 小时内不再抓（一天一次�
 MAX_REAL_24H = 2        # 滚动 24 小时最多真抓 2 次（开机失败允许下一次开机再试）
 BOOT_WAIT_SECS = 120    # 开机模式等 CDP/网络起来的上限
 
-NODE = _node()
-if not NODE:
-    NODE = shutil.which("node") or "node"   # 最后才交给 PATH；真没有时下方会报"找不到 node"
+NODE = os.environ.get("NODE_BIN") or _loc.node()
+if not os.path.isfile(NODE):
+    NODE = shutil.which("node") or "node"
 
 # Node 侧脚本：CDP 抓卡片。结果写到 argv[2] 指定的文件，stdout 不承担数据。
 COLLECT_JS = r"""
