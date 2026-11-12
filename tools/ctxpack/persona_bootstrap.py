@@ -37,8 +37,11 @@ VERSION = "dev"
 
 # 这几个顶层目录**永远不进包**：它们是数据，不是点火器
 NEVER_DIRS = {"sessions", "archive", "index", "备份", "ops", "清理", "续接", "steps"}
-# 名字像密钥的，一律拒收
-SECRET_NAME = re.compile(r"(token|credential|secret|\.env$|\.key$|id_rsa)", re.I)
+# 名字像密钥的，一律拒收。**必须同时满足**：扩展名是"装密钥的容器" + 名字里有密钥词。
+# 早先只匹配 `token` 子串，把 Python 自带的 `tokenize.py`、`token.py` 全拒了——库文件不是密钥。
+SECRET_NAME = re.compile(r"(secret|credential|token|passwd|password|id_rsa|api[-_]?key)", re.I)
+SECRET_EXT = {".txt", ".json", ".yaml", ".yml", ".env", ".ini", ".cfg", ".conf",
+              ".dat", ".key", ".pem", ".ps1", ".cmd", ".bat", ".sh"}
 SECRET_BODY = re.compile(r"sk-[A-Za-z0-9]{24,}|-----BEGIN [A-Z ]*PRIVATE KEY-----")
 # 必带的说明文档（有就带，没有不算错）
 DOC_FILES = ("先读我.md", "使用说明.md", "接入手册-新客户端.md", "自检清单.md",
@@ -127,14 +130,45 @@ def collect(root, with_runtime=False):
     return out, skipped
 
 
+TEXT_EXT = {".py", ".ps1", ".cmd", ".bat", ".json", ".yml", ".yaml", ".toml", ".ini",
+            ".cfg", ".conf", ".txt", ".md", ".env", ".key", ".pem", ".crt", ".csv"}
+
+
+def _is_textish(path, head=None):
+    r"""看起来是文本吗？**先看扩展名，再看开头有没有 NUL**。
+
+    为什么必须判：运行时空闲 0.4 GB，里面全是 git / python / node 的二进制。
+    早先只按"名字像密钥"筛，结果 `git-credential-manager.exe`、`ssh-agent.exe`
+    全被当成密钥拒收——一个能跑的引导包永远打不出来。二进制的**内容**也不该按文本扫。
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in TEXT_EXT:
+        return False
+    if head is None:
+        try:
+            with open(path, "rb") as f:
+                head = f.read(1024)
+        except OSError:
+            return False
+    return b"\x00" not in head
+
+
 def screen(items):
-    """过一遍红线：名字像密钥、内容像密钥、落在禁收目录。有问题就抛。"""
+    """过一遍红线：名字像密钥、内容像密钥、落在禁收目录。有问题就抛。
+
+    只看**文本**文件：二进制（.exe/.dll/.so/.pyd…）既不算"名字像密钥"也不读内容。
+    这不是放松，是纠正：把 git 自带的 `ssh-agent.exe` 当成泄密源，只会让包永远打不出来。
+    """
     bad = []
     for src, rel in items:
         if any(rel.split("/")[0].lower() == d for d in NEVER_DIRS):
             bad.append(("禁收目录", rel))
             continue
-        if SECRET_NAME.search(os.path.basename(rel)):
+        base = os.path.basename(rel)
+        if not _is_textish(src):
+            continue
+        ext = os.path.splitext(base)[1].lower()
+        if ext in SECRET_EXT and SECRET_NAME.search(base):
             bad.append(("名字像密钥", rel))
             continue
         if os.path.getsize(src) <= 2 * 1024 * 1024:
