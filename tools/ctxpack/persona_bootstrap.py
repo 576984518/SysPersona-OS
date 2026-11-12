@@ -182,6 +182,47 @@ def screen(items):
     return bad
 
 
+SKELETON = ("ops", "sessions", "archive", "index", "备份", "续接", "steps", "memory", "清理")
+
+
+def cmd_init(a):
+    r"""把解出来的引导包变成一台"能开工的机器"：建骨架目录，不搬任何数据。
+
+    为什么需要它（2026-11-12 实测发现）：引导包里只有 scripts/config/docs，
+    解出来直接跑会发现 `ops/`、`sessions/`、`archive/`、`index/`、`备份/`、`续接/` 都不存在。
+    脚本大多能自己建，但**顺序混乱**——有的在第一次跑时才建，报错看起来像故障。
+    所以给一条明确的"开场"：先把目录骨架摆好，再谈认身份和连接。
+    """
+    root = os.path.abspath(a.root or os.getcwd())
+    made, have = [], []
+    for d in SKELETON:
+        p = os.path.join(root, d)
+        if os.path.isdir(p):
+            have.append(d)
+            continue
+        if not a.apply:
+            made.append(d)
+            continue
+        os.makedirs(p, exist_ok=True)
+        made.append(d)
+    print("库根：%s" % root)
+    print("%s：新建 %d 个 · 已有 %d 个" % ("[dry]" if not a.apply else "已就绪", len(made), len(have)))
+    if made:
+        print("  " + "  ".join(made))
+    if have:
+        print("  已有：" + "  ".join(have))
+    if not a.apply:
+        print("\n[dry] 没有改动。真建：加 --apply")
+        return 0
+    print("\n下一步（照这个顺序，别跳）：")
+    print("  ① python scripts\\selftest.py                          # 全绿才算能跑")
+    print("  ② python scripts\\persona_machine.py new               # 认身份、生成本机配置")
+    print("  ③ python scripts\\persona_lanbus.py health --server http://<对端虚拟IP>:8737")
+    print("  ④ python scripts\\persona_lanbus.py sync --server … --dry-run   # 先看清单再拉")
+    print("  ⑤ python scripts\\persona_selfcheck.py --once          # 15/15")
+    return 0
+
+
 def cmd_list(a):
     root = resolve_root(a.root)
     items, skipped = collect(root, a.with_runtime)
@@ -277,7 +318,13 @@ def main(argv=None):
     pp.add_argument("--out", required=True, help="输出目录")
     pp.add_argument("--version", default=os.environ.get("SYSPERSONA_VERSION", "dev"))
     vp.add_argument("zip")
+    ip = sub.add_parser("init", help="把解出来的包变成能开工的机器（只建目录骨架）")
+    ip.add_argument("--root", default="", help="库根（默认当前目录）")
+    ip.add_argument("--apply", action="store_true", help="真建（不加就是 dry）")
+    ip.set_defaults(func=cmd_init)
     a = ap.parse_args(argv)
+    if a.cmd == "init":
+        return cmd_init(a)
     if a.cmd == "list":
         return cmd_list(a)
     if a.cmd == "pack":

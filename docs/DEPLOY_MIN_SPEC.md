@@ -43,7 +43,13 @@ python persona_bootstrap.py list                       # 只列：会打什么�
 python persona_bootstrap.py pack --out <目录> --version 6.5.0
 python persona_bootstrap.py pack --out <目录> --with-runtime   # 连运行时一起
 python persona_bootstrap.py verify <zip>               # 按 MANIFEST 校 sha256
+python persona_bootstrap.py init --root <解压目录> --apply     # 建目录骨架（开场那一步）
 ```
+
+**为什么要 `init`**（2026-11-12 拿真包解压实测发现）：包里只有 `scripts/ config/ docs/`，
+解出来直接跑会发现 `ops/ sessions/ archive/ index/ 备份/ 续接/ steps/ memory/ 清理/` 都不存在。
+脚本大多能自己建，但**建的时刻不确定**，报错看起来像故障。所以给一条明确的"开场"：
+先把骨架摆好，再谈认身份与连接。
 
 ### 3.2 三条硬规则（写在代码里，不靠记性）
 
