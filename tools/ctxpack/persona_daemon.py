@@ -1,3 +1,5 @@
+import os as _os_shim, sys as _sys_shim
+_sys_shim.path.insert(0, _os_shim.path.join(_os_shim.path.dirname(_os_shim.path.abspath(__file__)), "脚本"))
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 保活 / 心跳 / 上下文）
 r"""persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 保活 / 心跳 / 上下文）
@@ -46,9 +48,10 @@ except Exception:
     pass
 
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPS = os.path.join(ROOT, "ops")
 STATUS = os.path.join(OPS, "persona-status.json")
+STATE_FILE = os.path.join(OPS, "daemon-state.json")
 LOCK = os.path.join(OPS, "persona.lock")
 CONF = os.path.join(OPS, "persona.conf.json")
 LOG = os.path.join(OPS, "persona.log")
@@ -130,7 +133,30 @@ HERMES_CTX_MAX = _LIM.LIMIT
 HERMES_CTX_LIMIT = _LIM.CLEAN        # 与 gauge 的"该清理了"同一把尺子
 HERMES_MIRROR_LIMIT = _LIM.MIRROR    # 到这条线先把会话全文镜像落盘，再让它压
 
+# 冷启动错峰：重活先等 BOOT_GRACE 秒，再每 STAGGER 秒放一个（2026-11-12）
+BOOT_GRACE = 120
+STAGGER = 25
+HEAVY_TASKS = {"index", "export", "backup2", "backupzip", "repobackup", "merge",
+               "settings", "backed", "maint", "handoff", "observe",
+               "daily", "drpreflight", "sfbalance", "sfmodels", "ctx", "scan",
+               "sweep", "webcap"}
+
 DEFAULTS = {
+    "settings": 7200,   # 设定/宪法级文件多副本快照（本机+网盘）
+    "backed": 1800,     # 备份体检：zip / 设定快照 / NAS 可达 / 加密状态
+    "localmodel": 120,  # 云端可用就停本机模型服务，云端不可达再拉起（2026-11-11 人定）
+    "failover": 300,    # 模型自动接管：心跳→判定→切换→激活（2026-11-11 人定）
+    # 以下原来都是独立计划任务，2026-11-11 收进守护（计划任务只留拉起守护的那一个）
+    # compact 2026-11-12 从 300 → 120：人报「等了一会没反应」，5 分钟才看一眼太钝；
+    # 光量水位不花钱，早 3 分钟发现就早 3 分钟压。
+    "compact": 120, "ctxguard": 600, "heal": 300,
+    "hermeskeeper": 60, "nodedrain": 60, "reloader": 300, "keeperbeat": 60,
+    "gate": 300, "clients": 300, "sealsweep": 1800, "tray": 120, "cdp": 900, "sfmodels": 21600, "maint": 604800,
+    "backupzip": 86400, "repobackup": 86400, "handoffrefresh": 1800,
+    "webcap": 3600,          # 网页抓取节拍器：1 小时一次（人定，2026-11-12）
+    # 清道夫：每小时看一眼，但**一天只真动手一次**（人定：不要实时清理，先搬进筐，
+    # 最少放 7 天且确认没误删才真删）。见 t_janitor。
+    "janitor": 3600,
     "heartbeat": 60,
     "herdsman": 300,
     "export": 1800,
@@ -163,7 +189,14 @@ DEFAULTS = {
 
 TASK_TIMEOUT = {"index": 1800, "export": 900, "ctx": 240, "capture": 1800,
                 "watermark": 120, "cost": 120, "selfcheck": 60, "sfbalance": 240,
-                "dsbalance": 120, "dr": 90, "drpreflight": 120}
+                "dsbalance": 120, "dr": 90, "drpreflight": 120,
+                "settings": 300, "backed": 180,
+                "compact": 1500, "ctxguard": 600, "heal": 1200,
+                "hermeskeeper": 180, "nodedrain": 180, "reloader": 120,
+                "keeperbeat": 120, "gate": 120, "clients": 120, "sealsweep": 900, "tray": 120, "cdp": 900, "sfmodels": 1800,
+                "maint": 1800, "backupzip": 2400,
+                "janitor": 900,
+                "repobackup": 1800, "handoffrefresh": 600}
 
 
 def now():
@@ -220,11 +253,28 @@ def t_herdsman():
     return False, "restart failed"
 
 
+def _dec(raw):
+    """解子进程输出：先按 UTF-8 严格解，失败再按 GBK 解，最后才带替换。
+
+    2026-11-11 13:47 人报「排版不对」：状态窗里出现 `?鵵 2 ??` 这种乱码。
+    根因不是排版，是 PowerShell 子脚本用 GBK 输出、这里一律按 UTF-8 带替换解，
+    中文被切成半个字。严格解码 + 回退才能两边都对。
+    """
+    if not raw:
+        return ""
+    for enc in ("utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def run(cmd, timeout):
     try:
         r = subprocess.run(cmd, cwd=ROOT, capture_output=True, timeout=timeout,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        out = (r.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+        out = _dec(r.stdout).strip().splitlines()
         tail = out[-1] if out else ""
         return r.returncode == 0, (tail[:160] or ("exit %d" % r.returncode))
     except subprocess.TimeoutExpired:
@@ -234,7 +284,7 @@ def run(cmd, timeout):
 # ── 抓之前先看侧栏最上面几条（2026-11-10 人定的机制）──────────────────
 # 判据唯一权威：persona_sessions.py 的会话表 ops\web-sessions.json。
 # 新会话永远出现在侧栏最上面一条；表里没有的 id = new_top（新会话）。
-SESSIONS = os.path.join(ROOT, "persona_sessions.py")
+SESSIONS = os.path.join(ROOT, "脚本/persona_sessions.py")
 SESSION_TABLE = os.path.join(OPS, "web-sessions.json")
 CAPTURE_QUEUE = os.path.join(OPS, "web-capture-queue.json")
 LAST_CAPTURE = os.path.join(OPS, "web-last-capture.json")
@@ -261,7 +311,7 @@ def sessions_poll(timeout=60):
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
         return 2, {"reason": "会话表 poll 调不起来：%s" % str(e)[:120]}
-    text = (r.stdout or b"").decode("utf-8", "replace")
+    text = _dec(r.stdout)
     info = {}
     for line in reversed(text.splitlines()):
         line = line.strip()
@@ -272,7 +322,7 @@ def sessions_poll(timeout=60):
             except ValueError:
                 continue
     if not info:
-        detail = (r.stderr or b"").decode("utf-8", "replace").strip()
+        detail = _dec(r.stderr).strip()
         info = {"reason": (detail[:160] or "会话表 poll 没有输出")}
     return r.returncode, info
 
@@ -409,8 +459,9 @@ def _read_capture_head(path):
 def t_export():
     """导出 Hermes 会话。带锁：手动跑、watch 触发、hctx 的镜像触发可能撞车，
     两个进程同时写同一个 .md 会 PermissionError（实测踩过）。"""
-    if not HERMES_DB:
-        return False, _missing("Hermes state.db", "hermes_home")
+    # 路径可能是"按默认位置推出来的"，文件并不存在；这时跑 bridge 只会 exit 1。
+    if not HERMES_DB or not os.path.isfile(HERMES_DB):
+        return True, "跳过：本机没装 Hermes（没有 state.db）"
     if os.path.exists(EXPORT_LOCK):
         try:
             if time.time() - os.stat(EXPORT_LOCK).st_mtime < 600:
@@ -423,7 +474,7 @@ def t_export():
     except OSError:
         pass
     try:
-        return run([PY, os.path.join(ROOT, "persona_bridge.py")], TASK_TIMEOUT["export"])
+        return run([PY, os.path.join(ROOT, "脚本/persona_bridge.py")], TASK_TIMEOUT["export"])
     finally:
         try:
             os.remove(EXPORT_LOCK)
@@ -446,11 +497,11 @@ def t_index():
     except OSError:
         pass
     try:
-        ok1, s1 = run([PY, os.path.join(ROOT, "persona_index.py")], TASK_TIMEOUT["index"])
+        ok1, s1 = run([PY, os.path.join(ROOT, "脚本/persona_index.py")], TASK_TIMEOUT["index"])
         if not ok1:
             time.sleep(5)
-            ok1, s1 = run([PY, os.path.join(ROOT, "persona_index.py")], TASK_TIMEOUT["index"])
-        ok2, s2 = run([PY, os.path.join(ROOT, "persona_index_l1.py")], 120)
+            ok1, s1 = run([PY, os.path.join(ROOT, "脚本/persona_index.py")], TASK_TIMEOUT["index"])
+        ok2, s2 = run([PY, os.path.join(ROOT, "脚本/persona_index_l1.py")], 120)
         return ok1 and ok2, "%s | %s" % (s1, s2)
     finally:
         try:
@@ -460,11 +511,11 @@ def t_index():
 
 
 def t_ctx():
-    return run([PY, os.path.join(ROOT, "persona_slim.py"), "--live"], TASK_TIMEOUT["ctx"])
+    return run([PY, os.path.join(ROOT, "脚本/persona_slim.py"), "--live"], TASK_TIMEOUT["ctx"])
 
 
 def t_watermark():
-    ok, s = run([PY, os.path.join(ROOT, "persona_gauge.py")], TASK_TIMEOUT["watermark"])
+    ok, s = run([PY, os.path.join(ROOT, "脚本/persona_gauge.py")], TASK_TIMEOUT["watermark"])
     return ok, s
 
 
@@ -473,8 +524,128 @@ def t_cost():
 
     只跑 `persona_cost.py sample --warn`；超时 120 秒，正常 < 1 秒，绝不拖住心跳。
     """
-    return run([PY, os.path.join(ROOT, "persona_cost.py"), "sample", "--warn"],
+    return run([PY, os.path.join(ROOT, "脚本/persona_cost.py"), "sample", "--warn"],
                TASK_TIMEOUT["cost"])
+
+
+def t_clients():
+    """客户端体检 + 按需拉起（2026-11-11 加，5 分钟一次）。
+
+    人：「建议用程序自动拉起，重载。所以程序需要自动检测客户端配置文件和工作目录的能力」
+    所以这里用 persona_client_probe 认出 exe / 配置 / 工作目录，报版本与是否在跑；
+    detect.auto_launch=true 的客户端才会被抓起来——**默认不自动开窗口**（不抢焦点）。
+    """
+    import persona_client_probe as P
+    msgs = []
+    bad = 0
+    try:
+        clients = P.all_clients()
+    except Exception as e:                 # noqa: BLE001
+        return False, "客户端探测失败：%s" % str(e)[:80]
+    for n, st in clients.items():
+        if not st.get("exe_exists"):
+            # 换台机器时这条会立刻出现：不是路径写错，是这台压根没装那个客户端。
+            # 所以只记一句，不算故障（真装了的机器上，exe 找不到才是问题，见 tray-clients.json 的候选列表）。
+            msgs.append("%s 未安装" % n)
+            continue
+        if not st.get("config"):
+            bad += 1
+            msgs.append("%s 找不到配置" % n)
+        if st.get("running"):
+            msgs.append("%s %s" % (n, st.get("version") or "?"))
+        elif st.get("auto_launch"):
+            ok, msg = P.launch(n)
+            msgs.append(("拉起 " + n) if ok else msg[:40])
+        else:
+            msgs.append("%s 没在跑" % n)
+    return bad == 0, "｜".join(msgs)[:160]
+
+
+def t_settings():
+    """设定/宪法级文件的多副本快照（2026-11-11 加，2 小时一次）。
+
+    人：「每一个设定文件都不能只有一份……这些都按同样的逻辑备份。」
+    所以交给 `persona_settings_backup.py`：本机 + 网盘各一份，分级保留，带 manifest。
+    """
+    ok, s = run([PY, os.path.join(ROOT, "脚本/persona_settings_backup.py"), "run"],
+                TASK_TIMEOUT["settings"])
+    return ok, s[-160:]
+
+
+def t_backed():
+    """备份体检（2026-11-11 加，半小时一次）：**只看"能不能回滚"，不看流程跑没跑**。
+
+    查四件事，任何一件不满足就报出来（托盘会变琥珀）：
+      ① 每日记忆库 zip：最近一份不超过 36 小时；
+      ② 设定快照：每份文件两处副本齐全、内容一致、不超过 26 小时；
+      ③ 网盘密文：manifest 在、且不比本地少太多（漏推会在这里露出来）；
+      ④ 钥匙：本机有、网盘上没有（串了就是事故）。
+    """
+    import time as _t
+    msgs, bad = [], []
+
+    # ① 每日 zip
+    try:
+        bdir = os.path.join(ROOT, "备份")
+        zips = [os.path.join(bdir, n) for n in os.listdir(bdir)
+                if n.startswith("记忆库-") and n.endswith(".zip")] if os.path.isdir(bdir) else []
+        if not zips:
+            bad.append("没有记忆库 zip")
+        else:
+            newest = max(zips, key=os.path.getmtime)
+            age_h = (_t.time() - os.path.getmtime(newest)) / 3600.0
+            if age_h > 36:
+                bad.append("记忆库 zip %.0f 小时前（>36h）" % age_h)
+            msgs.append("zip %.1fh" % age_h)
+    except Exception as e:                 # noqa: BLE001
+        bad.append("zip 检查失败 %r" % e)
+
+    # ② 设定快照
+    try:
+        import persona_settings_backup as SB
+        ok2, why2 = SB.verify()
+        if not ok2:
+            bad.append(why2[:100])
+        else:
+            msgs.append(why2[-40:])
+    except Exception as e:                 # noqa: BLE001
+        bad.append("设定快照检查失败 %r" % e)
+
+    # ③ 外部链路第一站：NAS 通不通（同步/备份/镜像盘都不归我们，但断了就没有异地副本）
+    try:
+        nas = r"\\Nas-1900\nas-文件\AI会话检索记录"
+        if os.path.isdir(nas):
+            msgs.append("NAS 可达")
+        else:
+            msgs.append("NAS 不可达（外部链路，不计异常）")
+    except Exception as e:                 # noqa: BLE001
+        msgs.append("NAS 检查失败（不计异常）：%s" % str(e)[:40])
+
+    # ④ 本机加密：开了就不能有明文残留；没开就如实说"未开"
+    try:
+        import persona_vault as V
+        c = V.conf()
+        if not os.path.exists(V.key_path()):
+            # 没钥匙 = 这台机器没启用加密（B96 默认全明文），不是备份坏了
+            msgs.append("加密未启用（没有钥匙）")
+        if c.get("enabled"):
+            base = os.path.join(ROOT, "sessions")
+            plain = 0
+            for dp, _ds, fs in os.walk(base):
+                for fn in fs:
+                    if fn.endswith(".md") and not V.is_sealed(os.path.join(dp, fn)):
+                        plain += 1
+            if plain:
+                bad.append("加密已开但 sessions 里还有 %d 份明文" % plain)
+            msgs.append("加密已开")
+        else:
+            msgs.append("加密未开（本地仍是明文）")
+    except Exception as e:                 # noqa: BLE001
+        bad.append("加密状态检查失败 %r" % e)
+
+    if bad:
+        return False, "备份体检不过：" + "；".join(bad[:3])
+    return True, "｜".join(msgs)[:160]
 
 
 def t_selfcheck():
@@ -484,7 +655,7 @@ def t_selfcheck():
     只在状态**变化**时往 persona.log 追加一行，不每 30 秒刷屏。
     这里把 summary 带回任务状态，守护面板上直接能看到 7/7。
     """
-    ok, s = run([PY, os.path.join(ROOT, "persona_selfcheck.py"), "--quiet"],
+    ok, s = run([PY, os.path.join(ROOT, "脚本/persona_selfcheck.py"), "--quiet"],
                 TASK_TIMEOUT["selfcheck"])
     try:
         with open(os.path.join(OPS, "selfcheck.json"), encoding="utf-8") as f:
@@ -494,6 +665,30 @@ def t_selfcheck():
     except (OSError, ValueError):
         pass
     return ok, s
+
+
+def _capture_disabled():
+    """总闸：`ops\\persona.conf.json` 里写 "capture": 0 就**彻底不抓**。
+
+    2026-11-12 定（人：「先不要后台抓取了，估计是风控了，手机和电脑都被踢了」）：
+    光把 webcap 的节拍改 0 不够——readnew / 唤醒重抓会直接跑 `--once capture`，
+    绕过节拍继续去戳网页。所以闸门放在这里，定时和按需两条路一起关。
+
+    例外（同日又定：「以后就在前台我手动 F5 抓」）：`PERSONA_CAPTURE_NOW=1` 放行。
+    这个环境变量只有 `persona_readnew.capture()`（他打 1 / 说读会话时那条前台路径）会设，
+    后台的定时与心跳拿不到，所以「后台一律不抓、前台按需才抓」是靠它分界的。
+    """
+    if os.environ.get("PERSONA_CAPTURE_NOW") == "1":
+        return False
+    try:
+        with open(CONF, encoding="utf-8") as f:
+            d = json.load(f) or {}
+        v = d.get("capture")
+        if v is None:
+            return False
+        return float(v) <= 0          # 注意：不能写 `v or 1`——0 是假值，会被当成"没配"
+    except Exception:                      # noqa: BLE001
+        return False
 
 
 def t_capture():
@@ -512,6 +707,8 @@ def t_capture():
     抓完按**抓后的**会话 id 归位到它自己那份——宁可多一步，也不写进别人的文件。
     """
     at = now()
+    if _capture_disabled():
+        return True, "抓取已停用（ops/persona.conf.json 里 capture=0，风控期间不碰网页）"
     if not NODE:
         return False, _missing("node", "node")
     if not CAPTURE_JS:
@@ -607,8 +804,18 @@ def t_capture():
                          "file": out, "msg_count": n, "marked": marked})
     if not conv:
         log("⚠ 抓到了内容，但没认出是哪个会话：先留在 %s（会话表未登记）" % rel_out)
-    return True, "《%s》（%s）→ %s（%d 条）" % (title or "无标题", (conv or "?")[:12],
-                                               rel_out, n)
+    # 抓完顺手做一小批增量（人 2026-11-12 定：抓完就触发一次，别等每小时那个大任务）。
+    # 上限 2000 块、超时 300 秒：到量就退，剩下的等下一次抓取；大块补嵌另有人跑，
+    # 这边撞上锁会自己让路（persona_index 与守护共用 ops\index.lock）。
+    inc = ""
+    if n:
+        okx, sx = run([PY, os.path.join(ROOT, "脚本/persona_index.py"),
+                       "--once-blocks", "2000"], 300)
+        lines = [l for l in (sx or "").strip().splitlines() if l.strip()]
+        inc = " ｜ 增量索引：%s" % (lines[-1][:70] if lines else ("ok" if okx else "失败"))
+        log(inc.strip(" ｜"))
+    return True, "《%s》（%s）→ %s（%d 条）%s" % (title or "无标题", (conv or "?")[:12],
+                                                  rel_out, n, inc)
 
 
 def t_scan():
@@ -638,8 +845,10 @@ def t_hctx():
     state.db 的 context_used 是空的，只能用这个；它跟 DSH 的 cacheRead 是同一把尺子。
     """
     import sqlite3
-    if not HERMES_UI_DB:
-        return False, _missing("Hermes desktop-ui.sqlite", "hermes_home")
+    # 本机没装 Hermes 时，HERMES_UI_DB 可能是"按默认位置推出来的"、文件并不存在；
+    # 这时直接 connect 会抛 unable to open database file，被当成故障挂红。
+    if not HERMES_UI_DB or not os.path.isfile(HERMES_UI_DB):
+        return True, "跳过：本机没装 Hermes（没有 desktop-ui.sqlite）"
     con = sqlite3.connect("file:%s?mode=ro" % HERMES_UI_DB.replace("\\", "/"), uri=True)
     try:
         row = con.execute(
@@ -676,7 +885,7 @@ def t_hctx():
                 good, note = mir.verify(dst) if state != "skipped" else (True, "幂等跳过")
                 msg += " | 镜像%s：%s（%s）" % (state, os.path.basename(dst), note)
                 # 镜像进了 archive，L1 立刻重建一次——不然要等下一轮 index（1 小时）才检索得到。
-                ok2, m2 = run([PY, os.path.join(ROOT, "persona_index_l1.py")], 120)
+                ok2, m2 = run([PY, os.path.join(ROOT, "脚本/persona_index_l1.py")], 120)
                 msg += " | L1 %s" % (m2.strip().splitlines()[0][:60] if m2 else ("ok" if ok2 else "失败"))
             else:
                 msg += " | 镜像：找不到会话文件"
@@ -711,7 +920,7 @@ def t_backup2():
     add_dir("archive")       # 去重副本，宁可多留
     add_dir("memory")
     add_dir("续接")
-    for f in ("BACKLOG.md", "DECISIONS.md", "SKILL.md", "先读我.md", "LATEST.md", "HANDOFF.md"):
+    for f in ("文档/BACKLOG.md", "文档/DECISIONS.md", "文档/SKILL.md", "文档/先读我.md", "文档/LATEST.md", "文档/HANDOFF.md"):
         s = os.path.join(src_root, f)
         if os.path.exists(s):
             pairs.append((s, os.path.join(BACKUP2, f)))
@@ -753,8 +962,9 @@ def t_handoff():
     触发原因没法自动判断（满 / 手动 / 迁移），先写"待补"，人再补一句。
     """
     import sqlite3
-    if not HERMES_DB:
-        return False, _missing("Hermes state.db", "hermes_home")
+    # 路径可能是"按默认位置推出来的"，文件并不存在；这时跑 bridge 只会 exit 1。
+    if not HERMES_DB or not os.path.isfile(HERMES_DB):
+        return True, "跳过：本机没装 Hermes（没有 state.db）"
     try:
         seen = json.load(io.open(HANDOFF_STATE, encoding="utf-8"))
     except Exception:
@@ -807,7 +1017,7 @@ def t_reload():
     """每一次页面重载 / 抓取，都是一次"缓存失效、文件续命"的现场。
 
     这些行不是运维日志，是**证据**：证明"窗口里的只是缓存，写下来的才是记忆"。
-    数据源是 watch_nav.js 自己写的 navwatch.log，成对取"触发抓取 → 抓取结束"。
+    数据源是 tools/js/debug/watch_nav.js 自己写的 navwatch.log，成对取"触发抓取 → 抓取结束"。
     """
     # 优先级仲裁：reload 与闹钟的 compact-check 是同一件事，闹钟优先、守护让位。
     # 放在函数最前面：直接调用 t_reload() 的入口（--once / 自检）也走同一条判据。
@@ -1027,7 +1237,7 @@ def t_proxy():
         return False, "导入 persona_proxy 失败：%s" % str(e)[:60]
     if persona_proxy.is_up():
         return True, "代理在跑"
-    script = os.path.join(ROOT, "persona_proxy.py")
+    script = os.path.join(ROOT, "脚本/persona_proxy.py")
     if not os.path.exists(script):
         return False, "缺 persona_proxy.py"
     subprocess.Popen([PY, script, "serve"], cwd=ROOT,
@@ -1054,7 +1264,7 @@ def t_keepalive():
 
 def t_todo():
     """待办备忘（v5.3）：把 BACKLOG 摊成一份完整的，交接包截断也不丢。"""
-    script = os.path.join(ROOT, "persona_todo.py")
+    script = os.path.join(ROOT, "脚本/persona_todo.py")
     if not os.path.exists(script):
         return False, "缺 persona_todo.py"
     ok, msg = run([PY, script], 60)
@@ -1075,7 +1285,7 @@ def t_tasks():
 
 def t_observe():
     """表达观察（v5.6）：只留痕，不判定。底座自带性格，没有零点。"""
-    script = os.path.join(ROOT, "persona_observe.py")
+    script = os.path.join(ROOT, "脚本/persona_observe.py")
     if not os.path.exists(script):
         return False, "缺 persona_observe.py"
     ok, msg = run([PY, script, "snapshot", "--days", "3"], 120)
@@ -1085,7 +1295,7 @@ def t_observe():
 
 def t_daily():
     """日度高光（v5.6）：只写当天定下的事，带来源文件；同一天覆盖重写。"""
-    script = os.path.join(ROOT, "persona_daily.py")
+    script = os.path.join(ROOT, "脚本/persona_daily.py")
     if not os.path.exists(script):
         return False, "缺 persona_daily.py"
     ok, msg = run([PY, script], 120)
@@ -1155,18 +1365,21 @@ def t_dsbalance():
     只读、不花 token；产物 `ops\ds-balance.json` 给降级判定用（低于 ¥5 就保底）。
     """
     try:
-        r = subprocess.run([PY, os.path.join(ROOT, "persona_fallback.py"),
+        r = subprocess.run([PY, os.path.join(ROOT, "脚本/persona_fallback.py"),
                             "balance", "--fetch"],
                            cwd=ROOT, capture_output=True,
                            timeout=TASK_TIMEOUT["dsbalance"],
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ok = r.returncode == 0
-        tail = ((r.stdout or b"").decode("utf-8", "replace").strip().splitlines() or [""])[-1]
-        err = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        tail = (_dec(r.stdout).strip().splitlines() or [""])[-1]
+        err = _dec(r.stderr).strip().splitlines()
         if not ok and err:
             tail = "%s｜stderr: %s" % (tail[:90], err[-1][:90])
     except subprocess.TimeoutExpired:
         return False, "timeout"
+    if not ok and "没配 DEEPSEEK_API_KEY" in tail:
+        # 没钥匙就等于余额读不到，属于「本机没配」，不是故障；余额本来也允许人工记。
+        return True, "跳过：没配 DEEPSEEK_API_KEY（余额可人工记）"
     try:
         with open(os.path.join(OPS, "ds-balance.json"), encoding="utf-8") as f:
             d = json.load(f)
@@ -1186,7 +1399,7 @@ def t_sfbalance():
     频率：脚本自己有 6 小时闸门 + 24 小时最多 6 次，这里 6 小时叫一次不会多抓。
     产物给 `persona_fallback` 当余额快照：低于阈值就降级（欠费→只做本机活）。
     """
-    ok, s = run([NODE, os.path.join(ROOT, "sf_balance.js")],
+    ok, s = run([NODE, os.path.join(ROOT, "tools/js/sf_balance.js")],
                 TASK_TIMEOUT["sfbalance"])
     try:
         with open(os.path.join(OPS, "sf-balance.json"), encoding="utf-8") as f:
@@ -1234,6 +1447,189 @@ def t_drpreflight():
     return bool(d.get("ok")), line[:120]
 
 
+# ── 外挂脚本：把散在计划任务里的活全部收进守护（2026-11-11 人定）────────
+# 人：「所有任务全部放到后台程序，计划任务只保留拉起后台的那一个——现在太分散了。」
+# 所以这里一张表把原来 13 个计划任务一一对上；计划任务只剩 `SysPersona-Daemon`。
+LAUNCHER = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+                        "SysPersona")
+
+
+def _ps(name):
+    return ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden",
+            "-ExecutionPolicy", "Bypass", "-File", os.path.join(LAUNCHER, name)]
+
+
+SCRIPTS = {
+    "compact": [PY, "脚本/persona_compact.py", "check"],                    # 原 SysPersona-Compact 5m
+    "ctxguard": _ps("ctxguard.ps1"),                                   # 原 SysPersona-CtxGuard 10m
+    "heal": [PY, "脚本/persona_steps.py", "run", "all", "--act"],           # 原 SysPersona-Heal 5m
+    "hermeskeeper": [PY, "脚本/persona_hermes_keeper.py", "check", "--act"],  # 原 -Hermes-Keeper 1m
+    "nodedrain": [PY, "脚本/persona_node_cmd.py", "drain"],                 # 原 -NodeDrain 1m
+    "reloader": [PY, "脚本/persona_constitution_reloader.py", "--reason", "startup",
+                 "--only-if-needed"],                                  # 原 -Reloader 5m
+    "keeperbeat": [PY, "脚本/persona_session_keeper.py", "beat", "--quiet"],  # 原 -SessionKeeper 1m
+    "gate": [PY, "脚本/persona_vault_gate.py", "ensure"],
+    # 每半小时把"新写出来的明文"补封一遍（Hermes 会不断重写自己的 mirror，所以是常扫不是一次）
+    "sealsweep": [PY, "脚本/persona_vault_bulk.py", "seal"],                   # I/O 门常驻（原来靠托盘）
+    # 云端可用 → 停本机模型服务（否则 Hermes 新会话默认钉到本地小模型，长会话装不下）
+    "localmodel": [PY, "脚本/persona_localmodel.py", "ensure"],
+    # 模型自动接管：主档崩了换下一档，并把客户端重新激活
+    "failover": [PY, "脚本/persona_model_failover.py", "ensure"],
+    "webcap": [PY, "脚本/persona_webcap.py"],                                   # 网页抓取节拍器（1h）：只下单，不抓
+    # 清道夫：先搬进 清理\待删\，放满 7 天才真删；脚本自己管「一天只动一次」+「4 点后」
+    "janitor": [PY, "脚本/persona_janitor.py", "daily"],
+    "maint": _ps("maint.ps1"),                                         # 原 -Memory-Maint 周
+    "backupzip": ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden",
+                  "-ExecutionPolicy", "Bypass", "-File", os.path.join(ROOT, "backup.ps1")],
+    "repobackup": _ps("repo_backup.ps1"),                              # 原 -Repo-Backup 日
+    "handoffrefresh": _ps("handoff_refresh.ps1"),                      # 原 -Handoff-Refresh 30m
+    # 这三件原来在「启动」文件夹里各占一个快捷方式；现在由守护按需拉起，启动项只剩一个。
+    "cdp": _ps("start_cdp_browser.ps1"),                               # 原 启动项 SysPersona-CDP
+    "sfmodels": [PY, "脚本/persona_sf_models.py", "--refresh"],             # 原 启动项 SysPersona-SFModels
+}
+
+
+def _procs_matching(needle):
+    """哪些进程的命令行里带 needle（用来判"托盘/看门狗还活着吗"）。"""
+    hits = []
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*%s*' } "
+             "| Select-Object -ExpandProperty ProcessId" % needle],
+            capture_output=True, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for ln in _dec(r.stdout).split():
+            if ln.strip().isdigit():
+                hits.append(int(ln))
+    except Exception:                      # noqa: BLE001
+        pass
+    return hits
+
+
+def t_tray():
+    """托盘保活：没在跑就拉起来（原启动项 SysPersona-Tray 的职责）。
+
+    2026-11-11 13:40：判重改用**命名互斥量**。原来靠命令行匹配，
+    提权进程的 CommandLine 从非提权进程读出来是空的 → 每 120 秒都以为没跑
+    → 重复拉起，人看到两个、三个图标。互斥量跨权限级别有效。
+    """
+    try:
+        import persona_tray_multi as _tm
+        if _tm.mutex_alive():
+            return True, "托盘在跑（互斥量）"
+    except Exception:                      # noqa: BLE001
+        if _procs_matching("persona_tray"):
+            return True, "托盘在跑（命令行）"
+    pyw = os.path.join(os.path.dirname(PY), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else PY
+    subprocess.Popen([exe, os.path.join(ROOT, "脚本/persona_tray_multi.py")], cwd=ROOT,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+    return True, "托盘没在跑，已拉起"
+
+
+# 「本机没装 / 没配」——不是故障，是这台机器还没有那个东西
+SKIP_HINTS = (
+    "没配 DEEPSEEK_API_KEY",
+    "配置里找不到 provider=",
+    "本机没装",
+    "本机不启用",
+    "没有 desktop-ui.sqlite",
+    "hermes-home",
+)
+
+
+def _hermes_present():
+    r"""这台机器到底装没装 Hermes——按 hermes_home 目录真实存在判定，不按配置里写着什么。"""
+    try:
+        import persona_root as _R
+        h = _R.hermes_home()
+        return bool(h and os.path.isdir(h))
+    except Exception:                      # noqa: BLE001
+        return False
+
+
+# 某些任务只对「装了那个客户端」的机器有意义：没装就直接跳过，别每 5 分钟报一次红。
+NEEDS = {
+    "hermeskeeper": (_hermes_present, "本机没装 Hermes"),
+}
+
+# 「装了」≠「本机要用」。人 2026-11-12 定：这台小主机只有 4G 内存，
+# Hermes / Herdsman / 本地模型一个都不拉——装着是装着，跑起来就把机器拖死。
+# 机器配置里 `clients.<名字>.enabled=false` 写了哪个，对应任务就整条跳过，
+# 理由照抄配置里的 why（不是「没装」，是「本机不用」）。
+CLIENT_OF = {
+    "herdsman": "herdsman",
+    "localmodel": "local_model",
+    "hermeskeeper": "hermes",
+    "keeperbeat": "hermes",
+    "failover": "hermes",
+    "gate": "hermes",
+    "reloader": "hermes",
+    "cdp": "hermes",
+}
+
+
+def _client_off(name):
+    r"""本机不启用这个客户端时返回理由（空串 = 启用）。"""
+    key = CLIENT_OF.get(name)
+    if not key:
+        return ""
+    try:
+        import persona_root as _R
+        on, why = _R.client_policy(key)
+        return "" if on else (why or "本机不启用")
+    except Exception:                      # noqa: BLE001
+        return ""
+
+
+def _off_guard(name, fn):
+    r"""把「本机不启用」挡在真干活之前——herdsman 会真去拉起一个 100MB 的 exe。"""
+    if name not in CLIENT_OF:
+        return fn
+
+    def task():
+        off = _client_off(name)
+        if off:
+            return True, "跳过：本机不启用（%s）" % off
+        return fn()
+    task.__name__ = getattr(fn, "__name__", "t_" + name)
+    return task
+
+
+def _make_script_task(name):
+    def task():
+        # 用 -File 引的外部 ps1（ctxguard / maint / repobackup / handoffrefresh / cdp）
+        # 不一定装：它们是各机器上自己放进去的。缺了就跳过，别拿 PowerShell 的启动横幅当错误。
+        cmd = SCRIPTS[name]
+        if "-File" in cmd:
+            f = cmd[cmd.index("-File") + 1]
+            if not os.path.isfile(f):
+                return True, "跳过：本机没有 %s" % os.path.basename(f)
+        off = _client_off(name)
+        if off:
+            return True, "跳过：本机不启用（%s）" % off
+        need = NEEDS.get(name)
+        if need and not need[0]():
+            return True, "跳过（本机未配置）：" + need[1]
+        ok, msg = run(SCRIPTS[name], TASK_TIMEOUT.get(name, 300))
+        # 换台机器第一次跑时，缺密钥、缺 provider、缺某个客户端都会让脚本非零退出。
+        # 这时报红没人能修，只会把真正的故障淹掉——统一降级成「跳过（本机未配置）」，
+        # 原文留在消息里，谁想看还看得见。
+        if not ok and any(h in (msg or "") for h in SKIP_HINTS):
+            last = ((msg or "").strip().splitlines() or [""])[-1]
+            return True, "跳过（本机未配置）：" + last[:110]
+        return ok, msg
+    task.__name__ = "t_" + name
+    return task
+
+
+for _n in SCRIPTS:
+    globals()["t_" + _n] = _make_script_task(_n)
+
+
 TASKS = {
     "herdsman": t_herdsman,
     "export": t_export,
@@ -1264,7 +1660,21 @@ TASKS = {
     "dsbalance": t_dsbalance,
     "dr": t_dr,
     "drpreflight": t_drpreflight,
+    "settings": t_settings,
+    "backed": t_backed,
+    "localmodel": t_localmodel,
+    "failover": t_failover,
+    "tray": t_tray,
+    "clients": t_clients,
 }
+
+# 外挂任务登记（t_compact / t_heal / … 由循环生成）
+for _n in SCRIPTS:
+    TASKS[_n] = globals()["t_" + _n]
+
+# 最后一道：显式写的那几个（herdsman / localmodel / failover …）也过「本机不启用」。
+for _n in list(TASKS):
+    TASKS[_n] = _off_guard(_n, TASKS[_n])
 
 
 # ── 检索：常用目录自动 / 指定目录手动 ────────────────────────────────
@@ -1325,10 +1735,60 @@ class PersonaDaemon:
         self.state = {k: {"last": 0, "ok": None, "msg": "never", "runs": 0, "busy": False}
                       for k in TASKS}
         self.next_due = {k: 0 for k in TASKS}
+        self.load_state()
         self.started = time.time()
         self.stop = False
         self.beats = []          # 最近几次心跳的时刻，用来自测「一拍多少秒」
         self._last_export = 0.0
+
+    def load_state(self):
+        """把上次的"各任务上次跑的时间"读回来。
+
+        为什么要有：2026-11-11 把计划任务全收进守护后，一重启就**所有任务重新到期**，
+        于是 2 分钟里连打了 4 个 120MB 的记忆库备份（interval 是 1 天，本该一天一次）。
+        记到 ops\\daemon-state.json，重启就接着算，不重跑。
+        """
+        try:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return
+        last = d.get("last") or {}
+        runs = d.get("runs") or {}
+        heavy_i = 0
+        light_i = 0
+        for name in TASKS:
+            ts = float(last.get(name) or 0)
+            if ts > 0:
+                self.state[name]["last"] = ts
+                self.state[name]["runs"] = int(runs.get(name) or 0)
+                iv = float(self.cfg.get(name, 1) or 0)
+                self.next_due[name] = ts + iv if iv > 0 else 0
+                # 开机错峰（2026-11-12 人：「开机那一会大量运行，鼠标都卡」）：
+                # 冷启动时所有任务的下次时间都落在过去，会一起冲。这里把重活按
+                # STAGGER 秒排队，轻活只错 2 秒，避免磁盘/CPU 同时打满。
+                if self.next_due[name] <= time.time() + 2:
+                    if name in HEAVY_TASKS:
+                        self.next_due[name] = time.time() + BOOT_GRACE + heavy_i * STAGGER
+                        heavy_i += 1
+                    else:
+                        self.next_due[name] = time.time() + light_i * 2
+                        light_i += 1
+                log("恢复 %-14s 上次 %s，下次 %s 秒后" % (
+                    name, time.strftime("%m-%d %H:%M", time.localtime(ts)),
+                    int(max(0, self.next_due[name] - time.time()))))
+
+    def save_state(self):
+        try:
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"at": now(),
+                           "last": {k: v["last"] for k, v in self.state.items() if v["last"]},
+                           "runs": {k: v.get("runs", 0) for k, v in self.state.items()}},
+                          f, ensure_ascii=False, indent=1)
+            os.replace(tmp, STATE_FILE)
+        except OSError:
+            pass
 
     def beat_interval(self):
         """实测心跳节拍（秒）：最近几次心跳间隔的中位数；样本不够就退回配置值。"""
@@ -1383,6 +1843,7 @@ class PersonaDaemon:
                 self.state[name].update(last=time.time(), ok=True, msg=reason, busy=False,
                                         runs=self.state[name]["runs"] + 1)
                 self.next_due[name] = time.time() + float(self.cfg.get(name, 3600))
+                self.save_state()
                 log("TASK %-9s %-4s %5.1fs  %s" % (name, "OK", dt, reason))
                 return
             try:
@@ -1399,6 +1860,7 @@ class PersonaDaemon:
         self.state[name].update(last=time.time(), ok=ok, msg=msg, busy=False,
                                 runs=self.state[name]["runs"] + 1)
         self.next_due[name] = time.time() + float(self.cfg.get(name, 3600))
+        self.save_state()
         # 反向不占位：守护跑完只写一条租约供 status 观察；优先级低，闹钟侧天然不受阻。
         if job and ok:
             try:
@@ -1418,7 +1880,14 @@ class PersonaDaemon:
             t = time.time()
             if t >= heart_next:
                 self.status()
+                self.save_state()
                 heart_next = t + float(self.cfg.get("heartbeat", 60))
+                # 心跳必带时间（2026-11-11 人定）：做没做事都写一条，缺席本身要被看见
+                try:
+                    import persona_heartbeat as HB
+                    HB.beat("daemon", True, "tick")
+                except Exception:          # noqa: BLE001
+                    pass
 
             # 会话库一变就把 export 提前：安静 3 秒 = 这一轮说完了
             try:
@@ -1498,13 +1967,55 @@ def _resident_pid():
     return os.getpid()
 
 
+# ── 单实例：全局命名互斥量（2026-11-11 14:37） ──
+# 原来只靠 pid 锁文件 + os.kill(pid,0)。问题是：提权进程的 pid 从非提权进程
+# 查活会失败，于是以为没在跑→ 再拉一个，现场出现过 4 个守护互刷状态。
+# 互斥量跨权限级别都认，和托盘用同一套办法。
+DAEMON_MUTEX = r"Global\SysPersonaDaemon-v1"
+_ERROR_ALREADY_EXISTS = 183
+_daemon_mutex_handle = None
+
+
+def _daemon_mutex_alive():
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        h = k32.OpenMutexW(0x00100000, False, DAEMON_MUTEX)
+        if h:
+            k32.CloseHandle(h)
+            return True
+        return ctypes.get_last_error() == _ERROR_ALREADY_EXISTS
+    except Exception:                      # noqa: BLE001
+        return False
+
+
+def _claim_daemon_mutex():
+    global _daemon_mutex_handle
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ctypes.set_last_error(0)
+        h = k32.CreateMutexW(None, False, DAEMON_MUTEX)
+        if ctypes.get_last_error() == _ERROR_ALREADY_EXISTS:
+            if h:
+                k32.CloseHandle(h)
+            return False
+        _daemon_mutex_handle = h
+        return bool(h)
+    except Exception:                      # noqa: BLE001
+        return True                        # 拿不到就当能跑，别把守护弄没了
+
+
 def single_instance():
     os.makedirs(OPS, exist_ok=True)
+    if not _claim_daemon_mutex():
+        return False
     if os.path.exists(LOCK):
         try:
             pid = int(open(LOCK).read().strip())
             os.kill(pid, 0)  # 存在且活着
-            return False
+            if pid != os.getpid() and _pid_alive(pid):
+                return False
         except (OSError, ValueError):
             pass
     with open(LOCK, "w") as f:
@@ -1512,9 +2023,42 @@ def single_instance():
     return True
 
 
+def daemon_pid():
+    """守护自己的 pid（活着才算，否则 0）。"""
+    try:
+        with open(LOCK, encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+    if pid and pid != os.getpid() and _pid_alive(pid):
+        return pid
+    return 0
+
+
+def ensure():
+    """计划任务唯一入口：守护不在就跑起来，在就什么都不做。
+
+    人 2026-11-11：「所有任务全部放到后台程序，计划任务只保留拉起后台的那一个。」
+    所以计划任务只剩 `SysPersona-Daemon`，每 5 分钟叫一次这里。
+    """
+    if _daemon_mutex_alive():
+        return True, "守护已在跑（互斥量）"
+    pid = daemon_pid()
+    if pid:
+        return True, "守护已在跑（pid %d）" % pid
+    pyw = os.path.join(os.path.dirname(PY), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else PY
+    subprocess.Popen([exe, os.path.abspath(__file__), "--daemon"], cwd=ROOT,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+    return True, "守护没在跑，已拉起（%s）" % os.path.basename(exe)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--daemon", action="store_true")
+    ap.add_argument("--ensure", action="store_true")
     ap.add_argument("--once", default="")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--search", default="", help="关键词（空格分隔=多词）")
@@ -1536,6 +2080,13 @@ if __name__ == "__main__":
         else:
             print("没有状态文件（persona_daemon 没跑过）")
         sys.exit(0)
+
+    if a.ensure:
+        # 2026-11-11 14:38 修：--ensure 原来根本没被处理，计划任务每 5 分钟
+        # 直接跑起一个**完整守护**并一直驻留 —— 这就是越跑越多的真凶。
+        ok, msg = ensure()
+        print(("OK   " if ok else "NO   ") + msg)
+        sys.exit(0 if ok else 1)
 
     k = PersonaDaemon()
     if a.once:
