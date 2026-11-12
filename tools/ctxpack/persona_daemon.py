@@ -1,4 +1,5 @@
 import os as _os_shim, sys as _sys_shim
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 _sys_shim.path.insert(0, _os_shim.path.join(_os_shim.path.dirname(_os_shim.path.abspath(__file__)), "脚本"))
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_daemon.py — 本地常驻守护进程（抓取 / 索引 / 归档 / 保活 / 心跳 / 上下文）
@@ -613,7 +614,7 @@ def t_backed():
 
     # ③ 外部链路第一站：NAS 通不通（同步/备份/镜像盘都不归我们，但断了就没有异地副本）
     try:
-        nas = r"\\Nas-1900\nas-文件\AI会话检索记录"
+        nas = r_loc.mirror()
         if os.path.isdir(nas):
             msgs.append("NAS 可达")
         else:

@@ -1912,3 +1912,16 @@ v3.9.0 上线后第一轮实测暴露三个问题，都是"能触发但抓不到
   python 的 `tokenize.py` 曾被当成泄密源；
 - 实测：`--with-runtime` → 5684 个文件 / 396.8 MB → 156 MB zip，`verify` OK 5684 · 不符 0 · 缺 0，耗时 132 秒；
   不带运行时 → 112 个文件 / 1.7 MB；解包后 `selftest` PASS 36 / FAIL 0，`init` 后九个目录齐。
+
+## v6.11.0 · 清债：本机字面量归零 + 位置解析收成一个模块（2026-11-12）
+
+**一句话**：只换"值从哪来"，不动任何逻辑。
+
+- 新增 `tools/ctxpack/persona_locate.py`：`vault / runtime / node / dsh_exe / hermes_home / hermes_exe / mirror`，
+  统一按「环境变量 → persona_root → 标准环境变量推出的默认位置 → **空串**」解析，**探不到就报错，不猜**；
+- 清掉仓库里剩下的本机字面量：旧库根、某台机器的 `ProgramData`、某用户名下的壳 exe、一台 NAS 的 UNC 路径——
+  **28 个文件**（库 `脚本/` + 仓库 `tools/`）逐条字面量替换，不写正则、不顺手改逻辑；
+- 复核：非注释行扫描 `C:\Users\|D:\|\\Nas-1900` **命中 0**；全树编译**失败 0**；`selftest` **PASS 36 / FAIL 0**；
+  `python persona_locate.py` 六项全部解析到真实位置（`mirror` 未设就老实"没有"）；
+- B85 只做了这一半：`_read_json/_write_json` 之类的小工具仍各有一份，合并它们要动加载顺序与异常语义，
+  留到下一版单独做。

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 秒、不出网）
 r"""persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 秒、不出网）
 
@@ -15,6 +15,7 @@ r"""persona_vision.py — 看图：默认走本机 Windows OCR（免费、约 1 
 云端 key 来源：环境变量 SILICONFLOW_API_KEY → hermes-home\.env → config.yaml（不写死）
 """
 import base64
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 import io
 import json
 import os
@@ -28,10 +29,11 @@ except Exception:
 import sys
 import urllib.request
 
-HOME = r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home"
+HOME = r_loc.hermes_home()
 API = "https://api.siliconflow.cn/v1/chat/completions"
 MODEL = "PaddlePaddle/PaddleOCR-VL-1.5"
-OCR_PS1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "winocr.ps1")
+OCR_PS1 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops", "winocr.ps1")
+NO_WINDOW = 0x08000000
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp"}
 
@@ -70,7 +72,7 @@ def local_ocr(path):
     p = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                         "-File", OCR_PS1, path],
                        capture_output=True, text=True, timeout=90,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
     out = "\n".join(l for l in (p.stdout or "").splitlines() if not l.startswith("LANG:")).strip()
     if not out:
         raise SystemExit("本机 OCR 没认出文字（图片可能是照片/无文字）：%s" % (p.stderr or "")[:200])

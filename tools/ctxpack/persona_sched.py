@@ -26,8 +26,8 @@ r"""persona_sched.py — 闹钟 / 守护的优先级仲裁（租约，v1）
   sessions、archive、续接 的命令标 `nonpreemptible`，不杀，排队等下次。
 
 用法：
-  python persona_sched.py status [--root D:\库根]
-  python persona_sched.py release compact-check --owner daemon [--root D:\库根]
+  python persona_sched.py status [--root <库根>]
+  python persona_sched.py release compact-check --owner daemon [--root <库根>]
 
 库根优先级：--root > 环境变量 SYSPERSONA_ROOT > PERSONA_ROOT > 本文件所在目录。
 
@@ -204,7 +204,7 @@ def _label(owner):
     return OWNER_LABEL.get(owner, owner or "?")
 
 
-NONPREEMPTIBLE_MARKERS = ("persona_compact.py", "persona_mirror.py")
+NONPREEMPTIBLE_MARKERS = ("脚本/persona_compact.py", "脚本/persona_mirror.py")
 NONPREEMPTIBLE_DIRS = ("sessions/", "sessions\\", "archive/", "archive\\",
                        "续接/", "续接\\")
 

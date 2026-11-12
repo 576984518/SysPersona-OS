@@ -17,6 +17,7 @@ r"""persona_hermes.py — 换 Hermes 客户端的模型（它是文件驱动的�
 不含备份：Hermes 自己已经堆了一堆 .bak，我们按原子替换写，写完回读校验，失败零写入。
 """
 import io
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 import json
 import os
 import sys
@@ -24,10 +25,10 @@ import time
 
 CONF = os.environ.get("SYSPERSONA_HERMES_CONF") or os.path.join(
     os.environ.get("SYSPERSONA_HERMES_HOME")
-    or r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home",
+    or r_loc.hermes_home(),
     "config.yaml")
 
-PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "profiles-hermes")
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops", "profiles-hermes")
 DB = os.path.join(os.path.dirname(CONF), "desktop-ui.sqlite")
 UI_KEY = os.environ.get("SYSPERSONA_HERMES_UI_KEY") or \
     "hermes:last-used-model:managed:http%3A%2F%2F127.0.0.1%3A9120:default"

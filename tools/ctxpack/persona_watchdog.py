@@ -1,3 +1,6 @@
+import os as _os_shim, sys as _sys_shim
+import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
+_sys_shim.path.insert(0, _os_shim.path.join(_os_shim.path.dirname(_os_shim.path.abspath(__file__)), "脚本"))
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打开后才自动动手）
 r"""persona_watchdog.py — 看门狗 + 容灾保底（一个显式开关，打开后才自动动手）
@@ -59,7 +62,7 @@ import sys
 import time
 import urllib.request
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPS = os.path.join(ROOT, "ops")
 LOG = os.path.join(OPS, "persona.log")
 OUT = os.path.join(OPS, "watchdog.jsonl")
@@ -87,7 +90,7 @@ CLIENT_IMG = os.path.basename(CLIENT_EXE)
 
 # Hermes 客户端（另一条命：它的模型写在 config.yaml 里，改文件就生效）
 HERMES_EXE = os.environ.get("SYSPERSONA_HERMES_EXE") or \
-    r"D:\ProgramData\Hermes Agent CN Desktop\hermes-agent-cn-desktop.exe"
+    r_loc.hermes_exe()
 HERMES_IMG = os.path.basename(HERMES_EXE)
 
 DEFAULT_CHAIN = [
@@ -292,8 +295,12 @@ def hermes_alive():
     return any(n == HERMES_IMG.lower() for _, n in proc_table())
 
 
-def launch_hermes(wait=30.0):
-    """拉起 Hermes（若已在跑就什么都不做）。"""
+def launch_hermes(wait=120.0):
+    """拉起 Hermes（若已在跑就什么都不做）。
+
+    2026-11-11 人报「启动很慢」：实测桌面本体 ~40 秒才露脸，网关 runtime 再 ~90 秒。
+    等的上限从 30 秒放到 120 秒——宁可多等，也别误判成"没起来"再拉第二份。
+    """
     if hermes_alive():
         return True, "Hermes 本来就在跑"
     if not os.path.exists(HERMES_EXE):
@@ -314,7 +321,7 @@ def launch_hermes(wait=30.0):
     return False, "起了但 %0.f 秒内没看到进程" % wait
 
 
-def restart_hermes(wait=40.0):
+def restart_hermes(wait=120.0):
     """关掉 Hermes 再拉起：它换配置要重启内核才吃（档案页也写着「约 20-30 秒」）。"""
     if hermes_alive():
         _run(["taskkill", "/F", "/T", "/IM", HERMES_IMG], timeout=40)
@@ -573,7 +580,7 @@ VER_OF = {"free": "cloud", "local": "local", "paid": "paid"}
 def switch_model(cmd, model=""):
     """套用一套**固定的版本文件**（不是现场改文字：改文字会被客户端写回去）。"""
     ver = VER_OF.get(cmd, cmd)
-    return _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", ver])
+    return _run([PY_EXE, os.path.join(ROOT, "脚本/persona_model_switch.py"), "use", ver])
 
 
 RELAY_BEGIN = "<!-- syspersona-relay:begin -->"
@@ -583,7 +590,7 @@ RELAY_END = "<!-- syspersona-relay:end -->"
 def hermes_memory_path():
     """Hermes 起会话会读的记忆文件（在它的 hermes-home\\memories 下）。"""
     home = os.environ.get("SYSPERSONA_HERMES_HOME") or \
-        r"D:\ProgramData\Hermes Agent CN Desktop\data\hermes-home"
+        r_loc.hermes_home()
     p = os.path.join(home, "memories", "MEMORY.md")
     return p if os.path.isdir(os.path.dirname(p)) else ""
 
@@ -695,7 +702,7 @@ def session_model_sync(drop_reasoning=True):
     prov, model = current_model()
     if not (prov and model):
         return False, "读不到当前配置里的 provider/model"
-    args = [PY_EXE, os.path.join(ROOT, "persona_session_model.py"), "set", prov, model]
+    args = [PY_EXE, os.path.join(ROOT, "脚本/persona_session_model.py"), "set", prov, model]
     if drop_reasoning:
         args.append("--drop-reasoning")
     return _run(args)
@@ -708,7 +715,7 @@ def revive_daemon():
     env = dict(os.environ)
     env.setdefault("SYSPERSONA_ROOT", ROOT)
     try:
-        subprocess.Popen([PYW, os.path.join(ROOT, "persona_daemon.py"), "--daemon"],
+        subprocess.Popen([PYW, os.path.join(ROOT, "脚本/persona_daemon.py"), "--daemon"],
                          cwd=ROOT, env=env, close_fds=True,
                          creationflags=0x00000008,      # DETACHED_PROCESS
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -735,8 +742,8 @@ def kill_client(wait=25.0):
     return True, "已退出（%.0f 秒）" % (time.time() - t0)
 
 
-def launch_client(wait=25.0):
-    """只拉，不杀。"""
+def launch_client(wait=120.0):
+    """只拉，不杀。（2026-11-11：壳启动也慢，等的上限 25 → 120 秒）"""
     if not os.path.exists(CLIENT_EXE):
         return False, "找不到客户端可执行文件：%s" % CLIENT_EXE
     env = dict(os.environ)
@@ -757,7 +764,7 @@ def launch_client(wait=25.0):
     return False, "已启动但 %0.f 秒内没看到进程" % wait
 
 
-def restart_client(wait=25.0):
+def restart_client(wait=120.0):
     """杀 → 拉起（不改配置）。配置那一档走 enact 的三步。"""
     ok, msg = kill_client(wait)
     if not ok:
@@ -944,6 +951,7 @@ def enact(what, dry=False):
                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
             "paid": [("杀客户端", "kill"), ("改配置 → DeepSeek 收费档", "switch"),
                       ("移走本会话缓存", "session"), ("拉起客户端", "launch")],
+            "restart-hermes": [("重启 Hermes 窗口", "hermes")],
             "hermes": [("写交接卡给 Hermes", "relay"),
                        ("把 Hermes 切到本地档", "hconf"),
                        ("拉起 Hermes", "hermes"),
@@ -980,12 +988,12 @@ def enact(what, dry=False):
         elif kind == "relay":
             ok, msg = write_relay()
         elif kind == "hconf":
-            ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_hermes.py"), "use-copy", "local"])
+            ok, msg = _run([PY_EXE, os.path.join(ROOT, "脚本/persona_hermes.py"), "use-copy", "local"])
         elif kind == "hermes":
             ok, msg = _try(restart_hermes, tries=2, wait=5)
         elif kind == "poke":
             time.sleep(8)                      # 等界面渲染完
-            ok, msg = _try(lambda: _run([PY_EXE, os.path.join(ROOT, "persona_hermes_poke.py")],
+            ok, msg = _try(lambda: _run([PY_EXE, os.path.join(ROOT, "脚本/persona_hermes_poke.py")],
                                         timeout=90), tries=2, wait=10)
         elif kind == "proxy":
             _t, _up = probe(cfg().get("offline_targets") or ["223.5.5.5:443"])
@@ -1378,7 +1386,7 @@ def rollback():
         return 2
     prov, model = current_model()
     print("现在：%s / %s" % (prov, model))
-    ok, msg = _run([PY_EXE, os.path.join(ROOT, "persona_model_switch.py"), "use", prev])
+    ok, msg = _run([PY_EXE, os.path.join(ROOT, "脚本/persona_model_switch.py"), "use", prev])
     print("配置退回 %s：%s" % (prev, "ok" if ok else msg))
     intent_clear()
     proxy_clear()
