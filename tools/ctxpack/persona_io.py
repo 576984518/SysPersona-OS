@@ -36,19 +36,17 @@ def _mkdirs(path):
 
 
 def read_json(path, default=None, encoding="utf-8-sig"):
-    r"""读 JSON；读不到、坏掉、或顶层不是 dict → 返回 `default`（默认 `None`）。
+    r"""读 JSON 并要求顶层是 dict；读不到/坏掉/不是 dict → 原样返回 `default`（默认 `None`）。
 
-    顶层必须是 dict：这些文件都是"状态/配置"，顶层是 list 说明文件被别的程序写坏了，
-    这时**返回默认值比返回半个结构好**——调用处按 dict 用，不会在下一行炸。
+    注意：**不替调用方把 None 换成 `{}`**。要"读不到给空 dict"就显式写 `read_json(p, {})`——
+    这条以前在十几个脚本里各有各的默认值，正是 B85 要收的东西。
     """
     try:
         with io.open(path, encoding=encoding) as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return {} if default is None else default
-    if not isinstance(data, dict):
-        return {} if default is None else default
-    return data
+        return default
+    return data if isinstance(data, dict) else default
 
 
 def read_json_any(path, default=None, encoding="utf-8-sig"):
@@ -68,16 +66,19 @@ def read_text(path, default="", encoding="utf-8", errors="replace"):
         return default
 
 
-def write_json(path, obj, retries=DEFAULT_RETRIES, indent=1):
+def write_json(path, obj, retries=DEFAULT_RETRIES, indent=1, newline=False):
     r"""原子写 JSON。
 
     Windows 上 `os.replace` 会撞"另一个进程正持有目标文件"（杀软/索引器/前台读取），
     所以失败就**退避重试**，不是一次就放弃——一次就放弃等于随机丢状态。
+    `newline=True` 会在末尾补一个换行：有的读者按行读（`head`/`tail`），没有换行最后一行会粘住。
     """
     _mkdirs(path)
     tmp = "%s.%d.%d.tmp" % (path, os.getpid(), time.time_ns())
     with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=indent)
+        f.write(json.dumps(obj, ensure_ascii=False, indent=indent))
+        if newline:
+            f.write("\n")
         f.flush()
         try:
             os.fsync(f.fileno())

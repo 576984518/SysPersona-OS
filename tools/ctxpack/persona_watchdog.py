@@ -1,4 +1,5 @@
 import os as _os_shim, sys as _sys_shim
+import persona_io as _pio  # 原子读写（v6.11.0，B85 第二批）
 import persona_locate as _loc  # 本机位置统一解析（v6.11.0）
 _sys_shim.path.insert(0, _os_shim.path.join(_os_shim.path.dirname(_os_shim.path.abspath(__file__)), "脚本"))
 # -*- coding: utf-8 -*-
@@ -108,21 +109,12 @@ DEFAULT_CHAIN = [
 
 # ---------------------------------------------------------------- 小工具
 def _read_json(p, default=None):
-    try:
-        with io.open(p, encoding="utf-8-sig") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
+    return _pio.read_json_any(p, default)
 
 
 def _write_json(p, obj):
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with io.open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=1)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, p)
+    """原子写：委托 persona_io（fsync + os.replace，Windows 上重试）。"""
+    return _pio.write_json(p, obj, indent=1)
 
 
 def cfg():

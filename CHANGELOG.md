@@ -1951,3 +1951,19 @@ v3.9.0 上线后第一轮实测暴露三个问题，都是"能触发但抓不到
 
 验证：编译 OK、三个模块 import OK、`_read_json` 缺失文件返回默认值、写后读回一致、
 `selftest` PASS 36 / FAIL 0、两个脚本的 `--help` 正常。
+
+### refactor · B85 第二批：selfcheck / watchdog / vault_gate（2026-11-12，不占新号）
+
+三处契约不同，所以**逐文件给不同的委托参数**，不搞"一个函数顶所有"：
+
+| 文件 | 读 | 写 |
+|---|---|---|
+| persona_selfcheck | `read_json(path)` → None 默认 + 强制 dict | `write_json(indent=1, newline=True)`（末尾换行照旧） |
+| persona_watchdog | `read_json_any(p, default)`（任意类型、utf-8-sig） | `write_json(indent=1)`（fsync + replace + 重试） |
+| persona_vault_gate | `read_json_any(p, default)`（原来 `except Exception` 宽一层，已注记） | `write_json(indent=1)` |
+
+`persona_io.read_json` 同时改了一处设计：**不再把 None 悄悄换成 `{}`**——要空 dict 就显式 `read_json(p, {})`。
+以前十几个脚本各有各的默认值，正是要收掉的东西。
+
+对拍：selfcheck 缺文件返回 None、写后读回一致、末尾仍是 `}\n`；vault_gate 缺文件返回给定默认值；
+`watchdog`/`vault_gate` 的 `--help` 正常；`selftest` PASS 36 / FAIL 0。

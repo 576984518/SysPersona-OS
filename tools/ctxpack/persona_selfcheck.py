@@ -1,4 +1,5 @@
 import os as _os_shim, sys as _sys_shim
+import persona_io as _pio  # 原子读写（v6.11.0，B85 第二批）
 _sys_shim.path.insert(0, _os_shim.path.join(_os_shim.path.dirname(_os_shim.path.abspath(__file__)), "脚本"))
 # -*- coding: utf-8 -*-
 # SysPersona-OS · 本文件：persona_selfcheck.py — 心跳自检：14 项，单项失败不拖垮整体，目标 < 8 秒
@@ -137,21 +138,12 @@ def _now():
 
 
 def _read_json(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else None
-    except (OSError, ValueError):
-        return None
+    return _pio.read_json(path)
 
 
 def _write_json(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = "%s.%d.tmp" % (path, os.getpid())
-    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(obj, ensure_ascii=False, indent=1))
-        f.write("\n")
-    os.replace(tmp, path)
+    """原子写：委托 persona_io（同样补末尾换行，按行读的人不受影响）。"""
+    return _pio.write_json(path, obj, indent=1, newline=True)
 
 
 def _human(n):
