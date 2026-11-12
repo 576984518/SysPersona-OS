@@ -51,6 +51,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlsplit
+import urllib.error
+import urllib.request
 
 VERSION = 1
 DEFAULT_PORT = 8737
@@ -380,6 +382,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._authorized():
                     return self._deny(401, "缺少或错误的 Bearer 令牌")
                 return self._blob_put()
+            if method == "POST" and self._route == "/cmd":
+                # 2026-11-11 加：远程命令（节点互通）。两道门——Bearer 令牌 + 会话保管方签的票。
+                if not self._authorized():
+                    return self._deny(401, "缺少或错误的 Bearer 令牌")
+                return self._cmd()
+            if method == "GET" and self._route == "/receipt":
+                if not self._authorized():
+                    return self._deny(401, "缺少或错误的 Bearer 令牌")
+                return self._receipt()
             return self._deny(404, "未知路由：%s %s" % (method, self._route))
         except BadPath as e:
             return self._deny(400, "非法请求：%s" % e)
@@ -457,6 +468,74 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps({"files": files}, ensure_ascii=False).encode("utf-8")
         self._reply(200, body)
         self._log(200, "ok", len(body))
+
+    # ---- 远程命令（2026-11-11 加）----
+    def _json_body(self, limit=1 << 16):
+        clen_h = self.headers.get("Content-Length")
+        if clen_h is None:
+            raise BadPath("需要 Content-Length")
+        try:
+            clen = int(clen_h)
+        except ValueError:
+            raise BadPath("Content-Length 非法")
+        if clen < 0 or clen > limit:
+            raise BadPath("请求体太大")
+        raw = b""
+        while len(raw) < clen:
+            chunk = self.rfile.read(min(65536, clen - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        return json.loads(raw.decode("utf-8") or "{}")
+
+    def _cmd(self):
+        """POST /cmd  {"cmd":"diag","args":{},"by":"node-b","ticket":"..."}。
+
+        两道门都过才执行：Bearer 令牌（节点准入）+ 票（这条命令允许的范围）。
+        回执同时落 ops/node-outbox/<id>.json，可用 GET /receipt?id= 再取。
+        """
+        try:
+            req = self._json_body()
+        except BadPath as e:
+            return self._deny(400, "请求体非法：%s" % e)
+        except Exception:                            # noqa: BLE001
+            return self._deny(400, "请求体不是 JSON")
+        cmd = str(req.get("cmd") or "")
+        by = str(req.get("by") or self._ip)
+        ticket = str(req.get("ticket") or "")
+        try:
+            sys.path.insert(0, ROOT)
+            import persona_node_cmd as N
+        except Exception as e:                       # noqa: BLE001
+            return self._deny(500, "命令层不可用：%s" % e.__class__.__name__)
+        rec = N.run_command(cmd, req.get("args") or {}, by=by, ticket=ticket)
+        try:
+            os.makedirs(N.OUTBOX, exist_ok=True)
+            with open(os.path.join(N.OUTBOX, rec["id"] + ".json"), "w", encoding="utf-8") as f:
+                json.dump(rec, f, ensure_ascii=False, indent=1)
+        except Exception:                            # noqa: BLE001
+            pass
+        body = json.dumps(rec, ensure_ascii=False).encode("utf-8")
+        code = 200 if rec.get("ok") else 403
+        self._reply(code, body)
+        self._log(code, "cmd=%s by=%s %s" % (cmd, by, "ok" if rec.get("ok") else "denied"),
+                  len(body))
+
+    def _receipt(self):
+        """GET /receipt?id=<回执 id>：取一条命令的结果（离线投递也能事后取）。"""
+        rid = (self._q("id") or "").strip()
+        if not rid or any(c not in "0123456789abcdef-" for c in rid):
+            return self._deny(400, "id 不合法")
+        p = os.path.join(ROOT, "ops", "node-outbox", rid + ".json")
+        if not os.path.isfile(p):
+            return self._deny(404, "没有这条回执")
+        try:
+            with open(p, encoding="utf-8") as f:
+                body = f.read().encode("utf-8")
+        except OSError:
+            return self._deny(500, "回执读不出来")
+        self._reply(200, body)
+        self._log(200, "receipt", len(body))
 
     def _blob_get(self):
         rel, segs = normalize_rel(self._q("path"))
@@ -605,36 +684,139 @@ def cmd_serve(a):
     print("库根      : %s" % root)
     print("令牌来源  : %s（内容不打印）" % src)
     bind = (a.bind or "127.0.0.1").strip()
-    print("绑定地址  : %s:%d%s" % (bind, a.port,
-                                   "（默认安全档，仅本机）" if bind == "127.0.0.1" else ""))
+    binds = [b.strip() for b in (a.bind or "127.0.0.1").split(",") if b.strip()]
+    print("绑定地址  : %s" % "、".join("%s:%d" % (b, a.port) for b in binds))
+    if binds == ["127.0.0.1"]:
+        print("            （默认安全档，仅本机）")
     print("本机 IPv4 :")
     for ip in local_ipv4():
         tag = "loopback，仅本机" if ip.startswith("127.") else "网卡（物理/虚拟未区分，请自行确认网段）"
         print("  %-16s %s" % (ip, tag))
     print("提示：请只在虚拟组网（ZeroTier / Tailscale）网段暴露本服务；")
-    if bind in ("0.0.0.0", "::"):
-        print("警告：当前监听所有网卡（%s）——任何能路由到本机的人都可发起连接，" % bind)
+    if any(b in ("0.0.0.0", "::") for b in binds):
+        print("警告：当前监听所有网卡——任何能路由到本机的人都可发起连接，")
         print("      务必确认令牌强度，并在防火墙里把来源限制到虚拟网段。")
     print("日志      : %s" % LOG)
     print()
 
+    # 多地址监听（人 2026-11-12 定）：「本地也能访问端口」——回环 + 虚拟网卡各起一个，
+    # 但**绝不**为了省事去监听 0.0.0.0（那等于把服务暴露到物理局域网）。
+    servers = []
+    for b in binds:
+        try:
+            srv = ThreadingHTTPServer((b, a.port), Handler)
+        except OSError as e:
+            print("错误：监听 %s:%d 失败：%s" % (b, a.port, e), file=sys.stderr)
+            for s in servers:
+                try:
+                    s.shutdown()
+                    s.server_close()
+                except OSError:
+                    pass
+            return 3
+        srv.daemon_threads = True
+        srv.allow_reuse_address = True
+        servers.append(srv)
+    threads = []
+    for srv in servers:
+        t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True)
+        t.start()
+        threads.append(t)
+    print("已开始服务：%s" % "、".join("%s:%d" % (s.server_address[0], s.server_address[1])
+                                     for s in servers))
     try:
-        httpd = ThreadingHTTPServer((bind, a.port), Handler)
-    except OSError as e:
-        print("错误：监听 %s:%d 失败：%s" % (bind, a.port, e), file=sys.stderr)
-        return 3
-    httpd.daemon_threads = True
-    httpd.allow_reuse_address = True
-    try:
-        httpd.serve_forever(poll_interval=0.2)
+        while any(t.is_alive() for t in threads):
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n已停止。")
     finally:
-        try:
-            httpd.server_close()
-        except OSError:
-            pass
+        for srv in servers:
+            try:
+                srv.shutdown()
+                srv.server_close()
+            except OSError:
+                pass
     return 0
+
+
+def cmd_health(a):
+    r"""探活：**不需要令牌**，用来分清「网络不通」和「令牌不对」。
+
+    这是 2026-11-12 定下的诊断顺序：先 /health（无鉴权），通了再试 sync（带令牌）。
+    不通时按错误类型给结论，不猜：拒绝连接=端口没开/服务没起；超时=路由/防火墙；
+    401=令牌不对；200=通。
+    """
+    url = a.server.rstrip("/") + "/health"
+    try:
+        u = urlsplit(url)
+        port = u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        port = a.port
+    req = urllib.request.Request(url, headers={"User-Agent": "SysPersona-lanbus/health"})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=a.timeout) as r:
+            body = r.read(2048).decode("utf-8", "replace").strip()
+            node = r.headers.get("X-Node") or "（响应头没有 X-Node）"
+            print("通：%s  %d  %s" % (url, r.status, body[:200]))
+            print("对方节点：%s · 往返 %.0f ms" % (node, (time.time() - t0) * 1000))
+            return 0
+    except urllib.error.HTTPError as e:
+        why = "令牌不对（401）" if e.code == 401 else "对方回了 %d" % e.code
+        print("不通：%s —— %s（鉴权不是这里的问题，先看端口和地址）" % (url, why), file=sys.stderr)
+        return 4
+    except urllib.error.URLError as e:
+        m = str(getattr(e, "reason", e))
+        if "refused" in m.lower() or "10061" in m:
+            print("不通：%s —— 连接被拒（服务没起，或端口 %d 没开）" % (url, port), file=sys.stderr)
+        elif "timed out" in m.lower() or "10060" in m:
+            print("不通：%s —— 超时（路由/防火墙/对端不在同一虚拟网段）" % url, file=sys.stderr)
+        else:
+            print("不通：%s —— %s" % (url, m[:160]), file=sys.stderr)
+        return 3
+    except OSError as e:
+        print("不通：%s —— %s" % (url, str(e)[:160]), file=sys.stderr)
+        return 3
+
+
+def cmd_firewall(a):
+    r"""端口放行：**只放行虚拟网段到这一个端口**，并给出等价的原始命令。
+
+    人 2026-11-12 定：「还要约定端口，开放端口」。默认只打印命令（dry）——
+    改防火墙要管理员权限，脚本不假装成功：拿不到就打印人可复制的那条。
+    """
+    name = "SysPersona-LAN-%d" % a.port
+    if a.remove:
+        ps = "Remove-NetFirewallRule -DisplayName '%s'" % name
+    else:
+        ps = ("New-NetFirewallRule -DisplayName '%s' -Direction Inbound -Protocol TCP "
+              "-LocalPort %d -RemoteAddress %s -Action Allow -Profile Any"
+              % (name, a.port, a.allow))
+    print("规则名  : %s" % name)
+    print("端口    : %d/TCP（入站）" % a.port)
+    if not a.remove:
+        print("来源    : %s（**只放行虚拟网段，物理局域网不放行**）" % a.allow)
+    print("原始命令: powershell -NoProfile -Command \"%s\"" % ps)
+    if not a.apply:
+        print("\n[dry] 没有改动防火墙。要以管理员身份真的执行，加 --apply（或用上面那条原始命令）。")
+        return 0
+    try:
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps],
+                           capture_output=True, timeout=60,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as e:                              # noqa: BLE001
+        print("执行失败：%s" % str(e)[:160], file=sys.stderr)
+        return 3
+    out = (r.stdout or b"").decode("utf-8", "replace").strip()
+    err = (r.stderr or b"").decode("utf-8", "replace").strip()
+    if r.returncode == 0:
+        print("已执行：%s" % (out or "（无输出，通常就是成功）"))
+        print("可用它核对：powershell -NoProfile -Command \"Get-NetFirewallRule -DisplayName '%s' "
+              "| Select-Object DisplayName,Enabled,Direction\"" % name)
+        return 0
+    print("执行失败（多半是没有管理员权限）：%s" % (err or out)[:200], file=sys.stderr)
+    print("请用管理员 PowerShell 跑上面那条「原始命令」。", file=sys.stderr)
+    return 3
 
 
 def cmd_token(a):
@@ -909,9 +1091,24 @@ def main(argv=None):
     sp = sub.add_parser("serve", help="当服务端：把记忆库白名单目录暴露给虚拟网段内其他节点")
     sp.add_argument("--port", type=int, default=DEFAULT_PORT)
     sp.add_argument("--bind", default="127.0.0.1",
-                    help="监听地址；默认 127.0.0.1（仅本机），对外必须显式指定虚拟网卡地址")
+                    help="监听地址；默认 127.0.0.1（仅本机）。要本地和虚拟网段都能访问，"
+                         "写成 127.0.0.1,<虚拟网卡IP>（逗号分隔，各起一个）")
     sp.add_argument("--root", default="", help="库根，默认自动探测")
     sp.set_defaults(func=cmd_serve)
+
+    hp = sub.add_parser("health", help="探活（不需要令牌）：分清网络不通还是令牌不对")
+    hp.add_argument("--server", required=True, help="服务端地址，如 http://<虚拟网卡IP>:8737")
+    hp.add_argument("--port", type=int, default=DEFAULT_PORT)
+    hp.add_argument("--timeout", type=float, default=8.0)
+    hp.set_defaults(func=cmd_health)
+
+    fp = sub.add_parser("firewall", help="只放行虚拟网段到这个端口（默认只打印命令）")
+    fp.add_argument("--allow", default="10.0.0.0/8",
+                    help="允许的来源网段（默认 10.0.0.0/8；请按你的虚拟组网网段改窄）")
+    fp.add_argument("--port", type=int, default=DEFAULT_PORT)
+    fp.add_argument("--apply", action="store_true", help="真的执行（要管理员权限）")
+    fp.add_argument("--remove", action="store_true", help="删掉这条规则")
+    fp.set_defaults(func=cmd_firewall)
 
     yp = sub.add_parser("sync", help="当客户端：按 sha256 做增量拉取")
     yp.add_argument("--server", required=True, help="服务端地址，如 http://10.147.20.5:8737")
